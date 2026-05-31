@@ -1,86 +1,93 @@
+version: "2"
 run:
-  timeout: 5m
-  go: '1.25'
-
+  go: "1.25"
 linters:
   enable:
-    - errcheck      # 检查错误处理
-    - gosimple      # 简化代码建议
-    - govet         # 标准 vet 工具
-    - ineffassign   # 检查无效赋值
-    - staticcheck   # 静态分析
-    - unused        # 检查未使用代码
-    - gocyclo       # 圈复杂度
-    - gocognit      # 认知复杂度
-    - goconst       # 检查重复字符串
-    - gocritic      # 代码批评
-    - gofmt         # 格式化检查
-    - goimports     # 导入检查
-    - misspell      # 拼写检查
-    - nakedret      # 检查裸返回
-    - prealloc      # 预分配建议
-    - revive        # 通用 linter
-    - unconvert     # 检查不必要的转换
-    - unparam       # 检查未使用参数
-    - whitespace    # 检查空白行
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  gocognit:
-    min-complexity: 20
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-  gocritic:
-    enabled-tags:
-      - performance
-      - style
-      - experimental
-    disabled-checks:
-      - wrapperFunc
-      - dupImport
-  revive:
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - misspell
+    - nakedret
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+    - whitespace
+  settings:
+    gocognit:
+      min-complexity: 20
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gocritic:
+      disabled-checks:
+        - wrapperFunc
+        - dupImport
+      enabled-tags:
+        - performance
+        - style
+        - experimental
+    gocyclo:
+      min-complexity: 15
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      - name: blank-imports
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: dot-imports
-      - name: error-return
-      - name: error-strings
-      - name: error-naming
-      - name: exported
-      - name: if-return
-      - name: increment-decrement
-      - name: var-naming
-      - name: var-declaration
-      - name: package-comments
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: unexported-return
-      - name: indent-error-flow
-      - name: errorf
-      - name: empty-block
-      - name: superfluous-else
-      - name: unused-parameter
-      - name: unreachable-code
-      - name: redefines-builtin-id
-
+      - linters:
+          - errcheck
+          - gocognit
+          - gocyclo
+          - gosec
+        path: _test\.go
+      - linters:
+          - revive
+        path: doc\.go
+        text: package-comments
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 issues:
-  exclude-rules:
-    # 测试文件中允许一些灵活性
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - gocognit
-        - errcheck
-        - gosec
-    # doc.go 文件允许 package 注释
-    - path: doc\.go
-      linters:
-        - revive
-      text: "package-comments"
-
   max-issues-per-linter: 0
   max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
