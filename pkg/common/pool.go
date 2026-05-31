@@ -49,7 +49,7 @@ func (p *BufferPool) GetSize(size int) []byte {
 	return b[:0]
 }
 
-// GetDefault 获取默认的 BufferPool。
+// GetDefaultBufferPool 获取默认的 BufferPool。
 func GetDefaultBufferPool() *BufferPool {
 	return defaultPool
 }

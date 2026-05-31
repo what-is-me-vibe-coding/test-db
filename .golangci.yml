@@ -1,28 +1,31 @@
+version: "2"
+
 run:
   timeout: 5m
   go: '1.25'
 
 linters:
   enable:
-    - errcheck      # 检查错误处理
-    - gosimple      # 简化代码建议
-    - govet         # 标准 vet 工具
-    - ineffassign   # 检查无效赋值
-    - staticcheck   # 静态分析
-    - unused        # 检查未使用代码
-    - gocyclo       # 圈复杂度
-    - gocognit      # 认知复杂度
-    - goconst       # 检查重复字符串
-    - gocritic      # 代码批评
-    - gofmt         # 格式化检查
-    - goimports     # 导入检查
-    - misspell      # 拼写检查
-    - nakedret      # 检查裸返回
-    - prealloc      # 预分配建议
-    - revive        # 通用 linter
-    - unconvert     # 检查不必要的转换
-    - unparam       # 检查未使用参数
-    - whitespace    # 检查空白行
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocyclo
+    - gocognit
+    - goconst
+    - gocritic
+    - misspell
+    - nakedret
+    - prealloc
+    - revive
+    - unconvert
+    - whitespace
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 linters-settings:
   gocyclo:

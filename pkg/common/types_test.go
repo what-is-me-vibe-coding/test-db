@@ -10,7 +10,7 @@ func TestDataTypeString(t *testing.T) {
 		typ  DataType
 		want string
 	}{
-		{TypeNull, "NULL"},
+		{TypeNull, strNull},
 		{TypeBool, "BOOL"},
 		{TypeInt64, "INT64"},
 		{TypeFloat64, "FLOAT64"},
@@ -97,7 +97,7 @@ func TestValueString(t *testing.T) {
 		v    Value
 		want string
 	}{
-		{NewNull(), "NULL"},
+		{NewNull(), strNull},
 		{NewBool(true), "true"},
 		{NewBool(false), "false"},
 		{NewInt64(42), "42"},
