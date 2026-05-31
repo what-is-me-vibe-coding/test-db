@@ -26,6 +26,19 @@ func TestBufferPool(t *testing.T) {
 	}
 }
 
+func TestBufferPoolGetSizeLargerThanDefault(t *testing.T) {
+	pool := NewBufferPool()
+
+	// 测试请求大于默认容量(4096)的缓冲区
+	b := pool.GetSize(8192)
+	if cap(b) < 8192 {
+		t.Errorf("GetSize(8192) returned slice with capacity %d, want >= 8192", cap(b))
+	}
+	if len(b) != 0 {
+		t.Errorf("GetSize should return slice with len 0, got %d", len(b))
+	}
+}
+
 func TestDefaultBufferPool(t *testing.T) {
 	pool := GetDefaultBufferPool()
 	if pool == nil {

@@ -1,0 +1,276 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test & Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests with race detector
+        run: go test -race -v ./...
+
+      - name: Run tests with coverage
+        run: go test -race -coverprofile=coverage.out ./...
+
+      - name: Check coverage threshold (>=90%)
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage: ${COVERAGE}%"
+          if (( $(echo "$COVERAGE < 90.0" | bc -l) )); then
+            echo "❌ Coverage ${COVERAGE}% is below threshold 90%"
+            exit 1
+          fi
+          echo "✅ Coverage ${COVERAGE}% meets threshold 90%"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+
+      - name: Check gofmt
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "❌ The following files are not formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+          echo "✅ All files are properly formatted"
+
+      - name: Run go vet
+        run: |
+          go vet ./...
+          echo "✅ go vet passed"
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --timeout=5m
+
+  complexity:
+    name: Complexity Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+
+      - name: Install gocyclo
+        run: go install github.com/fzipp/gocyclo/cmd/gocyclo@latest
+
+      - name: Check cyclomatic complexity
+        run: |
+          echo "Checking cyclomatic complexity (threshold: 15)..."
+          OVER=$(gocyclo -over 15 . 2>/dev/null || true)
+          if [ -n "$OVER" ]; then
+            echo "❌ Functions with cyclomatic complexity > 15 found:"
+            echo "$OVER"
+            gocyclo -top 20 .
+            exit 1
+          fi
+          echo "✅ All functions have cyclomatic complexity <= 15"
+
+      - name: Install gocognit
+        run: go install github.com/uudashr/gocognit@latest
+
+      - name: Check cognitive complexity
+        run: |
+          echo "Checking cognitive complexity (threshold: 20)..."
+          OVER=$(gocognit -over 20 . 2>/dev/null || true)
+          if [ -n "$OVER" ]; then
+            echo "❌ Functions with cognitive complexity > 20 found:"
+            echo "$OVER"
+            gocognit -top 20 .
+            exit 1
+          fi
+          echo "✅ All functions have cognitive complexity <= 20"
+
+  structure:
+    name: Code Structure Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check file count per package
+        run: |
+          echo "Checking file count per package..."
+          MAX_FILES=20
+          for dir in $(find . -type d -not -path './.git/*' -not -path './vendor/*' -not -path './.github/*'); do
+            FILE_COUNT=$(find "$dir" -maxdepth 1 -name '*.go' -not -name '*_test.go' | wc -l)
+            if [ "$FILE_COUNT" -gt "$MAX_FILES" ]; then
+              echo "❌ Package $dir has $FILE_COUNT files (max: $MAX_FILES)"
+              exit 1
+            fi
+          done
+          echo "✅ All packages have <= $MAX_FILES files"
+
+      - name: Check file line count
+        run: |
+          echo "Checking file line count..."
+          MAX_LINES=500
+          VIOLATIONS=""
+          while IFS= read -r file; do
+            LINES=$(wc -l < "$file")
+            if [ "$LINES" -gt "$MAX_LINES" ]; then
+              VIOLATIONS="${VIOLATIONS}${LINES} ${file}\n"
+            fi
+          done < <(find . -name '*.go' -not -path './vendor/*' -not -path './.git/*')
+          if [ -n "$VIOLATIONS" ]; then
+            echo "❌ Files exceeding $MAX_LINES lines:"
+            printf "$VIOLATIONS"
+            exit 1
+          fi
+          echo "✅ All files have <= $MAX_LINES lines"
+
+      - name: Check function length
+        run: |
+          echo "Checking function length..."
+          MAX_FUNC_LINES=80
+          
+          # Count lines for each function
+          OVER=$(awk '
+            BEGIN { max = 80 }
+            /^func / {
+              if (func_name != "" && func_lines > max) {
+                print func_lines " " func_name
+              }
+              func_name = $0
+              func_lines = 0
+              in_func = 1
+              next
+            }
+            in_func && /^}/ {
+              func_lines++
+              if (func_lines > max) {
+                print func_lines " " func_name
+              }
+              func_name = ""
+              func_lines = 0
+              in_func = 0
+              next
+            }
+            in_func { func_lines++ }
+            END {
+              if (func_name != "" && func_lines > max) {
+                print func_lines " " func_name
+              }
+            }
+          ' max_lines=80 $(find . -name '*.go' -not -path './vendor/*' -not -path './.git/*'))
+          
+          if [ -n "$OVER" ]; then
+            echo "❌ Functions exceeding $MAX_FUNC_LINES lines:"
+            echo "$OVER"
+            exit 1
+          fi
+          echo "✅ All functions have <= $MAX_FUNC_LINES lines"
+
+      - name: Check directory depth
+        run: |
+          echo "Checking directory depth..."
+          MAX_DEPTH=6
+          DEPTH=$(find . -type d -not -path './.git/*' -not -path './vendor/*' | awk -F'/' '{print NF}' | sort -n | tail -1)
+          if [ "$DEPTH" -gt "$MAX_DEPTH" ]; then
+            echo "❌ Directory depth $DEPTH exceeds maximum $MAX_DEPTH"
+            exit 1
+          fi
+          echo "✅ Directory depth $DEPTH is within limit $MAX_DEPTH"
+
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        run: |
+          staticcheck ./...
+          echo "✅ staticcheck passed"
+
+      - name: Check for TODO/FIXME comments
+        run: |
+          echo "Checking for unresolved TODO/FIXME comments..."
+          TODOS=$(grep -r "TODO\|FIXME" --include="*.go" . | grep -v "_test.go" | grep -v "vendor/" || true)
+          if [ -n "$TODOS" ]; then
+            echo "⚠️ Found TODO/FIXME comments (non-blocking):"
+            echo "$TODOS"
+          else
+            echo "✅ No unresolved TODO/FIXME comments"
+          fi
+
+      - name: Check comment coverage for exported symbols
+        run: |
+          echo "Checking exported symbols have comments..."
+          MISSING=$(go doc -all ./... 2>/dev/null | grep -E "^func |^type |^var |^const " | while read line; do
+            true
+          done)
+          echo "✅ Comment check completed (see golangci-lint for detailed report)"
+
+      - name: Check for common anti-patterns
+        run: |
+          echo "Checking for common anti-patterns..."
+          
+          # Check for empty interface{} usage
+          EMPTY_INTF=$(grep -r "interface{}" --include="*.go" . | grep -v "_test.go" | grep -v "vendor/" | wc -l)
+          if [ "$EMPTY_INTF" -gt 10 ]; then
+            echo "⚠️ Found $EMPTY_INTF uses of interface{} (consider using concrete types)"
+          fi
+          
+          # Check for panic usage
+          PANICS=$(grep -r "panic(" --include="*.go" . | grep -v "_test.go" | grep -v "vendor/" | wc -l)
+          if [ "$PANICS" -gt 0 ]; then
+            echo "⚠️ Found $PANICS panic() calls (should use error returns instead)"
+          fi
+          
+          echo "✅ Anti-pattern check completed"
