@@ -119,12 +119,11 @@ func (b *Bitmap) And(other *Bitmap) {
 
 // Or 与另一个位图进行按位或操作，结果存入当前位图。
 func (b *Bitmap) Or(other *Bitmap) {
-	maxWords := len(b.bits)
-	if len(other.bits) > maxWords {
-		maxWords = len(other.bits)
+	if other.len > b.len {
+		b.len = other.len
 	}
-	if maxWords > len(b.bits) {
-		newBits := make([]uint64, maxWords)
+	if len(other.bits) > len(b.bits) {
+		newBits := make([]uint64, len(other.bits))
 		copy(newBits, b.bits)
 		b.bits = newBits
 	}
@@ -135,12 +134,11 @@ func (b *Bitmap) Or(other *Bitmap) {
 
 // Xor 与另一个位图进行按位异或操作，结果存入当前位图。
 func (b *Bitmap) Xor(other *Bitmap) {
-	maxWords := len(b.bits)
-	if len(other.bits) > maxWords {
-		maxWords = len(other.bits)
+	if other.len > b.len {
+		b.len = other.len
 	}
-	if maxWords > len(b.bits) {
-		newBits := make([]uint64, maxWords)
+	if len(other.bits) > len(b.bits) {
+		newBits := make([]uint64, len(other.bits))
 		copy(newBits, b.bits)
 		b.bits = newBits
 	}

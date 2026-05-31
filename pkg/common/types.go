@@ -5,9 +5,12 @@ import (
 	"time"
 )
 
+const strNull = "NULL"
+
 // DataType 表示列的数据类型。
 type DataType int
 
+// DataType constants
 const (
 	TypeNull      DataType = iota
 	TypeBool               // BOOL
@@ -21,7 +24,7 @@ const (
 func (t DataType) String() string {
 	switch t {
 	case TypeNull:
-		return "NULL"
+		return strNull
 	case TypeBool:
 		return "BOOL"
 	case TypeInt64:
@@ -99,7 +102,7 @@ func (v Value) Equal(other Value) bool {
 // String 返回 Value 的可读字符串表示。
 func (v Value) String() string {
 	if !v.Valid {
-		return "NULL"
+		return strNull
 	}
 	switch v.Typ {
 	case TypeBool:

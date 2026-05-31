@@ -18,7 +18,8 @@ func NewBufferPool() *BufferPool {
 	return &BufferPool{
 		pool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, 0, 4096)
+				buf := make([]byte, 0, 4096)
+				return &buf
 			},
 		},
 	}
@@ -27,14 +28,15 @@ func NewBufferPool() *BufferPool {
 // Get 从池中获取一个字节切片。
 // 返回的切片长度为 0，但有一定的容量。
 func (p *BufferPool) Get() []byte {
-	return p.pool.Get().([]byte)[:0]
+	bufPtr := p.pool.Get().(*[]byte)
+	return (*bufPtr)[:0]
 }
 
 // Put 将字节切片放回池中。
 // 注意：调用者必须确保不会再使用该切片。
 func (p *BufferPool) Put(b []byte) {
 	if cap(b) > 0 {
-		p.pool.Put(b)
+		p.pool.Put(&b)
 	}
 }
 
@@ -47,7 +49,7 @@ func (p *BufferPool) GetSize(size int) []byte {
 	return b[:0]
 }
 
-// GetDefault 获取默认的 BufferPool。
+// GetDefaultBufferPool 获取默认的 BufferPool。
 func GetDefaultBufferPool() *BufferPool {
 	return defaultPool
 }
