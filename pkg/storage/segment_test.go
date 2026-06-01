@@ -17,71 +17,6 @@ func TestSegmentSerializeDeserializeInt64(t *testing.T) {
 	verifySegmentRoundTripInt64(t, ints, rowCount, nil, 1, "key-0", "key-99")
 }
 
-func verifySegmentRoundTripInt64(t *testing.T, ints []int64, rowCount uint32, nulls *common.Bitmap, id uint64, minKey, maxKey string) {
-	t.Helper()
-	enc, err := EncodeColumn(common.TypeInt64, ints, rowCount, nulls)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-
-	builder := NewSegmentBuilder(id, minKey, maxKey)
-	builder.AddEncodedColumn(enc)
-
-	seg, err := builder.Build()
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-
-	data, err := seg.Serialize()
-	if err != nil {
-		t.Fatalf("serialize: %v", err)
-	}
-
-	restored, err := DeserializeSegment(data)
-	if err != nil {
-		t.Fatalf("deserialize: %v", err)
-	}
-
-	verifyRestoredInt64(t, restored, ints, rowCount, nulls)
-}
-
-func verifyRestoredInt64(t *testing.T, restored *Segment, ints []int64, rowCount uint32, nulls *common.Bitmap) {
-	t.Helper()
-	if restored.RowCount != rowCount {
-		t.Errorf("RowCount mismatch: got %d, want %d", restored.RowCount, rowCount)
-	}
-	if len(restored.Columns) != 1 {
-		t.Fatalf("Columns count: got %d, want 1", len(restored.Columns))
-	}
-
-	restoredCol := &restored.Columns[0]
-	if err := DecompressColumn(restoredCol); err != nil {
-		t.Fatalf("decompress: %v", err)
-	}
-
-	decoded, decodedNulls, err := DecodeColumn(restoredCol)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-
-	if nulls == nil && decodedNulls != nil && !decodedNulls.IsEmpty() {
-		t.Error("unexpected nulls")
-	}
-
-	decodedInts, ok := decoded.([]int64)
-	if !ok {
-		t.Fatalf("decoded type: got %T, want []int64", decoded)
-	}
-	if len(decodedInts) != int(rowCount) {
-		t.Fatalf("decoded length: got %d, want %d", len(decodedInts), rowCount)
-	}
-	for i := uint32(0); i < rowCount; i++ {
-		if decodedInts[i] != ints[i] {
-			t.Errorf("row %d: got %d, want %d", i, decodedInts[i], ints[i])
-		}
-	}
-}
-
 func TestSegmentSerializeDeserializeMultiColumn(t *testing.T) {
 	rowCount := uint32(50)
 	ints := make([]int64, rowCount)
@@ -123,52 +58,6 @@ func TestSegmentSerializeDeserializeMultiColumn(t *testing.T) {
 	verifyDecodedColumn(t, &restored.Columns[0], 0, int(rowCount))
 	verifyDecodedColumn(t, &restored.Columns[1], 1, int(rowCount))
 	verifyDecodedColumn(t, &restored.Columns[2], 2, int(rowCount))
-}
-
-func addColumnOrFail(t *testing.T, builder *SegmentBuilder, typ common.DataType, data interface{}, rowCount uint32, nulls *common.Bitmap) {
-	t.Helper()
-	enc, err := EncodeColumn(typ, data, rowCount, nulls)
-	if err != nil {
-		t.Fatalf("encode %v: %v", typ, err)
-	}
-	builder.AddEncodedColumn(enc)
-}
-
-func verifyDecodedColumn(t *testing.T, col *EncodedColumn, idx, expectedLen int) {
-	t.Helper()
-	if err := DecompressColumn(col); err != nil {
-		t.Fatalf("decompress column %d: %v", idx, err)
-	}
-	decoded, _, err := DecodeColumn(col)
-	if err != nil {
-		t.Fatalf("decode column %d: %v", idx, err)
-	}
-	switch idx {
-	case 0:
-		di, ok := decoded.([]int64)
-		if !ok {
-			t.Fatalf("column %d type: got %T", idx, decoded)
-		}
-		if len(di) != expectedLen {
-			t.Errorf("column %d length: got %d, want %d", idx, len(di), expectedLen)
-		}
-	case 1:
-		df, ok := decoded.([]float64)
-		if !ok {
-			t.Fatalf("column %d type: got %T", idx, decoded)
-		}
-		if len(df) != expectedLen {
-			t.Errorf("column %d length: got %d, want %d", idx, len(df), expectedLen)
-		}
-	case 2:
-		ds, ok := decoded.([]string)
-		if !ok {
-			t.Fatalf("column %d type: got %T", idx, decoded)
-		}
-		if len(ds) != expectedLen {
-			t.Errorf("column %d length: got %d, want %d", idx, len(ds), expectedLen)
-		}
-	}
 }
 
 func TestSegmentSerializeDeserializeWithNulls(t *testing.T) {
@@ -291,14 +180,6 @@ func TestSegmentDeserializeTooShort(t *testing.T) {
 	_, err := DeserializeSegment(data)
 	if err == nil {
 		t.Error("expected error for too short data")
-	}
-}
-
-func TestSegmentBuilderEmpty(t *testing.T) {
-	builder := NewSegmentBuilder(5, "a", "b")
-	_, err := builder.Build()
-	if err == nil {
-		t.Error("expected error for empty columns")
 	}
 }
 
@@ -438,36 +319,6 @@ func TestSegmentWriteToFile(t *testing.T) {
 	}
 }
 
-func TestSegmentFooterStats(t *testing.T) {
-	rowCount := uint32(100)
-	ints := make([]int64, rowCount)
-	for i := uint32(0); i < rowCount; i++ {
-		ints[i] = int64(i) - 50
-	}
-
-	enc, err := EncodeColumn(common.TypeInt64, ints, rowCount, nil)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-
-	builder := NewSegmentBuilder(9, "key-0", "key-99")
-	builder.AddEncodedColumn(enc)
-
-	seg, err := builder.Build()
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-
-	if len(seg.Footer.ColumnStats) != 1 {
-		t.Fatalf("ColumnStats count: got %d, want 1", len(seg.Footer.ColumnStats))
-	}
-
-	stat := seg.Footer.ColumnStats[0]
-	if stat.NullCount != 0 {
-		t.Errorf("NullCount: got %d, want 0", stat.NullCount)
-	}
-}
-
 func TestSegmentSerializeDeserializeString(t *testing.T) {
 	rowCount := uint32(10)
 	strs := make([]string, rowCount)
@@ -570,91 +421,5 @@ func TestSegmentSerializeDeserializeLargeData(t *testing.T) {
 			t.Errorf("row %d: got %d, want %d", i, decodedInts[i], ints[i])
 			break
 		}
-	}
-}
-
-func TestSegmentRLEStats(t *testing.T) {
-	rowCount := uint32(100)
-	ints := make([]int64, rowCount)
-	for i := uint32(0); i < rowCount; i++ {
-		ints[i] = int64(i / 10)
-	}
-
-	enc, err := EncodeColumn(common.TypeInt64, ints, rowCount, nil)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-
-	if enc.Encoding != EncodingRLE {
-		t.Skip("data did not trigger RLE encoding")
-	}
-
-	builder := NewSegmentBuilder(12, "key-0", "key-99")
-	builder.AddEncodedColumn(enc)
-
-	seg, err := builder.Build()
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-
-	if len(seg.Footer.ColumnStats) != 1 {
-		t.Fatalf("ColumnStats count: got %d, want 1", len(seg.Footer.ColumnStats))
-	}
-
-	data, err := seg.Serialize()
-	if err != nil {
-		t.Fatalf("serialize: %v", err)
-	}
-
-	restored, err := DeserializeSegment(data)
-	if err != nil {
-		t.Fatalf("deserialize: %v", err)
-	}
-
-	restoredCol := &restored.Columns[0]
-	if err := DecompressColumn(restoredCol); err != nil {
-		t.Fatalf("decompress: %v", err)
-	}
-
-	decoded, _, err := DecodeColumn(restoredCol)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	decodedInts, ok := decoded.([]int64)
-	if !ok {
-		t.Fatalf("decoded type: got %T, want []int64", decoded)
-	}
-	if len(decodedInts) != int(rowCount) {
-		t.Fatalf("decoded length: got %d, want %d", len(decodedInts), rowCount)
-	}
-}
-
-func TestSegmentPlainStringStats(t *testing.T) {
-	rowCount := uint32(10)
-	strs := []string{"banana", testStrApple, testStrCherry, "date", "elderberry", "fig", "grape", "honeydew", "kiwi", "lemon"}
-
-	enc, err := encodePlain(common.TypeString, strs, rowCount, nil)
-	if err != nil {
-		t.Fatalf("encode plain: %v", err)
-	}
-
-	builder := NewSegmentBuilder(13, "key-0", "key-9")
-	builder.AddEncodedColumn(enc)
-
-	seg, err := builder.Build()
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-
-	if len(seg.Footer.ColumnStats) != 1 {
-		t.Fatalf("ColumnStats count: got %d, want 1", len(seg.Footer.ColumnStats))
-	}
-
-	stat := seg.Footer.ColumnStats[0]
-	if string(stat.Min) != "apple" {
-		t.Errorf("min: got %q, want %q", string(stat.Min), "apple")
-	}
-	if string(stat.Max) != "lemon" {
-		t.Errorf("max: got %q, want %q", string(stat.Max), "lemon")
 	}
 }
