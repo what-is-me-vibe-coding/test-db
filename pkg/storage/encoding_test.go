@@ -111,11 +111,12 @@ func TestEncodeDecodePlainTimestamp(t *testing.T) {
 }
 
 const (
-	testStrHello = "hello"
-	testStrApple = "apple"
-	testStrWorld = "world"
-	testStrFoo   = "foo"
-	testStrTest  = "test"
+	testStrHello  = "hello"
+	testStrApple  = "apple"
+	testStrWorld  = "world"
+	testStrFoo    = "foo"
+	testStrTest   = "test"
+	testStrBanana = "banana"
 )
 
 func TestEncodeDecodeEmpty(t *testing.T) {

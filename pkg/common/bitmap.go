@@ -29,7 +29,8 @@ func NewBitmapFromBytes(data []byte) *Bitmap {
 		word := i / 8
 		for bit := uint(0); bit < 8; bit++ {
 			if (data[i] & (1 << bit)) != 0 {
-				bits[word] |= 1 << uint(i*8+int(bit))
+				bitPos := i*8 + int(bit)
+				bits[word] |= 1 << uint(bitPos%64)
 			}
 		}
 	}
