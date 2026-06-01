@@ -117,6 +117,7 @@ const (
 	testStrFoo    = "foo"
 	testStrTest   = "test"
 	testStrBanana = "banana"
+	testStrCherry = "cherry"
 )
 
 func TestEncodeDecodeEmpty(t *testing.T) {
