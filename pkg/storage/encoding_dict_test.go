@@ -32,7 +32,7 @@ func TestEncodeDecodePlainString(t *testing.T) {
 }
 
 func TestEncodeDecodeDictString(t *testing.T) {
-	data := []string{testStrApple, testStrBanana, testStrApple, testStrApple, testStrBanana, "cherry", testStrApple}
+	data := []string{testStrApple, testStrBanana, testStrApple, testStrApple, testStrBanana, testStrCherry, testStrApple}
 	enc, err := EncodeColumn(common.TypeString, data, uint32(len(data)), nil)
 	if err != nil {
 		t.Fatalf("EncodeColumn failed: %v", err)

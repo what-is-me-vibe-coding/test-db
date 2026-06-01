@@ -104,7 +104,7 @@ func TestCompressDecompressInt64(t *testing.T) {
 }
 
 func TestCompressDecompressString(t *testing.T) {
-	strs := []string{testStrHello, testStrWorld, testStrTest, testStrFoo, testStrBanana, "apple", "cherry", "date", "elderberry", "fig"}
+	strs := []string{testStrHello, testStrWorld, testStrTest, testStrFoo, testStrBanana, testStrApple, testStrCherry, "date", "elderberry", "fig"}
 	enc, err := EncodeColumn(common.TypeString, strs, uint32(len(strs)), nil)
 	if err != nil {
 		t.Fatalf("EncodeColumn failed: %v", err)
