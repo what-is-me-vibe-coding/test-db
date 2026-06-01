@@ -184,7 +184,9 @@ func TestMemTableGetNotFound(t *testing.T) {
 func TestMemTableDelete(t *testing.T) {
 	mt := NewMemTable(0)
 
-	mt.Put("key1", Row{Version: 1})
+	if err := mt.Put("key1", Row{Version: 1}); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
 	if err := mt.Delete("key1"); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
@@ -202,12 +204,14 @@ func TestMemTableSize(t *testing.T) {
 		t.Errorf("Size = %d, want 0", mt.Size())
 	}
 
-	mt.Put("key1", Row{
+	if err := mt.Put("key1", Row{
 		Version: 1,
 		Columns: map[string]common.Value{
 			"data": common.NewString("hello world"),
 		},
-	})
+	}); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
 
 	if mt.Size() <= 0 {
 		t.Errorf("Size should be > 0 after put")
@@ -218,7 +222,7 @@ func TestMemTableLen(t *testing.T) {
 	mt := NewMemTable(0)
 
 	for i := 0; i < 50; i++ {
-		mt.Put(fmt.Sprintf("key%03d", i), Row{Version: 1})
+		_ = mt.Put(fmt.Sprintf("key%03d", i), Row{Version: 1})
 	}
 
 	if mt.Len() != 50 {
@@ -238,12 +242,14 @@ func TestMemTableNeedFlush(t *testing.T) {
 		largeStr[i] = 'x'
 	}
 
-	mt.Put("key1", Row{
+	if err := mt.Put("key1", Row{
 		Version: 1,
 		Columns: map[string]common.Value{
 			"data": common.NewString(string(largeStr)),
 		},
-	})
+	}); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
 
 	if !mt.NeedFlush() {
 		t.Fatal("should need flush after large write")
@@ -253,7 +259,9 @@ func TestMemTableNeedFlush(t *testing.T) {
 func TestMemTableFreeze(t *testing.T) {
 	mt := NewMemTable(0)
 
-	mt.Put("key1", Row{Version: 1})
+	if err := mt.Put("key1", Row{Version: 1}); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
 
 	if mt.IsFrozen() {
 		t.Fatal("should not be frozen initially")
@@ -297,7 +305,7 @@ func TestMemTableSnapshot(t *testing.T) {
 	}
 
 	for _, r := range rows {
-		mt.Put(r.key, Row{Version: r.ver})
+		_ = mt.Put(r.key, Row{Version: r.ver})
 	}
 
 	snapshot := mt.Snapshot()
@@ -318,11 +326,11 @@ func TestMemTableScan(t *testing.T) {
 	mt := NewMemTable(0)
 
 	for i := 0; i < 10; i++ {
-		mt.Put(fmt.Sprintf("key%02d", i), Row{Version: uint64(i)})
+		_ = mt.Put(fmt.Sprintf("key%02d", i), Row{Version: uint64(i)})
 	}
 
 	var keys []string
-	err := mt.Scan("key03", "key07", func(key string, row Row) error {
+	err := mt.Scan("key03", "key07", func(key string, _ Row) error {
 		keys = append(keys, key)
 		return nil
 	})
@@ -354,7 +362,7 @@ func TestMemTableConcurrentWrite(t *testing.T) {
 			defer wg.Done()
 			for j := 0; j < entriesPerRoutine; j++ {
 				key := fmt.Sprintf("key%05d", base*entriesPerRoutine+j)
-				mt.Put(key, Row{Version: uint64(base*entriesPerRoutine + j)})
+				_ = mt.Put(key, Row{Version: uint64(base*entriesPerRoutine + j)})
 			}
 		}(i)
 	}
@@ -370,7 +378,7 @@ func TestMemTableConcurrentReadWrite(t *testing.T) {
 	mt := NewMemTable(0)
 
 	for i := 0; i < 100; i++ {
-		mt.Put(fmt.Sprintf("key%03d", i), Row{Version: uint64(i)})
+		_ = mt.Put(fmt.Sprintf("key%03d", i), Row{Version: uint64(i)})
 	}
 
 	const goroutines = 10
