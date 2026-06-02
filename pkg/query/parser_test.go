@@ -206,7 +206,7 @@ func TestParseSelectWithStringLiteral(t *testing.T) {
 		t.Fatalf("expected *BinaryExpr, got %T", sel.Where)
 	}
 	lit, ok := binExpr.Right.(*LiteralExpr)
-	if !ok || lit.Value.Str != "alice" {
+	if !ok || lit.Value.Str != testNameAlice {
 		t.Errorf("expected string 'alice', got %v", binExpr.Right)
 	}
 }
@@ -266,7 +266,7 @@ func TestParseInsertBasic(t *testing.T) {
 		t.Errorf("expected first value 1, got %v", ins.Rows[0][0])
 	}
 	lit1, ok := ins.Rows[0][1].(*LiteralExpr)
-	if !ok || lit1.Value.Str != "alice" {
+	if !ok || lit1.Value.Str != testNameAlice {
 		t.Errorf("expected second value 'alice', got %v", ins.Rows[0][1])
 	}
 }

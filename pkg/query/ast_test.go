@@ -27,7 +27,7 @@ func TestASTInsertStatement(t *testing.T) {
 		Table:   testTableUsers,
 		Columns: []string{"id", testColName},
 		Rows: [][]Expression{
-			{&LiteralExpr{Value: common.NewInt64(1)}, &LiteralExpr{Value: common.NewString("alice")}},
+			{&LiteralExpr{Value: common.NewInt64(1)}, &LiteralExpr{Value: common.NewString(testNameAlice)}},
 		},
 	}
 	str := s.String()

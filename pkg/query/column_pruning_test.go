@@ -132,7 +132,7 @@ func TestOptimizerColumnPruningWithAggregate(t *testing.T) {
 		},
 		schema: []ColumnDef{
 			{Name: testColAge, Type: common.TypeInt64},
-			{Name: "SUM(score)", Type: common.TypeFloat64},
+			{Name: testAggSumScore, Type: common.TypeFloat64},
 		},
 	}
 
