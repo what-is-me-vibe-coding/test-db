@@ -55,10 +55,10 @@ func (m *mockStorage) addEntry(key string, cols map[string]common.Value) {
 // buildTestSchema 构建测试用 schema 。
 func buildTestSchema() []ColumnDef {
 	return []ColumnDef{
-		{Name: "id", Type: common.TypeInt64, Nullable: false},
-		{Name: "name", Type: common.TypeString, Nullable: true},
-		{Name: "age", Type: common.TypeInt64, Nullable: true},
-		{Name: "score", Type: common.TypeFloat64, Nullable: true},
+		{Name: testColID, Type: common.TypeInt64, Nullable: false},
+		{Name: testColName, Type: common.TypeString, Nullable: true},
+		{Name: testColAge, Type: common.TypeInt64, Nullable: true},
+		{Name: testColScore, Type: common.TypeFloat64, Nullable: true},
 	}
 }
 
@@ -87,17 +87,17 @@ func fmtIntKey(i int) string {
 func TestExecutorScanBasic(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -116,22 +116,22 @@ func TestExecutorScanBasic(t *testing.T) {
 func TestExecutorScanWithPredicate(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		"id": common.NewInt64(3), "name": common.NewString("charlie"),
-		"age": common.NewInt64(35), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:     "users",
-		Columns:   []string{"id", "name", "age", "score"},
-		Predicate: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(28)}},
+		Table:     testTableUsers,
+		Columns:   []string{testColID, testColName, testColAge, testColScore},
+		Predicate: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(28)}},
 		schema:    buildTestSchema(),
 	}
 
@@ -151,8 +151,8 @@ func TestExecutorScanEmpty(t *testing.T) {
 	ms := newMockStorage()
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -171,24 +171,24 @@ func TestExecutorScanEmpty(t *testing.T) {
 func TestExecutorScanWithKeyRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		"id": common.NewInt64(3), "name": common.NewString("charlie"),
-		"age": common.NewInt64(35), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		Predicate: &BinaryExpr{
 			Op:    OpGe,
-			Left:  &ResolvedColumnExpr{Name: "id", Idx: 0, typ: common.TypeInt64},
+			Left:  &ResolvedColumnExpr{Name: testColID, Idx: 0, typ: common.TypeInt64},
 			Right: &LiteralExpr{Value: common.NewString("b")},
 		},
 		schema: buildTestSchema(),
@@ -209,24 +209,24 @@ func TestExecutorScanWithKeyRange(t *testing.T) {
 func TestExecutorScanWithEqKeyRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		"id": common.NewInt64(3), "name": common.NewString("charlie"),
-		"age": common.NewInt64(35), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		Predicate: &BinaryExpr{
 			Op:    OpEq,
-			Left:  &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			Left:  &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 			Right: &LiteralExpr{Value: common.NewInt64(25)},
 		},
 		schema: buildTestSchema(),
@@ -247,20 +247,20 @@ func TestExecutorScanWithEqKeyRange(t *testing.T) {
 func TestExecutorScanWithLtKeyRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		Predicate: &BinaryExpr{
 			Op:    OpLt,
-			Left:  &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			Left:  &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 			Right: &LiteralExpr{Value: common.NewInt64(30)},
 		},
 		schema: buildTestSchema(),
@@ -281,20 +281,20 @@ func TestExecutorScanWithLtKeyRange(t *testing.T) {
 func TestExecutorScanWithLeKeyRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		Predicate: &BinaryExpr{
 			Op:    OpLe,
-			Left:  &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			Left:  &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 			Right: &LiteralExpr{Value: common.NewInt64(30)},
 		},
 		schema: buildTestSchema(),
@@ -315,20 +315,20 @@ func TestExecutorScanWithLeKeyRange(t *testing.T) {
 func TestExecutorScanWithGtKeyRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		Predicate: &BinaryExpr{
 			Op:    OpGt,
-			Left:  &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			Left:  &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 			Right: &LiteralExpr{Value: common.NewInt64(25)},
 		},
 		schema: buildTestSchema(),
@@ -359,16 +359,16 @@ func TestExecutorLargeDataset(t *testing.T) {
 	for i := 0; i < 2000; i++ {
 		key := fmtKey(i)
 		ms.addEntry(key, map[string]common.Value{
-			"id":    common.NewInt64(int64(i)),
-			"name":  common.NewString(key),
-			"age":   common.NewInt64(int64(20 + i%50)),
-			"score": common.NewFloat64(float64(50 + i%50)),
+			testColID:    common.NewInt64(int64(i)),
+			testColName:  common.NewString(key),
+			testColAge:   common.NewInt64(int64(20 + i%50)),
+			testColScore: common.NewFloat64(float64(50 + i%50)),
 		})
 	}
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -402,27 +402,27 @@ func TestExecutorComparisonOperators(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ms := newMockStorage()
 			ms.addEntry("a", map[string]common.Value{
-				"id": common.NewInt64(1), "name": common.NewString("alice"),
-				"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+				testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+				testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 			})
 			ms.addEntry("b", map[string]common.Value{
-				"id": common.NewInt64(2), "name": common.NewString("bob"),
-				"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+				testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+				testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 			})
 			ms.addEntry("c", map[string]common.Value{
-				"id": common.NewInt64(3), "name": common.NewString("charlie"),
-				"age": common.NewInt64(35), "score": common.NewFloat64(72.0),
+				testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+				testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 			})
 
 			scan := &ScanNode{
-				Table:   "users",
-				Columns: []string{"id", "name", "age", "score"},
+				Table:   testTableUsers,
+				Columns: []string{testColID, testColName, testColAge, testColScore},
 				schema:  buildTestSchema(),
 			}
 
 			filter := &FilterNode{
 				Child:     scan,
-				Condition: &BinaryExpr{Op: tt.op, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(30)}},
+				Condition: &BinaryExpr{Op: tt.op, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(30)}},
 			}
 
 			exec := NewExecutor(ms)
@@ -442,20 +442,20 @@ func TestExecutorComparisonOperators(t *testing.T) {
 func TestExecutorFilterWithNullLiteral(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	// Comparison with NULL literal should result in NULL (falsy)
 	filter := &FilterNode{
 		Child:     scan,
-		Condition: &BinaryExpr{Op: OpEq, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewNull()}},
+		Condition: &BinaryExpr{Op: OpEq, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewNull()}},
 	}
 
 	exec := NewExecutor(ms)

@@ -9,17 +9,17 @@ import (
 func TestExecutorAggregateCount(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -30,7 +30,7 @@ func TestExecutorAggregateCount(t *testing.T) {
 			{Func: AggCount, Arg: &StarExpr{}},
 		},
 		schema: []ColumnDef{
-			{Name: "COUNT(*)", Type: common.TypeInt64, Nullable: false},
+			{Name: testAggCountStar, Type: common.TypeInt64, Nullable: false},
 		},
 	}
 
@@ -56,17 +56,17 @@ func TestExecutorAggregateCount(t *testing.T) {
 func TestExecutorAggregateSum(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -74,10 +74,10 @@ func TestExecutorAggregateSum(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64}},
+			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
 		},
 		schema: []ColumnDef{
-			{Name: "SUM(score)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggSumScore, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
@@ -99,35 +99,35 @@ func TestExecutorAggregateSum(t *testing.T) {
 func TestExecutorAggregateGroupBy(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		"id": common.NewInt64(3), "name": common.NewString("charlie"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	agg := &AggregateNode{
 		Child: scan,
 		GroupBy: []Expression{
-			&ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 		},
 		Aggregates: []AggregateExpr{
 			{Func: AggCount, Arg: &StarExpr{}},
 		},
 		schema: []ColumnDef{
-			{Name: "age", Type: common.TypeInt64, Nullable: true},
-			{Name: "COUNT(*)", Type: common.TypeInt64, Nullable: false},
+			{Name: testColAge, Type: common.TypeInt64, Nullable: true},
+			{Name: testAggCountStar, Type: common.TypeInt64, Nullable: false},
 		},
 	}
 
@@ -146,17 +146,17 @@ func TestExecutorAggregateGroupBy(t *testing.T) {
 func TestExecutorAggregateMin(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -164,10 +164,10 @@ func TestExecutorAggregateMin(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "MIN(age)", Type: common.TypeInt64, Nullable: true},
+			{Name: testAggMinAge, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -188,17 +188,17 @@ func TestExecutorAggregateMin(t *testing.T) {
 func TestExecutorAggregateMax(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -206,10 +206,10 @@ func TestExecutorAggregateMax(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "MAX(age)", Type: common.TypeInt64, Nullable: true},
+			{Name: testAggMaxAge, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -230,17 +230,17 @@ func TestExecutorAggregateMax(t *testing.T) {
 func TestExecutorAggregateAvg(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(90.0),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(90.0),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(20), "score": common.NewFloat64(70.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(20), testColScore: common.NewFloat64(70.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -248,10 +248,10 @@ func TestExecutorAggregateAvg(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "AVG(age)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggAvgAge, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
@@ -273,17 +273,17 @@ func TestExecutorAggregateAvg(t *testing.T) {
 func TestExecutorAggregateWithNulls(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewNull(), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewNull(), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewNull(),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewNull(),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -291,12 +291,12 @@ func TestExecutorAggregateWithNulls(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
-			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64}},
+			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
+			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
 		},
 		schema: []ColumnDef{
-			{Name: "SUM(age)", Type: common.TypeFloat64, Nullable: true},
-			{Name: "AVG(score)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggSumAge, Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggAvgScore, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
@@ -324,17 +324,17 @@ func TestExecutorAggregateWithNulls(t *testing.T) {
 func TestExecutorMultipleAggregates(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(90.0),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(90.0),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(20), "score": common.NewFloat64(80.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(20), testColScore: common.NewFloat64(80.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -343,17 +343,17 @@ func TestExecutorMultipleAggregates(t *testing.T) {
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
 			{Func: AggCount, Arg: &StarExpr{}},
-			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
-			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
-			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
-			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
+			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
+			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
+			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "COUNT(*)", Type: common.TypeInt64, Nullable: false},
-			{Name: "SUM(age)", Type: common.TypeFloat64, Nullable: true},
-			{Name: "MIN(age)", Type: common.TypeInt64, Nullable: true},
-			{Name: "MAX(age)", Type: common.TypeInt64, Nullable: true},
-			{Name: "AVG(age)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggCountStar, Type: common.TypeInt64, Nullable: false},
+			{Name: testAggSumAge, Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggMinAge, Type: common.TypeInt64, Nullable: true},
+			{Name: testAggMaxAge, Type: common.TypeInt64, Nullable: true},
+			{Name: testAggAvgAge, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
@@ -396,17 +396,17 @@ func TestExecutorMultipleAggregates(t *testing.T) {
 func TestExecutorAggregateMinFloat(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -414,10 +414,10 @@ func TestExecutorAggregateMinFloat(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64}},
+			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
 		},
 		schema: []ColumnDef{
-			{Name: "MIN(score)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggMinScore, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
@@ -439,17 +439,17 @@ func TestExecutorAggregateMinFloat(t *testing.T) {
 func TestExecutorAggregateMaxFloat(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -457,10 +457,10 @@ func TestExecutorAggregateMaxFloat(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64}},
+			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
 		},
 		schema: []ColumnDef{
-			{Name: "MAX(score)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggMaxScore, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 

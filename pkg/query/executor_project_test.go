@@ -9,26 +9,26 @@ import (
 func TestExecutorProjectBasic(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	project := &ProjectNode{
 		Child: scan,
 		Expressions: []Expression{
-			&ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString},
-			&ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
+			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 		},
 		Aliases: []string{"", ""},
 		schema: []ColumnDef{
-			{Name: "name", Type: common.TypeString, Nullable: true},
-			{Name: "age", Type: common.TypeInt64, Nullable: true},
+			{Name: testColName, Type: common.TypeString, Nullable: true},
+			{Name: testColAge, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -54,39 +54,39 @@ func TestExecutorProjectBasic(t *testing.T) {
 func TestExecutorFilterAndProject(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		"id": common.NewInt64(3), "name": common.NewString("charlie"),
-		"age": common.NewInt64(35), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	filter := &FilterNode{
 		Child:     scan,
-		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(25)}},
+		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(25)}},
 	}
 
 	project := &ProjectNode{
 		Child: filter,
 		Expressions: []Expression{
-			&ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString},
-			&ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
+			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 		},
 		Aliases: []string{"", ""},
 		schema: []ColumnDef{
-			{Name: "name", Type: common.TypeString, Nullable: true},
-			{Name: "age", Type: common.TypeInt64, Nullable: true},
+			{Name: testColName, Type: common.TypeString, Nullable: true},
+			{Name: testColAge, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -112,25 +112,25 @@ func TestExecutorFilterAndProject(t *testing.T) {
 func TestExecutorProjectWithArithmetic(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	project := &ProjectNode{
 		Child: scan,
 		Expressions: []Expression{
-			&ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString},
-			&BinaryExpr{Op: OpMul, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(2)}},
+			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
+			&BinaryExpr{Op: OpMul, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(2)}},
 		},
-		Aliases: []string{"name", "double_age"},
+		Aliases: []string{testColName, "double_age"},
 		schema: []ColumnDef{
-			{Name: "name", Type: common.TypeString, Nullable: true},
+			{Name: testColName, Type: common.TypeString, Nullable: true},
 			{Name: "double_age", Type: common.TypeInt64, Nullable: true},
 		},
 	}
@@ -159,13 +159,13 @@ func TestExecutorProjectWithArithmetic(t *testing.T) {
 func TestExecutorProjectTypeCoercion(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -173,7 +173,7 @@ func TestExecutorProjectTypeCoercion(t *testing.T) {
 	project := &ProjectNode{
 		Child: scan,
 		Expressions: []Expression{
-			&ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64},
+			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
 		},
 		Aliases: []string{"age_as_float"},
 		schema: []ColumnDef{
@@ -199,24 +199,24 @@ func TestExecutorProjectTypeCoercion(t *testing.T) {
 func TestExecutorColumnExpr(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	project := &ProjectNode{
 		Child: scan,
 		Expressions: []Expression{
-			&ColumnExpr{Name: "name"},
+			&ColumnExpr{Name: testColName},
 		},
-		Aliases: []string{"name"},
+		Aliases: []string{testColName},
 		schema: []ColumnDef{
-			{Name: "name", Type: common.TypeString, Nullable: true},
+			{Name: testColName, Type: common.TypeString, Nullable: true},
 		},
 	}
 
@@ -240,34 +240,34 @@ func TestExecutorFullPipeline(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		key := fmtKey(i)
 		ms.addEntry(key, map[string]common.Value{
-			"id":    common.NewInt64(int64(i)),
-			"name":  common.NewString(key),
-			"age":   common.NewInt64(int64(20 + i%10)),
-			"score": common.NewFloat64(float64(80 + i%20)),
+			testColID:    common.NewInt64(int64(i)),
+			testColName:  common.NewString(key),
+			testColAge:   common.NewInt64(int64(20 + i%10)),
+			testColScore: common.NewFloat64(float64(80 + i%20)),
 		})
 	}
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	filter := &FilterNode{
 		Child:     scan,
-		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64}, Right: &LiteralExpr{Value: common.NewFloat64(70)}},
+		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}, Right: &LiteralExpr{Value: common.NewFloat64(70)}},
 	}
 
 	project := &ProjectNode{
 		Child: filter,
 		Expressions: []Expression{
-			&ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString},
-			&ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64},
+			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
+			&ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64},
 		},
-		Aliases: []string{"name", "score"},
+		Aliases: []string{testColName, testColScore},
 		schema: []ColumnDef{
-			{Name: "name", Type: common.TypeString, Nullable: true},
-			{Name: "score", Type: common.TypeFloat64, Nullable: true},
+			{Name: testColName, Type: common.TypeString, Nullable: true},
+			{Name: testColScore, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
@@ -299,27 +299,27 @@ func TestExecutorFullPipeline(t *testing.T) {
 func TestExecutorStringComparison(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		"id": common.NewInt64(2), "name": common.NewString("bob"),
-		"age": common.NewInt64(25), "score": common.NewFloat64(88.0),
+		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		"id": common.NewInt64(3), "name": common.NewString("charlie"),
-		"age": common.NewInt64(35), "score": common.NewFloat64(72.0),
+		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	filter := &FilterNode{
 		Child:     scan,
-		Condition: &BinaryExpr{Op: OpEq, Left: &ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString}, Right: &LiteralExpr{Value: common.NewString("bob")}},
+		Condition: &BinaryExpr{Op: OpEq, Left: &ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString}, Right: &LiteralExpr{Value: common.NewString("bob")}},
 	}
 
 	exec := NewExecutor(ms)
@@ -337,24 +337,24 @@ func TestExecutorStringComparison(t *testing.T) {
 func TestExecutorDivByZero(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		"id": common.NewInt64(1), "name": common.NewString("alice"),
-		"age": common.NewInt64(30), "score": common.NewFloat64(95.5),
+		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
 	project := &ProjectNode{
 		Child: scan,
 		Expressions: []Expression{
-			&BinaryExpr{Op: OpDiv, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(0)}},
+			&BinaryExpr{Op: OpDiv, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(0)}},
 		},
-		Aliases: []string{"div_zero"},
+		Aliases: []string{testAliasDivZero},
 		schema: []ColumnDef{
-			{Name: "div_zero", Type: common.TypeInt64, Nullable: true},
+			{Name: testAliasDivZero, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -377,8 +377,8 @@ func TestExecutorAggregateEmptyMin(t *testing.T) {
 	ms := newMockStorage()
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -386,10 +386,10 @@ func TestExecutorAggregateEmptyMin(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggMin, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "MIN(age)", Type: common.TypeInt64, Nullable: true},
+			{Name: testAggMinAge, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -412,8 +412,8 @@ func TestExecutorAggregateEmptyMax(t *testing.T) {
 	ms := newMockStorage()
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -421,10 +421,10 @@ func TestExecutorAggregateEmptyMax(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggMax, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "MAX(age)", Type: common.TypeInt64, Nullable: true},
+			{Name: testAggMaxAge, Type: common.TypeInt64, Nullable: true},
 		},
 	}
 
@@ -447,8 +447,8 @@ func TestExecutorAggregateEmptyAvg(t *testing.T) {
 	ms := newMockStorage()
 
 	scan := &ScanNode{
-		Table:   "users",
-		Columns: []string{"id", "name", "age", "score"},
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
 		schema:  buildTestSchema(),
 	}
 
@@ -456,10 +456,10 @@ func TestExecutorAggregateEmptyAvg(t *testing.T) {
 		Child:   scan,
 		GroupBy: nil,
 		Aggregates: []AggregateExpr{
-			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}},
+			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}},
 		},
 		schema: []ColumnDef{
-			{Name: "AVG(age)", Type: common.TypeFloat64, Nullable: true},
+			{Name: testAggAvgAge, Type: common.TypeFloat64, Nullable: true},
 		},
 	}
 
