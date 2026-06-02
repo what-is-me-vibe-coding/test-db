@@ -312,6 +312,7 @@ func (r *ColumnPruningRule) pruneNode(node PlanNode, needed map[string]bool) Pla
 	case *ScanNode:
 		return r.pruneScan(n, needed)
 	case *FilterNode:
+		collectColumnRefsInto(n.Condition, needed)
 		n.Child = r.pruneNode(n.Child, needed)
 		return n
 	case *ProjectNode:
