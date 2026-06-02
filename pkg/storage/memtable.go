@@ -290,23 +290,14 @@ func estimateRowSize(row Row) int64 {
 }
 
 // All 返回 MemTable 中所有键值对，按键顺序排列。
-func (m *MemTable) All() []struct {
-	Key   string
-	Value Row
-} {
+func (m *MemTable) All() []KeyValue {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	var result []struct {
-		Key   string
-		Value Row
-	}
+	var result []KeyValue
 	x := m.tree.head.forward[0]
 	for x != nil {
-		result = append(result, struct {
-			Key   string
-			Value Row
-		}{Key: x.key, Value: x.value})
+		result = append(result, KeyValue{Key: x.key, Value: x.value})
 		x = x.forward[0]
 	}
 	return result

@@ -8,6 +8,12 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
+// KeyValue 表示 MemTable 中的键值对。
+type KeyValue struct {
+	Key   string
+	Value Row
+}
+
 // ColumnMeta 描述需要刷盘的列的元数据。
 type ColumnMeta struct {
 	ID   uint32
@@ -33,12 +39,27 @@ func (f *Flusher) Flush(mem *MemTable, cols []ColumnMeta) (*Segment, error) {
 		return nil, fmt.Errorf("flusher: empty memtable")
 	}
 
+	f.nextID++
+	seg, err := f.buildSegment(f.nextID, rows, cols)
+	if err != nil {
+		return nil, err
+	}
+
+	fileName, err := f.writeSegment(seg)
+	if err != nil {
+		return nil, err
+	}
+
+	seg.FilePath = fileName
+	return seg, nil
+}
+
+func (f *Flusher) buildSegment(segID uint64, rows []KeyValue, cols []ColumnMeta) (*Segment, error) {
 	rowCount := uint32(len(rows))
 	minKey := rows[0].Key
 	maxKey := rows[len(rows)-1].Key
 
-	f.nextID++
-	builder := NewSegmentBuilder(f.nextID, minKey, maxKey)
+	builder := NewSegmentBuilder(segID, minKey, maxKey)
 
 	keys := make([]string, len(rows))
 	for i, row := range rows {
@@ -47,48 +68,53 @@ func (f *Flusher) Flush(mem *MemTable, cols []ColumnMeta) (*Segment, error) {
 	builder.SetKeys(keys)
 
 	for _, colMeta := range cols {
-		cv := NewColumnVector(colMeta.ID, colMeta.Type, rowCount)
-		for _, row := range rows {
-			val, ok := row.Value.Columns[colMeta.Name]
-			if !ok {
-				if err := cv.Append(common.NewNull()); err != nil {
-					return nil, fmt.Errorf("flusher: column %s append null: %w", colMeta.Name, err)
-				}
-				continue
-			}
-			if err := cv.Append(val); err != nil {
-				return nil, fmt.Errorf("flusher: column %s: %w", colMeta.Name, err)
-			}
-		}
-
-		enc, err := encodeColumnVector(cv)
+		enc, err := f.buildEncodedColumn(colMeta, rows, rowCount)
 		if err != nil {
-			return nil, fmt.Errorf("flusher: encode column %s: %w", colMeta.Name, err)
+			return nil, err
 		}
 		builder.AddEncodedColumn(enc)
 	}
 
-	seg, err := builder.Build()
-	if err != nil {
-		return nil, fmt.Errorf("flusher: build segment: %w", err)
+	return builder.Build()
+}
+
+func (f *Flusher) buildEncodedColumn(colMeta ColumnMeta, rows []KeyValue, rowCount uint32) (*EncodedColumn, error) {
+	cv := NewColumnVector(colMeta.ID, colMeta.Type, rowCount)
+	for _, row := range rows {
+		val, ok := row.Value.Columns[colMeta.Name]
+		if !ok {
+			if err := cv.Append(common.NewNull()); err != nil {
+				return nil, fmt.Errorf("flusher: column %s append null: %w", colMeta.Name, err)
+			}
+			continue
+		}
+		if err := cv.Append(val); err != nil {
+			return nil, fmt.Errorf("flusher: column %s: %w", colMeta.Name, err)
+		}
 	}
 
-	fileName := filepath.Join(f.dataDir, fmt.Sprintf("segment_%d.widb", f.nextID))
+	enc, err := encodeColumnVector(cv)
+	if err != nil {
+		return nil, fmt.Errorf("flusher: encode column %s: %w", colMeta.Name, err)
+	}
+	return enc, nil
+}
+
+func (f *Flusher) writeSegment(seg *Segment) (string, error) {
+	if err := os.MkdirAll(f.dataDir, 0755); err != nil {
+		return "", fmt.Errorf("flusher: create data dir: %w", err)
+	}
+
+	fileName := filepath.Join(f.dataDir, fmt.Sprintf("segment_%d.widb", seg.ID))
 	data, err := seg.Serialize()
 	if err != nil {
-		return nil, fmt.Errorf("flusher: serialize segment: %w", err)
-	}
-
-	if err := os.MkdirAll(f.dataDir, 0755); err != nil {
-		return nil, fmt.Errorf("flusher: create data dir: %w", err)
+		return "", fmt.Errorf("flusher: serialize segment: %w", err)
 	}
 
 	if err := os.WriteFile(fileName, data, 0644); err != nil {
-		return nil, fmt.Errorf("flusher: write segment file: %w", err)
+		return "", fmt.Errorf("flusher: write segment file: %w", err)
 	}
-
-	seg.FilePath = fileName
-	return seg, nil
+	return fileName, nil
 }
 
 // encodeColumnVector 将 ColumnVector 编码为 EncodedColumn。
