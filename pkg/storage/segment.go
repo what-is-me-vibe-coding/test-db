@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
 const segmentMagic uint32 = 0x57494442
 
 const segmentVersion uint16 = 1
+
+const defaultBloomFPRate = 0.01
 
 // ColumnStat 存储单个列的统计信息。
 type ColumnStat struct {
@@ -40,10 +43,11 @@ type Segment struct {
 
 // SegmentBuilder 从 Chunk 构建 Segment。
 type SegmentBuilder struct {
-	id      uint64
-	minKey  string
-	maxKey  string
-	columns []EncodedColumn
+	id        uint64
+	minKey    string
+	maxKey    string
+	columns   []EncodedColumn
+	bloomKeys []string
 }
 
 // NewSegmentBuilder 创建 SegmentBuilder。
@@ -53,6 +57,11 @@ func NewSegmentBuilder(id uint64, minKey, maxKey string) *SegmentBuilder {
 		minKey: minKey,
 		maxKey: maxKey,
 	}
+}
+
+// SetBloomKeys 设置用于构建布隆过滤器的主键列表。
+func (b *SegmentBuilder) SetBloomKeys(keys []string) {
+	b.bloomKeys = keys
 }
 
 // AddEncodedColumn 添加一个已编码的列。
@@ -300,6 +309,20 @@ func (b *SegmentBuilder) Build() (*Segment, error) {
 		stats[i].ColumnID = uint32(i)
 	}
 
+	var bloomData []byte
+	if len(b.bloomKeys) > 0 {
+		n := uint(len(b.bloomKeys))
+		bf := bloom.NewWithEstimates(n, defaultBloomFPRate)
+		for _, k := range b.bloomKeys {
+			bf.Add([]byte(k))
+		}
+		var err error
+		bloomData, err = bf.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("segment builder: marshal bloom filter: %w", err)
+		}
+	}
+
 	seg := &Segment{
 		ID:       b.id,
 		MinKey:   b.minKey,
@@ -308,6 +331,7 @@ func (b *SegmentBuilder) Build() (*Segment, error) {
 		Columns:  compressedColumns,
 		Footer: SegmentFooter{
 			ColumnStats: stats,
+			BloomFilter: bloomData,
 			IndexOffset: 0,
 		},
 	}
