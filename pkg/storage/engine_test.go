@@ -15,8 +15,9 @@ func TestEngineWriteAndGet(t *testing.T) {
 	}
 	defer func() { _ = eng.Close() }()
 
+	const testUserName = "alice"
 	vals := map[string]common.Value{
-		colName: common.NewString("alice"),
+		colName: common.NewString(testUserName),
 		colAge:  common.NewInt64(30),
 	}
 
@@ -31,8 +32,8 @@ func TestEngineWriteAndGet(t *testing.T) {
 	if row.Version != 1 {
 		t.Errorf("expected version 1, got %d", row.Version)
 	}
-	if v, exists := row.Columns[colName]; !exists || v.Str != "alice" {
-		t.Errorf("expected name=alice, got %v", v)
+	if v, exists := row.Columns[colName]; !exists || v.Str != testUserName {
+		t.Errorf("expected name=%s, got %v", testUserName, v)
 	}
 	if v, exists := row.Columns[colAge]; !exists || v.Int64 != 30 {
 		t.Errorf("expected age=30, got %v", v)

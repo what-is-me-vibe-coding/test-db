@@ -8,17 +8,25 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
+// PredicateOp 表示谓词比较操作类型。
 type PredicateOp int
 
 const (
+	// OpEqual 等于。
 	OpEqual PredicateOp = iota
+	// OpNotEqual 不等于。
 	OpNotEqual
+	// OpLess 小于。
 	OpLess
+	// OpLessEqual 小于等于。
 	OpLessEqual
+	// OpGreater 大于。
 	OpGreater
+	// OpGreaterEqual 大于等于。
 	OpGreaterEqual
 )
 
+// ColumnSparseStat 表示单列的稀疏统计信息。
 type ColumnSparseStat struct {
 	MinValue  common.Value
 	MaxValue  common.Value
@@ -26,17 +34,20 @@ type ColumnSparseStat struct {
 	HasValues bool
 }
 
+// SegmentStats 是 Segment 统计信息的接口。
 type SegmentStats interface {
 	SegmentID() uint64
-	ForEachColumnStat(func(colID uint32, colType common.DataType, min, max []byte, nullCount uint32))
+	ForEachColumnStat(func(colID uint32, colType common.DataType, minVal, maxVal []byte, nullCount uint32))
 }
 
+// ColumnVectorReader 是列向量读取接口。
 type ColumnVectorReader interface {
 	Len() uint32
 	NullBitmap() *common.Bitmap
 	GetValue(i uint32) common.Value
 }
 
+// SparseIndex 是基于 Min/Max 的稀疏索引。
 type SparseIndex struct {
 	mu    sync.RWMutex
 	stats map[colStatKey]ColumnSparseStat
@@ -47,13 +58,15 @@ type colStatKey struct {
 	ColID uint32
 }
 
+// NewSparseIndex 创建一个空的稀疏索引。
 func NewSparseIndex() *SparseIndex {
 	return &SparseIndex{
 		stats: make(map[colStatKey]ColumnSparseStat),
 	}
 }
 
-func (si *SparseIndex) RegisterColumnStat(segID uint64, colID uint32, min, max []byte, nullCount uint32, dataType common.DataType) {
+// RegisterColumnStat 注册一列的稀疏统计信息。
+func (si *SparseIndex) RegisterColumnStat(segID uint64, colID uint32, minVal, maxVal []byte, nullCount uint32, dataType common.DataType) {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 
@@ -62,15 +75,16 @@ func (si *SparseIndex) RegisterColumnStat(segID uint64, colID uint32, min, max [
 		NullCount: nullCount,
 	}
 
-	if len(min) > 0 && len(max) > 0 {
-		css.MinValue = bytesToValue(min, dataType)
-		css.MaxValue = bytesToValue(max, dataType)
+	if len(minVal) > 0 && len(maxVal) > 0 {
+		css.MinValue = bytesToValue(minVal, dataType)
+		css.MaxValue = bytesToValue(maxVal, dataType)
 		css.HasValues = true
 	}
 
 	si.stats[key] = css
 }
 
+// GetColumnStat 获取指定 Segment 中某列的稀疏统计。
 func (si *SparseIndex) GetColumnStat(segID uint64, colID uint32) (ColumnSparseStat, bool) {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
@@ -79,6 +93,7 @@ func (si *SparseIndex) GetColumnStat(segID uint64, colID uint32) (ColumnSparseSt
 	return css, ok
 }
 
+// UnregisterSegment 注销指定 Segment 的所有列统计。
 func (si *SparseIndex) UnregisterSegment(segID uint64) {
 	si.mu.Lock()
 	defer si.mu.Unlock()
@@ -90,6 +105,7 @@ func (si *SparseIndex) UnregisterSegment(segID uint64) {
 	}
 }
 
+// CanSkip 判断是否可以根据稀疏统计跳过指定列的扫描。
 func (si *SparseIndex) CanSkip(segID uint64, colID uint32, op PredicateOp, value common.Value) bool {
 	css, ok := si.GetColumnStat(segID, colID)
 	if !ok || !css.HasValues {
@@ -117,17 +133,19 @@ func (si *SparseIndex) CanSkip(segID uint64, colID uint32, op PredicateOp, value
 	}
 }
 
+// LoadFromSegment 从 SegmentStats 加载所有列统计信息。
 func (si *SparseIndex) LoadFromSegment(seg SegmentStats, _, _ string, _ int) {
 	if seg == nil {
 		return
 	}
 
 	segID := seg.SegmentID()
-	seg.ForEachColumnStat(func(colID uint32, colType common.DataType, min, max []byte, nullCount uint32) {
-		si.RegisterColumnStat(segID, colID, min, max, nullCount, colType)
+	seg.ForEachColumnStat(func(colID uint32, colType common.DataType, minVal, maxVal []byte, nullCount uint32) {
+		si.RegisterColumnStat(segID, colID, minVal, maxVal, nullCount, colType)
 	})
 }
 
+// BuildFromColumnVector 从列向量构建稀疏统计。
 func (si *SparseIndex) BuildFromColumnVector(segID uint64, colID uint32, cv ColumnVectorReader) {
 	if cv == nil || cv.Len() == 0 {
 		return
@@ -168,12 +186,14 @@ func (si *SparseIndex) BuildFromColumnVector(segID uint64, colID uint32, cv Colu
 	si.mu.Unlock()
 }
 
+// StatCount 返回已注册的列统计数量。
 func (si *SparseIndex) StatCount() int {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 	return len(si.stats)
 }
 
+// Clear 清空所有统计信息。
 func (si *SparseIndex) Clear() {
 	si.mu.Lock()
 	defer si.mu.Unlock()
