@@ -9,23 +9,54 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
-// ---- Catalog CRUD 测试 ----
+// 测试中使用的常量名
+const (
+	colEmail    = "email"
+	colCol1     = "col1"
+	tableT1     = "t1"
+	tableNotExt = "notexist"
+)
 
-func TestCatalogCreateTable(t *testing.T) {
-	c := NewCatalog("")
-	err := c.CreateTable("users", []ColumnDef{
+// createTestTable 是辅助函数，创建测试用的 users 表。
+func createTestTable(c *Catalog, t *testing.T) {
+	t.Helper()
+	err := c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
-		{Name: "name", Type: common.TypeString},
 	}, []string{"id"}, TableOptions{})
 	if err != nil {
 		t.Fatalf("CreateTable() error = %v", err)
 	}
-	tbl, err := c.GetTable("users")
+}
+
+// createTestTableWithColumns 是辅助函数，创建带多列的测试表。
+func createTestTableWithColumns(c *Catalog, t *testing.T) {
+	t.Helper()
+	err := c.CreateTable(tableUsers, []ColumnDef{
+		{Name: "id", Type: common.TypeInt64},
+		{Name: colName, Type: common.TypeString},
+	}, []string{"id"}, TableOptions{})
+	if err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
+}
+
+// ---- Catalog CRUD 测试 ----
+
+func TestCatalogCreateTable(t *testing.T) {
+	c := NewCatalog("")
+	err := c.CreateTable(tableUsers, []ColumnDef{
+		{Name: "id", Type: common.TypeInt64},
+		{Name: colName, Type: common.TypeString},
+	}, []string{"id"}, TableOptions{})
+	if err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
+	tbl, err := c.GetTable(tableUsers)
 	if err != nil {
 		t.Fatalf("GetTable() error = %v", err)
 	}
-	if tbl.Name != "users" {
-		t.Errorf("table name = %q, want %q", tbl.Name, "users")
+	if tbl.Name != tableUsers {
+		t.Errorf("table name = %q, want %q", tbl.Name, tableUsers)
 	}
 	if len(tbl.Columns) != 2 {
 		t.Errorf("columns count = %d, want 2", len(tbl.Columns))
@@ -37,13 +68,13 @@ func TestCatalogCreateTable(t *testing.T) {
 
 func TestCatalogCreateTableDuplicate(t *testing.T) {
 	c := NewCatalog("")
-	err := c.CreateTable("users", []ColumnDef{
+	err := c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
 	}, []string{"id"}, TableOptions{})
 	if err != nil {
 		t.Fatalf("first CreateTable() error = %v", err)
 	}
-	err = c.CreateTable("users", []ColumnDef{
+	err = c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
 	}, []string{"id"}, TableOptions{})
 	if err == nil {
@@ -81,15 +112,13 @@ func TestCatalogCreateTableInvalidPrimaryKey(t *testing.T) {
 
 func TestCatalogDropTable(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	err := c.DropTable("users")
+	err := c.DropTable(tableUsers)
 	if err != nil {
 		t.Fatalf("DropTable() error = %v", err)
 	}
-	_, err = c.GetTable("users")
+	_, err = c.GetTable(tableUsers)
 	if err != common.ErrTableNotExist {
 		t.Errorf("GetTable after drop = %v, want ErrTableNotExist", err)
 	}
@@ -97,7 +126,7 @@ func TestCatalogDropTable(t *testing.T) {
 
 func TestCatalogDropTableNotExist(t *testing.T) {
 	c := NewCatalog("")
-	err := c.DropTable("notexist")
+	err := c.DropTable(tableNotExt)
 	if err != common.ErrTableNotExist {
 		t.Errorf("DropTable(notexist) = %v, want ErrTableNotExist", err)
 	}
@@ -105,22 +134,25 @@ func TestCatalogDropTableNotExist(t *testing.T) {
 
 func TestCatalogAddColumn(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	err := c.AddColumn("users", "email", ColumnDef{
-		Name: "email", Type: common.TypeString,
+	err := c.AddColumn(tableUsers, colEmail, ColumnDef{
+		Name: colEmail, Type: common.TypeString,
 	})
 	if err != nil {
 		t.Fatalf("AddColumn() error = %v", err)
 	}
-	tbl, _ := c.GetTable("users")
-	if !tbl.HasColumn("email") {
+	tbl, err := c.GetTable(tableUsers)
+	if err != nil {
+		t.Fatalf("GetTable() error = %v", err)
+	}
+	if !tbl.HasColumn(colEmail) {
 		t.Error("table should have email column after AddColumn")
 	}
-	// 新列默认 Nullable
-	col, _ := tbl.GetColumn("email")
+	col, err := tbl.GetColumn(colEmail)
+	if err != nil {
+		t.Fatalf("GetColumn() error = %v", err)
+	}
 	if !col.Nullable {
 		t.Error("new column should be nullable by default")
 	}
@@ -128,7 +160,7 @@ func TestCatalogAddColumn(t *testing.T) {
 
 func TestCatalogAddColumnTableNotExist(t *testing.T) {
 	c := NewCatalog("")
-	err := c.AddColumn("notexist", "col", ColumnDef{Name: "col", Type: common.TypeInt64})
+	err := c.AddColumn(tableNotExt, "col", ColumnDef{Name: "col", Type: common.TypeInt64})
 	if err != common.ErrTableNotExist {
 		t.Errorf("AddColumn on non-existent table = %v, want ErrTableNotExist", err)
 	}
@@ -136,11 +168,9 @@ func TestCatalogAddColumnTableNotExist(t *testing.T) {
 
 func TestCatalogAddColumnDuplicate(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	err := c.AddColumn("users", "id", ColumnDef{Name: "id", Type: common.TypeInt64})
+	err := c.AddColumn(tableUsers, "id", ColumnDef{Name: "id", Type: common.TypeInt64})
 	if err == nil {
 		t.Error("AddColumn duplicate should return error")
 	}
@@ -148,28 +178,26 @@ func TestCatalogAddColumnDuplicate(t *testing.T) {
 
 func TestCatalogDropColumn(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-		{Name: "name", Type: common.TypeString},
-	}, []string{"id"}, TableOptions{})
+	createTestTableWithColumns(c, t)
 
-	err := c.DropColumn("users", "name")
+	err := c.DropColumn(tableUsers, colName)
 	if err != nil {
 		t.Fatalf("DropColumn() error = %v", err)
 	}
-	tbl, _ := c.GetTable("users")
-	if tbl.HasColumn("name") {
+	tbl, err := c.GetTable(tableUsers)
+	if err != nil {
+		t.Fatalf("GetTable() error = %v", err)
+	}
+	if tbl.HasColumn(colName) {
 		t.Error("table should not have name column after DropColumn")
 	}
 }
 
 func TestCatalogDropColumnPrimaryKey(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	err := c.DropColumn("users", "id")
+	err := c.DropColumn(tableUsers, "id")
 	if err == nil {
 		t.Error("DropColumn on primary key should return error")
 	}
@@ -177,11 +205,9 @@ func TestCatalogDropColumnPrimaryKey(t *testing.T) {
 
 func TestCatalogDropColumnNotExist(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	err := c.DropColumn("users", "notexist")
+	err := c.DropColumn(tableUsers, tableNotExt)
 	if err != common.ErrColumnNotExist {
 		t.Errorf("DropColumn(notexist) = %v, want ErrColumnNotExist", err)
 	}
@@ -191,16 +217,17 @@ func TestCatalogDropColumnNotExist(t *testing.T) {
 
 func TestCatalogRegisterSegment(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
 	seg := SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z", Size: 1024, RowCount: 100}
-	err := c.RegisterSegment("users", seg)
+	err := c.RegisterSegment(tableUsers, seg)
 	if err != nil {
 		t.Fatalf("RegisterSegment() error = %v", err)
 	}
-	tbl, _ := c.GetTable("users")
+	tbl, err := c.GetTable(tableUsers)
+	if err != nil {
+		t.Fatalf("GetTable() error = %v", err)
+	}
 	if len(tbl.SegmentList) != 1 {
 		t.Errorf("segment count = %d, want 1", len(tbl.SegmentList))
 	}
@@ -211,13 +238,14 @@ func TestCatalogRegisterSegment(t *testing.T) {
 
 func TestCatalogRegisterSegmentDuplicate(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
 	seg := SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"}
-	c.RegisterSegment("users", seg)
-	err := c.RegisterSegment("users", seg)
+	err := c.RegisterSegment(tableUsers, seg)
+	if err != nil {
+		t.Fatalf("first RegisterSegment() error = %v", err)
+	}
+	err = c.RegisterSegment(tableUsers, seg)
 	if err == nil {
 		t.Error("RegisterSegment duplicate should return error")
 	}
@@ -225,18 +253,25 @@ func TestCatalogRegisterSegmentDuplicate(t *testing.T) {
 
 func TestCatalogUnregisterSegment(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	c.RegisterSegment("users", SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"})
-	c.RegisterSegment("users", SegmentRef{ID: 2, Level: 0, MinKey: "b", MaxKey: "y"})
+	err := c.RegisterSegment(tableUsers, SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"})
+	if err != nil {
+		t.Fatalf("RegisterSegment(1) error = %v", err)
+	}
+	err = c.RegisterSegment(tableUsers, SegmentRef{ID: 2, Level: 0, MinKey: "b", MaxKey: "y"})
+	if err != nil {
+		t.Fatalf("RegisterSegment(2) error = %v", err)
+	}
 
-	err := c.UnregisterSegment("users", 1)
+	err = c.UnregisterSegment(tableUsers, 1)
 	if err != nil {
 		t.Fatalf("UnregisterSegment() error = %v", err)
 	}
-	tbl, _ := c.GetTable("users")
+	tbl, err := c.GetTable(tableUsers)
+	if err != nil {
+		t.Fatalf("GetTable() error = %v", err)
+	}
 	if len(tbl.SegmentList) != 1 {
 		t.Errorf("segment count = %d, want 1", len(tbl.SegmentList))
 	}
@@ -247,11 +282,9 @@ func TestCatalogUnregisterSegment(t *testing.T) {
 
 func TestCatalogUnregisterSegmentNotFound(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-	}, []string{"id"}, TableOptions{})
+	createTestTable(c, t)
 
-	err := c.UnregisterSegment("users", 999)
+	err := c.UnregisterSegment(tableUsers, 999)
 	if err == nil {
 		t.Error("UnregisterSegment with non-existent ID should return error")
 	}
@@ -261,10 +294,7 @@ func TestCatalogUnregisterSegmentNotFound(t *testing.T) {
 
 func TestCatalogSnapshot(t *testing.T) {
 	c := NewCatalog("")
-	c.CreateTable("users", []ColumnDef{
-		{Name: "id", Type: common.TypeInt64},
-		{Name: "name", Type: common.TypeString},
-	}, []string{"id"}, TableOptions{})
+	createTestTableWithColumns(c, t)
 
 	snap := c.Snapshot()
 	if snap.Version != c.Version() {
@@ -274,8 +304,8 @@ func TestCatalogSnapshot(t *testing.T) {
 		t.Errorf("snapshot tables count = %d, want 1", len(snap.Tables))
 	}
 	// 修改快照不应影响原始 Catalog
-	delete(snap.Tables, "users")
-	_, err := c.GetTable("users")
+	delete(snap.Tables, tableUsers)
+	_, err := c.GetTable(tableUsers)
 	if err != nil {
 		t.Error("modifying snapshot should not affect original catalog")
 	}
@@ -287,37 +317,55 @@ func TestCatalogVersionIncrement(t *testing.T) {
 	c := NewCatalog("")
 	initial := c.Version()
 
-	c.CreateTable("t1", []ColumnDef{{Name: "id", Type: common.TypeInt64}}, []string{"id"}, TableOptions{})
+	err := c.CreateTable(tableT1, []ColumnDef{{Name: "id", Type: common.TypeInt64}}, []string{"id"}, TableOptions{})
+	if err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
 	if c.Version() <= initial {
 		t.Error("version should increment after CreateTable")
 	}
 
 	v := c.Version()
-	c.AddColumn("t1", "col1", ColumnDef{Name: "col1", Type: common.TypeString})
+	err = c.AddColumn(tableT1, colCol1, ColumnDef{Name: colCol1, Type: common.TypeString})
+	if err != nil {
+		t.Fatalf("AddColumn() error = %v", err)
+	}
 	if c.Version() <= v {
 		t.Error("version should increment after AddColumn")
 	}
 
 	v = c.Version()
-	c.DropColumn("t1", "col1")
+	err = c.DropColumn(tableT1, colCol1)
+	if err != nil {
+		t.Fatalf("DropColumn() error = %v", err)
+	}
 	if c.Version() <= v {
 		t.Error("version should increment after DropColumn")
 	}
 
 	v = c.Version()
-	c.RegisterSegment("t1", SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"})
+	err = c.RegisterSegment(tableT1, SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"})
+	if err != nil {
+		t.Fatalf("RegisterSegment() error = %v", err)
+	}
 	if c.Version() <= v {
 		t.Error("version should increment after RegisterSegment")
 	}
 
 	v = c.Version()
-	c.UnregisterSegment("t1", 1)
+	err = c.UnregisterSegment(tableT1, 1)
+	if err != nil {
+		t.Fatalf("UnregisterSegment() error = %v", err)
+	}
 	if c.Version() <= v {
 		t.Error("version should increment after UnregisterSegment")
 	}
 
 	v = c.Version()
-	c.DropTable("t1")
+	err = c.DropTable(tableT1)
+	if err != nil {
+		t.Fatalf("DropTable() error = %v", err)
+	}
 	if c.Version() <= v {
 		t.Error("version should increment after DropTable")
 	}
@@ -330,23 +378,29 @@ func TestCatalogPersistAndLoad(t *testing.T) {
 	path := filepath.Join(dir, "catalog.json")
 
 	c := NewCatalog(path)
-	c.CreateTable("users", []ColumnDef{
+	err := c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
-		{Name: "name", Type: common.TypeString},
+		{Name: colName, Type: common.TypeString},
 	}, []string{"id"}, TableOptions{})
-	c.RegisterSegment("users", SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z", Size: 1024, RowCount: 50})
+	if err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
+	err = c.RegisterSegment(tableUsers, SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z", Size: 1024, RowCount: 50})
+	if err != nil {
+		t.Fatalf("RegisterSegment() error = %v", err)
+	}
 
 	// 从文件加载
 	c2, err := LoadCatalog(path)
 	if err != nil {
 		t.Fatalf("LoadCatalog() error = %v", err)
 	}
-	tbl, err := c2.GetTable("users")
+	tbl, err := c2.GetTable(tableUsers)
 	if err != nil {
 		t.Fatalf("GetTable() after load error = %v", err)
 	}
-	if tbl.Name != "users" {
-		t.Errorf("table name = %q, want %q", tbl.Name, "users")
+	if tbl.Name != tableUsers {
+		t.Errorf("table name = %q, want %q", tbl.Name, tableUsers)
 	}
 	if len(tbl.Columns) != 2 {
 		t.Errorf("columns count = %d, want 2", len(tbl.Columns))
@@ -374,7 +428,7 @@ func TestCatalogLoadNotExist(t *testing.T) {
 
 func TestCatalogPersistEmptyPath(t *testing.T) {
 	c := NewCatalog("")
-	err := c.CreateTable("users", []ColumnDef{
+	err := c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
 	}, []string{"id"}, TableOptions{})
 	if err != nil {
@@ -387,9 +441,12 @@ func TestCatalogPersistAtomicWrite(t *testing.T) {
 	path := filepath.Join(dir, "catalog.json")
 
 	c := NewCatalog(path)
-	c.CreateTable("users", []ColumnDef{
+	err := c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
 	}, []string{"id"}, TableOptions{})
+	if err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
 
 	// 不应有残留的临时文件
 	tmpPath := path + ".tmp"
@@ -403,20 +460,38 @@ func TestCatalogPersistMultipleOperations(t *testing.T) {
 	path := filepath.Join(dir, "catalog.json")
 
 	c := NewCatalog(path)
-	c.CreateTable("users", []ColumnDef{
+	err := c.CreateTable(tableUsers, []ColumnDef{
 		{Name: "id", Type: common.TypeInt64},
 	}, []string{"id"}, TableOptions{})
-	c.AddColumn("users", "email", ColumnDef{Name: "email", Type: common.TypeString})
-	c.RegisterSegment("users", SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"})
-	c.RegisterSegment("users", SegmentRef{ID: 2, Level: 1, MinKey: "b", MaxKey: "y"})
-	c.UnregisterSegment("users", 1)
+	if err != nil {
+		t.Fatalf("CreateTable() error = %v", err)
+	}
+	err = c.AddColumn(tableUsers, colEmail, ColumnDef{Name: colEmail, Type: common.TypeString})
+	if err != nil {
+		t.Fatalf("AddColumn() error = %v", err)
+	}
+	err = c.RegisterSegment(tableUsers, SegmentRef{ID: 1, Level: 0, MinKey: "a", MaxKey: "z"})
+	if err != nil {
+		t.Fatalf("RegisterSegment(1) error = %v", err)
+	}
+	err = c.RegisterSegment(tableUsers, SegmentRef{ID: 2, Level: 1, MinKey: "b", MaxKey: "y"})
+	if err != nil {
+		t.Fatalf("RegisterSegment(2) error = %v", err)
+	}
+	err = c.UnregisterSegment(tableUsers, 1)
+	if err != nil {
+		t.Fatalf("UnregisterSegment() error = %v", err)
+	}
 
 	// 重新加载验证所有操作
 	c2, err := LoadCatalog(path)
 	if err != nil {
 		t.Fatalf("LoadCatalog() error = %v", err)
 	}
-	tbl, _ := c2.GetTable("users")
+	tbl, err := c2.GetTable(tableUsers)
+	if err != nil {
+		t.Fatalf("GetTable() error = %v", err)
+	}
 	if len(tbl.Columns) != 2 {
 		t.Errorf("columns count = %d, want 2", len(tbl.Columns))
 	}
