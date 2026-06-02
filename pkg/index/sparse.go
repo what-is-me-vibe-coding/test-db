@@ -14,10 +14,15 @@ type PredicateOp int
 const (
 	// OpEqual 等于。
 	OpEqual PredicateOp = iota
+	// OpNotEqual 不等于。
 	OpNotEqual
+	// OpLess 小于。
 	OpLess
+	// OpLessEqual 小于等于。
 	OpLessEqual
+	// OpGreater 大于。
 	OpGreater
+	// OpGreaterEqual 大于等于。
 	OpGreaterEqual
 )
 

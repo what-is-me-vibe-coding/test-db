@@ -324,3 +324,87 @@ func TestEnginePointQueryAfterCompactIndexUpdate(t *testing.T) {
 		t.Errorf("expected val=2, got %v", v)
 	}
 }
+
+func TestEngineColumnMeta(t *testing.T) {
+	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	meta := eng.ColumnMeta()
+	if len(meta) != 0 {
+		t.Errorf("expected empty column meta before flush, got %d", len(meta))
+	}
+
+	cols := []ColumnMeta{
+		{ID: 0, Name: colName, Type: common.TypeString},
+		{ID: 1, Name: colVal, Type: common.TypeInt64},
+	}
+
+	_ = eng.Write("k1", map[string]common.Value{colName: common.NewString("x"), colVal: common.NewInt64(1)})
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	meta = eng.ColumnMeta()
+	if len(meta) != 2 {
+		t.Fatalf("expected 2 column meta, got %d", len(meta))
+	}
+	if meta[0].Name != colName {
+		t.Errorf("expected col[0]=%s, got %s", colName, meta[0].Name)
+	}
+	if meta[1].Name != colVal {
+		t.Errorf("expected col[1]=%s, got %s", colVal, meta[1].Name)
+	}
+}
+
+func TestSegmentFindRowByKeyEmpty(t *testing.T) {
+	seg := &Segment{Keys: nil}
+	_, found := seg.FindRowByKey("any")
+	if found {
+		t.Error("expected false for segment with no keys")
+	}
+}
+
+func TestSegmentGetColumnValueOutOfRange(t *testing.T) {
+	seg := &Segment{Columns: []EncodedColumn{}}
+	_, err := seg.GetColumnValue(0, 0)
+	if err == nil {
+		t.Error("expected error for out of range column index")
+	}
+}
+
+func TestSegmentGetAllColumnValues(t *testing.T) {
+	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	_ = eng.Write("k1", map[string]common.Value{colVal: common.NewInt64(42)})
+
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	segs := eng.Segments()
+	if len(segs) == 0 {
+		t.Fatal("expected at least one segment")
+	}
+
+	seg := segs[0]
+	rowIdx, found := seg.FindRowByKey("k1")
+	if !found {
+		t.Fatal("k1 not found in segment")
+	}
+
+	vals, err := seg.GetAllColumnValues(rowIdx, cols)
+	if err != nil {
+		t.Fatalf("GetAllColumnValues: %v", err)
+	}
+	if v, ok := vals[colVal]; !ok || v.Int64 != 42 {
+		t.Errorf("expected val=42, got %v", v)
+	}
+}

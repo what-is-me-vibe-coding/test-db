@@ -41,11 +41,13 @@ type Segment struct {
 	Keys     []string
 }
 
+// SegmentID 返回 Segment 的唯一标识。
 func (s *Segment) SegmentID() uint64 {
 	return s.ID
 }
 
-func (s *Segment) ForEachColumnStat(fn func(colID uint32, colType common.DataType, min, max []byte, nullCount uint32)) {
+// ForEachColumnStat 遍历所有列的统计信息。
+func (s *Segment) ForEachColumnStat(fn func(colID uint32, colType common.DataType, minVal, maxVal []byte, nullCount uint32)) {
 	for _, stat := range s.Footer.ColumnStats {
 		var dt common.DataType
 		if int(stat.ColumnID) < len(s.Columns) {
@@ -397,6 +399,7 @@ func deserializeKeys(data []byte) []string {
 	return keys
 }
 
+// FindRowByKey 使用二分查找定位指定主键的行索引。
 func (s *Segment) FindRowByKey(key string) (uint32, bool) {
 	if len(s.Keys) == 0 {
 		return 0, false
@@ -416,6 +419,7 @@ func (s *Segment) FindRowByKey(key string) (uint32, bool) {
 	return 0, false
 }
 
+// GetColumnValue 从指定列中提取给定行索引的值，使用副本避免修改原始数据。
 func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
 	if int(colIdx) >= len(s.Columns) {
 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
@@ -453,6 +457,7 @@ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, er
 	return extractValue(cd, rowIdx), nil
 }
 
+// GetAllColumnValues 提取指定行所有列的值。
 func (s *Segment) GetAllColumnValues(rowIdx uint32, colMeta []ColumnMeta) (map[string]common.Value, error) {
 	values := make(map[string]common.Value, len(colMeta))
 	for colIdx, col := range colMeta {
