@@ -110,3 +110,29 @@ func TestValueString(t *testing.T) {
 		}
 	}
 }
+
+func TestValueLess(t *testing.T) {
+	tests := []struct {
+		a, b Value
+		want bool
+	}{
+		{NewNull(), NewNull(), false},
+		{NewNull(), NewInt64(0), false},
+		{NewInt64(0), NewNull(), false},
+		{NewInt64(1), NewInt64(2), true},
+		{NewInt64(2), NewInt64(1), false},
+		{NewInt64(1), NewInt64(1), false},
+		{NewFloat64(1.0), NewFloat64(2.0), true},
+		{NewFloat64(2.0), NewFloat64(1.0), false},
+		{NewString("a"), NewString("b"), true},
+		{NewString("b"), NewString("a"), false},
+		{NewBool(false), NewBool(true), true},
+		{NewBool(true), NewBool(false), false},
+		{NewInt64(1), NewFloat64(2), false}, // 类型不同
+	}
+	for _, tt := range tests {
+		if got := tt.a.Less(tt.b); got != tt.want {
+			t.Errorf("Value(%v).Less(%v) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
