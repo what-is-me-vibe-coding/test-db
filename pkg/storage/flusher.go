@@ -40,6 +40,12 @@ func (f *Flusher) Flush(mem *MemTable, cols []ColumnMeta) (*Segment, error) {
 	f.nextID++
 	builder := NewSegmentBuilder(f.nextID, minKey, maxKey)
 
+	keys := make([]string, len(rows))
+	for i, row := range rows {
+		keys[i] = row.Key
+	}
+	builder.SetKeys(keys)
+
 	for _, colMeta := range cols {
 		cv := NewColumnVector(colMeta.ID, colMeta.Type, rowCount)
 		for _, row := range rows {

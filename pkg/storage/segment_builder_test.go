@@ -100,6 +100,73 @@ func TestSegmentRLEStats(t *testing.T) {
 	}
 }
 
+func TestSegmentBloomFilter(t *testing.T) {
+	rowCount := uint32(10)
+	ints := make([]int64, rowCount)
+	for i := uint32(0); i < rowCount; i++ {
+		ints[i] = int64(i)
+	}
+
+	enc, err := EncodeColumn(common.TypeInt64, ints, rowCount, nil)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	keys := []string{"key-0", "key-1", "key-2", "key-3", "key-4", "key-5", "key-6", "key-7", "key-8", "key-9"}
+
+	builder := NewSegmentBuilder(14, "key-0", "key-9")
+	builder.SetKeys(keys)
+	builder.AddEncodedColumn(enc)
+
+	seg, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if len(seg.Footer.BloomFilter) == 0 {
+		t.Fatal("BloomFilter should not be empty when keys are set")
+	}
+
+	data, err := seg.Serialize()
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+
+	restored, err := DeserializeSegment(data)
+	if err != nil {
+		t.Fatalf("deserialize: %v", err)
+	}
+
+	if len(restored.Footer.BloomFilter) == 0 {
+		t.Fatal("BloomFilter should survive round-trip")
+	}
+}
+
+func TestSegmentBloomFilterNoKeys(t *testing.T) {
+	rowCount := uint32(10)
+	ints := make([]int64, rowCount)
+	for i := uint32(0); i < rowCount; i++ {
+		ints[i] = int64(i)
+	}
+
+	enc, err := EncodeColumn(common.TypeInt64, ints, rowCount, nil)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	builder := NewSegmentBuilder(15, "key-0", "key-9")
+	builder.AddEncodedColumn(enc)
+
+	seg, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	if len(seg.Footer.BloomFilter) != 0 {
+		t.Error("BloomFilter should be empty when no keys are set")
+	}
+}
+
 func TestSegmentPlainStringStats(t *testing.T) {
 	rowCount := uint32(10)
 	strs := []string{"banana", testStrApple, testStrCherry, "date", "elderberry", "fig", "grape", "honeydew", "kiwi", "lemon"}

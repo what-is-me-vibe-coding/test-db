@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
@@ -43,6 +44,8 @@ type SegmentBuilder struct {
 	id      uint64
 	minKey  string
 	maxKey  string
+	keys    []string
+	fpRate  float64
 	columns []EncodedColumn
 }
 
@@ -52,7 +55,19 @@ func NewSegmentBuilder(id uint64, minKey, maxKey string) *SegmentBuilder {
 		id:     id,
 		minKey: minKey,
 		maxKey: maxKey,
+		fpRate: 0.01,
 	}
+}
+
+// SetKeys 设置主键数据，用于构建布隆过滤器。
+func (b *SegmentBuilder) SetKeys(keys []string) {
+	b.keys = make([]string, len(keys))
+	copy(b.keys, keys)
+}
+
+// SetBloomFPRate 设置布隆过滤器目标误判率。
+func (b *SegmentBuilder) SetBloomFPRate(fpRate float64) {
+	b.fpRate = fpRate
 }
 
 // AddEncodedColumn 添加一个已编码的列。
@@ -312,5 +327,18 @@ func (b *SegmentBuilder) Build() (*Segment, error) {
 		},
 	}
 
+	if len(b.keys) > 0 {
+		seg.Footer.BloomFilter = buildBloomFilter(b.keys, b.fpRate)
+	}
+
 	return seg, nil
+}
+
+func buildBloomFilter(keys []string, fpRate float64) []byte {
+	filter := bloom.NewWithEstimates(uint(len(keys)), fpRate)
+	for _, k := range keys {
+		filter.Add([]byte(k))
+	}
+	data, _ := filter.MarshalBinary()
+	return data
 }
