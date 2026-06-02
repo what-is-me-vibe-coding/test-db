@@ -165,6 +165,8 @@ func (e *Engine) findSegmentByID(segID uint64) *Segment {
 }
 
 // Scan 扫描指定键范围内的所有行。
+// 使用 MergeIterator 合并所有数据源（MemTable、Immutable、Segment），
+// 结果按键排序，重复键取最新版本。
 func (e *Engine) Scan(start, end string) []struct {
 	Key   string
 	Value Row
@@ -172,17 +174,15 @@ func (e *Engine) Scan(start, end string) []struct {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	var results []struct {
+	entries := e.ScanRange(start, end)
+	results := make([]struct {
 		Key   string
 		Value Row
+	}, len(entries))
+	for i, entry := range entries {
+		results[i].Key = entry.Key
+		results[i].Value = entry.Value
 	}
-
-	results = append(results, e.activeMem.Scan(start, end)...)
-
-	for i := len(e.immutable) - 1; i >= 0; i-- {
-		results = append(results, e.immutable[i].Scan(start, end)...)
-	}
-
 	return results
 }
 
