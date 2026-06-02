@@ -6,12 +6,6 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
-const (
-	testTableUsers = "users"
-	testColName    = "name"
-	testColAge     = "age"
-)
-
 func TestParseSelectBasic(t *testing.T) {
 	p := NewParser()
 	stmt, err := p.Parse("SELECT id, name FROM users")
