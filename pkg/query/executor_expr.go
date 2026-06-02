@@ -1,0 +1,212 @@
+package query
+
+import (
+	"fmt"
+
+	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
+)
+
+// buildRowValues 从 Chunk 构建指定行的列名到值的映射。
+func buildRowValues(chunk *storage.Chunk, schema []ColumnDef, row uint32) map[string]common.Value {
+	rowVals := make(map[string]common.Value, len(schema))
+	for i, col := range chunk.Columns() {
+		if i < len(schema) {
+			rowVals[schema[i].Name] = col.GetValue(row)
+		}
+	}
+	return rowVals
+}
+
+// evalExpr 在给定行数据上求值表达式。
+func evalExpr(expr Expression, row map[string]common.Value, colIdxMap map[string]int) (common.Value, error) {
+	switch e := expr.(type) {
+	case *LiteralExpr:
+		return e.Value, nil
+	case *ResolvedColumnExpr:
+		val, ok := row[e.Name]
+		if !ok {
+			return common.NewNull(), nil
+		}
+		return val, nil
+	case *ColumnExpr:
+		val, ok := row[e.Name]
+		if !ok {
+			return common.NewNull(), nil
+		}
+		return val, nil
+	case *BinaryExpr:
+		return evalBinaryExpr(e, row, colIdxMap)
+	case *UnaryExpr:
+		return evalUnaryExpr(e, row, colIdxMap)
+	case *FuncExpr:
+		return evalFuncExpr(e, row, colIdxMap)
+	case *StarExpr:
+		return common.NewNull(), nil
+	default:
+		return common.NewNull(), fmt.Errorf("executor: unsupported expression type %T", expr)
+	}
+}
+
+func evalBinaryExpr(e *BinaryExpr, row map[string]common.Value, colIdxMap map[string]int) (common.Value, error) {
+	left, err := evalExpr(e.Left, row, colIdxMap)
+	if err != nil {
+		return common.NewNull(), err
+	}
+
+	switch e.Op {
+	case OpAnd:
+		if !isTruthyValue(left) {
+			return common.NewBool(false), nil
+		}
+		right, err := evalExpr(e.Right, row, colIdxMap)
+		if err != nil {
+			return common.NewNull(), err
+		}
+		return common.NewBool(isTruthyValue(right)), nil
+	case OpOr:
+		if isTruthyValue(left) {
+			return common.NewBool(true), nil
+		}
+		right, err := evalExpr(e.Right, row, colIdxMap)
+		if err != nil {
+			return common.NewNull(), err
+		}
+		return common.NewBool(isTruthyValue(right)), nil
+	}
+
+	right, err := evalExpr(e.Right, row, colIdxMap)
+	if err != nil {
+		return common.NewNull(), err
+	}
+
+	if !left.Valid || !right.Valid {
+		return common.NewNull(), nil
+	}
+
+	switch e.Op {
+	case OpEq:
+		return common.NewBool(left.Equal(right)), nil
+	case OpNe:
+		return common.NewBool(!left.Equal(right)), nil
+	case OpLt:
+		return common.NewBool(left.Less(right)), nil
+	case OpGt:
+		return common.NewBool(right.Less(left)), nil
+	case OpLe:
+		return common.NewBool(!right.Less(left)), nil
+	case OpGe:
+		return common.NewBool(!left.Less(right)), nil
+	case OpAdd:
+		return evalArithmetic(left, right, opAdd)
+	case OpSub:
+		return evalArithmetic(left, right, opSub)
+	case OpMul:
+		return evalArithmetic(left, right, opMul)
+	case OpDiv:
+		return evalArithmetic(left, right, opDiv)
+	}
+
+	return common.NewNull(), fmt.Errorf("executor: unsupported binary op %v", e.Op)
+}
+
+func evalUnaryExpr(e *UnaryExpr, row map[string]common.Value, colIdxMap map[string]int) (common.Value, error) {
+	val, err := evalExpr(e.Expr, row, colIdxMap)
+	if err != nil {
+		return common.NewNull(), err
+	}
+
+	switch e.Op {
+	case OpNot:
+		return common.NewBool(!isTruthyValue(val)), nil
+	case OpNeg:
+		if !val.Valid {
+			return common.NewNull(), nil
+		}
+		switch val.Typ {
+		case common.TypeInt64:
+			return common.NewInt64(-val.Int64), nil
+		case common.TypeFloat64:
+			return common.NewFloat64(-val.Float64), nil
+		}
+	}
+
+	return common.NewNull(), fmt.Errorf("executor: unsupported unary op %v", e.Op)
+}
+
+func evalFuncExpr(e *FuncExpr, row map[string]common.Value, colIdxMap map[string]int) (common.Value, error) {
+	return common.NewNull(), fmt.Errorf("executor: scalar function %q not supported in row eval", e.Name)
+}
+
+type arithOp int
+
+const (
+	opAdd arithOp = iota
+	opSub
+	opMul
+	opDiv
+)
+
+func evalArithmetic(left, right common.Value, op arithOp) (common.Value, error) {
+	if left.Typ == common.TypeFloat64 || right.Typ == common.TypeFloat64 {
+		lf := toFloat64(left)
+		rf := toFloat64(right)
+		switch op {
+		case opAdd:
+			return common.NewFloat64(lf + rf), nil
+		case opSub:
+			return common.NewFloat64(lf - rf), nil
+		case opMul:
+			return common.NewFloat64(lf * rf), nil
+		case opDiv:
+			if rf == 0 {
+				return common.NewNull(), nil
+			}
+			return common.NewFloat64(lf / rf), nil
+		}
+	}
+
+	switch op {
+	case opAdd:
+		return common.NewInt64(left.Int64 + right.Int64), nil
+	case opSub:
+		return common.NewInt64(left.Int64 - right.Int64), nil
+	case opMul:
+		return common.NewInt64(left.Int64 * right.Int64), nil
+	case opDiv:
+		if right.Int64 == 0 {
+			return common.NewNull(), nil
+		}
+		return common.NewInt64(left.Int64 / right.Int64), nil
+	}
+
+	return common.NewNull(), nil
+}
+
+func toFloat64(v common.Value) float64 {
+	switch v.Typ {
+	case common.TypeFloat64:
+		return v.Float64
+	case common.TypeInt64:
+		return float64(v.Int64)
+	}
+	return 0
+}
+
+// isTruthyValue 判断值是否为真。
+func isTruthyValue(v common.Value) bool {
+	if !v.Valid {
+		return false
+	}
+	switch v.Typ {
+	case common.TypeBool:
+		return v.Int64 != 0
+	case common.TypeInt64:
+		return v.Int64 != 0
+	case common.TypeFloat64:
+		return v.Float64 != 0
+	case common.TypeString:
+		return v.Str != ""
+	}
+	return true
+}
