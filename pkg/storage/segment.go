@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
 )
 
 const segmentMagic uint32 = 0x57494442
@@ -328,17 +328,12 @@ func (b *SegmentBuilder) Build() (*Segment, error) {
 	}
 
 	if len(b.keys) > 0 {
-		seg.Footer.BloomFilter = buildBloomFilter(b.keys, b.fpRate)
+		data, err := index.BuildFromKeys(b.keys, b.fpRate)
+		if err != nil {
+			return nil, fmt.Errorf("segment builder: build bloom filter: %w", err)
+		}
+		seg.Footer.BloomFilter = data
 	}
 
 	return seg, nil
-}
-
-func buildBloomFilter(keys []string, fpRate float64) []byte {
-	filter := bloom.NewWithEstimates(uint(len(keys)), fpRate)
-	for _, k := range keys {
-		filter.Add([]byte(k))
-	}
-	data, _ := filter.MarshalBinary()
-	return data
 }

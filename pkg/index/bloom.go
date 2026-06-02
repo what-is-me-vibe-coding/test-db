@@ -3,6 +3,7 @@ package index
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/bits-and-blooms/bloom/v3"
 )
@@ -76,22 +77,18 @@ func (bi *BloomIndex) MayContain(segID uint64, key []byte) bool {
 	}
 
 	result := filter.Test(key)
-	bi.mu.Lock()
 	if result {
-		bi.hitCnt++
+		atomic.AddUint64(&bi.hitCnt, 1)
 	} else {
-		bi.missCnt++
+		atomic.AddUint64(&bi.missCnt, 1)
 	}
-	bi.mu.Unlock()
 
 	return result
 }
 
 // Stats 返回布隆过滤器的命中/未命中统计。
 func (bi *BloomIndex) Stats() (hit, miss uint64) {
-	bi.mu.RLock()
-	defer bi.mu.RUnlock()
-	return bi.hitCnt, bi.missCnt
+	return atomic.LoadUint64(&bi.hitCnt), atomic.LoadUint64(&bi.missCnt)
 }
 
 // Len 返回已注册的布隆过滤器数量。
@@ -106,8 +103,8 @@ func (bi *BloomIndex) Clear() {
 	bi.mu.Lock()
 	defer bi.mu.Unlock()
 	bi.blooms = make(map[uint64]*bloom.BloomFilter)
-	bi.hitCnt = 0
-	bi.missCnt = 0
+	atomic.StoreUint64(&bi.hitCnt, 0)
+	atomic.StoreUint64(&bi.missCnt, 0)
 }
 
 // BuildFromKeys 根据主键集合构建布隆过滤器的序列化字节。
