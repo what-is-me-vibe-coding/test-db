@@ -9,11 +9,11 @@ import (
 func TestExecutorAggregateCount(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
@@ -56,11 +56,11 @@ func TestExecutorAggregateCount(t *testing.T) {
 func TestExecutorAggregateSum(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
@@ -99,15 +99,15 @@ func TestExecutorAggregateSum(t *testing.T) {
 func TestExecutorAggregateGroupBy(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -146,11 +146,11 @@ func TestExecutorAggregateGroupBy(t *testing.T) {
 func TestExecutorAggregateMin(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
@@ -188,11 +188,11 @@ func TestExecutorAggregateMin(t *testing.T) {
 func TestExecutorAggregateMax(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
@@ -230,11 +230,11 @@ func TestExecutorAggregateMax(t *testing.T) {
 func TestExecutorAggregateAvg(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(90.0),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(20), testColScore: common.NewFloat64(70.0),
 	})
 
@@ -273,11 +273,11 @@ func TestExecutorAggregateAvg(t *testing.T) {
 func TestExecutorAggregateWithNulls(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewNull(), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewNull(),
 	})
 
@@ -324,11 +324,11 @@ func TestExecutorAggregateWithNulls(t *testing.T) {
 func TestExecutorMultipleAggregates(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(90.0),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(20), testColScore: common.NewFloat64(80.0),
 	})
 
@@ -396,11 +396,11 @@ func TestExecutorMultipleAggregates(t *testing.T) {
 func TestExecutorAggregateMinFloat(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -439,11 +439,11 @@ func TestExecutorAggregateMinFloat(t *testing.T) {
 func TestExecutorAggregateMaxFloat(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
 	})
 

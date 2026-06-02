@@ -154,7 +154,7 @@ func evalUnaryExpr(e *UnaryExpr, row map[string]common.Value, colIdxMap map[stri
 	return common.NewNull(), fmt.Errorf("executor: unsupported unary op %v", e.Op)
 }
 
-func evalFuncExpr(e *FuncExpr, row map[string]common.Value, colIdxMap map[string]int) (common.Value, error) {
+func evalFuncExpr(e *FuncExpr, _ map[string]common.Value, _ map[string]int) (common.Value, error) {
 	return common.NewNull(), fmt.Errorf("executor: scalar function %q not supported in row eval", e.Name)
 }
 

@@ -9,7 +9,7 @@ import (
 func TestExecutorArithmeticExpressions(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -47,7 +47,7 @@ func TestExecutorArithmeticExpressions(t *testing.T) {
 func TestExecutorArithmeticSub(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -86,7 +86,7 @@ func TestExecutorArithmeticSub(t *testing.T) {
 func TestExecutorArithmeticMul(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -125,7 +125,7 @@ func TestExecutorArithmeticMul(t *testing.T) {
 func TestExecutorArithmeticDiv(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -164,7 +164,7 @@ func TestExecutorArithmeticDiv(t *testing.T) {
 func TestExecutorArithmeticFloatAdd(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -203,7 +203,7 @@ func TestExecutorArithmeticFloatAdd(t *testing.T) {
 func TestExecutorArithmeticFloatSub(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -242,7 +242,7 @@ func TestExecutorArithmeticFloatSub(t *testing.T) {
 func TestExecutorArithmeticFloatMul(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -281,7 +281,7 @@ func TestExecutorArithmeticFloatMul(t *testing.T) {
 func TestExecutorArithmeticFloatDiv(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -320,7 +320,7 @@ func TestExecutorArithmeticFloatDiv(t *testing.T) {
 func TestExecutorArithmeticFloatDivByZero(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -359,7 +359,7 @@ func TestExecutorArithmeticFloatDivByZero(t *testing.T) {
 func TestExecutorUnaryNeg(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -398,7 +398,7 @@ func TestExecutorUnaryNeg(t *testing.T) {
 func TestExecutorUnaryNegFloat(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -437,7 +437,7 @@ func TestExecutorUnaryNegFloat(t *testing.T) {
 func TestExecutorUnaryNegNull(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewNull(), testColScore: common.NewFloat64(95.5),
 	})
 

@@ -24,4 +24,9 @@ const (
 	testAggMaxScore  = "MAX(score)"
 	testAliasDivZero = "div_zero"
 	testAliasNegAge  = "neg_age"
+	testNameAlice    = "alice"
+	testNameBob      = "bob"
+	testNameCharlie  = "charlie"
+	testNameDiana    = "diana"
+	testNameEve      = "eve"
 )

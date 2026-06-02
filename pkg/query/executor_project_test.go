@@ -9,7 +9,7 @@ import (
 func TestExecutorProjectBasic(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -54,15 +54,15 @@ func TestExecutorProjectBasic(t *testing.T) {
 func TestExecutorFilterAndProject(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
 		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -112,7 +112,7 @@ func TestExecutorFilterAndProject(t *testing.T) {
 func TestExecutorProjectWithArithmetic(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -144,7 +144,7 @@ func TestExecutorProjectWithArithmetic(t *testing.T) {
 	if len(chunks) > 0 && chunks[0].RowCount() > 0 {
 		nameCol, _ := chunks[0].GetColumn(0)
 		nameVal := nameCol.GetValue(0)
-		if nameVal.Str != "alice" {
+		if nameVal.Str != testNameAlice {
 			t.Errorf("expected name='alice', got %q", nameVal.Str)
 		}
 
@@ -159,7 +159,7 @@ func TestExecutorProjectWithArithmetic(t *testing.T) {
 func TestExecutorProjectTypeCoercion(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -199,7 +199,7 @@ func TestExecutorProjectTypeCoercion(t *testing.T) {
 func TestExecutorColumnExpr(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -229,7 +229,7 @@ func TestExecutorColumnExpr(t *testing.T) {
 	if len(chunks) > 0 && chunks[0].RowCount() > 0 {
 		col, _ := chunks[0].GetColumn(0)
 		val := col.GetValue(0)
-		if val.Str != "alice" {
+		if val.Str != testNameAlice {
 			t.Errorf("expected 'alice', got %q", val.Str)
 		}
 	}
@@ -299,15 +299,15 @@ func TestExecutorFullPipeline(t *testing.T) {
 func TestExecutorStringComparison(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColID: common.NewInt64(2), testColName: common.NewString("bob"),
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		testColID: common.NewInt64(3), testColName: common.NewString("charlie"),
+		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
 		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -319,7 +319,7 @@ func TestExecutorStringComparison(t *testing.T) {
 
 	filter := &FilterNode{
 		Child:     scan,
-		Condition: &BinaryExpr{Op: OpEq, Left: &ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString}, Right: &LiteralExpr{Value: common.NewString("bob")}},
+		Condition: &BinaryExpr{Op: OpEq, Left: &ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString}, Right: &LiteralExpr{Value: common.NewString(testNameBob)}},
 	}
 
 	exec := NewExecutor(ms)
@@ -337,7 +337,7 @@ func TestExecutorStringComparison(t *testing.T) {
 func TestExecutorDivByZero(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 

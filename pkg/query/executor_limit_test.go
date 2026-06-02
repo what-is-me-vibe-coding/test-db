@@ -81,7 +81,7 @@ func TestExecutorLimitWithOffset(t *testing.T) {
 func TestExecutorLimitMoreThanAvailable(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -112,7 +112,7 @@ func TestExecutorLimitMoreThanAvailable(t *testing.T) {
 func TestExecutorLimitOffsetBeyondData(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColID: common.NewInt64(1), testColName: common.NewString("alice"),
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 
@@ -184,15 +184,15 @@ func TestExecutorFilterLimit(t *testing.T) {
 func TestExecutorScanWithPrimaryKeyRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColKey: common.NewString("a"), testColName: common.NewString("alice"),
+		testColKey: common.NewString("a"), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColKey: common.NewString("b"), testColName: common.NewString("bob"),
+		testColKey: common.NewString("b"), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		testColKey: common.NewString("c"), testColName: common.NewString("charlie"),
+		testColKey: common.NewString("c"), testColName: common.NewString(testNameCharlie),
 		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -229,15 +229,15 @@ func TestExecutorScanWithPrimaryKeyRange(t *testing.T) {
 func TestExecutorScanWithPrimaryKeyGtRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColKey: common.NewString("a"), testColName: common.NewString("alice"),
+		testColKey: common.NewString("a"), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColKey: common.NewString("b"), testColName: common.NewString("bob"),
+		testColKey: common.NewString("b"), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		testColKey: common.NewString("c"), testColName: common.NewString("charlie"),
+		testColKey: common.NewString("c"), testColName: common.NewString(testNameCharlie),
 		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -274,15 +274,15 @@ func TestExecutorScanWithPrimaryKeyGtRange(t *testing.T) {
 func TestExecutorScanWithPrimaryKeyLtRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColKey: common.NewString("a"), testColName: common.NewString("alice"),
+		testColKey: common.NewString("a"), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColKey: common.NewString("b"), testColName: common.NewString("bob"),
+		testColKey: common.NewString("b"), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 	ms.addEntry("c", map[string]common.Value{
-		testColKey: common.NewString("c"), testColName: common.NewString("charlie"),
+		testColKey: common.NewString("c"), testColName: common.NewString(testNameCharlie),
 		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
 	})
 
@@ -319,11 +319,11 @@ func TestExecutorScanWithPrimaryKeyLtRange(t *testing.T) {
 func TestExecutorScanWithPrimaryKeyLeRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColKey: common.NewString("a"), testColName: common.NewString("alice"),
+		testColKey: common.NewString("a"), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColKey: common.NewString("b"), testColName: common.NewString("bob"),
+		testColKey: common.NewString("b"), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
@@ -360,11 +360,11 @@ func TestExecutorScanWithPrimaryKeyLeRange(t *testing.T) {
 func TestExecutorScanWithPrimaryKeyGeRange(t *testing.T) {
 	ms := newMockStorage()
 	ms.addEntry("a", map[string]common.Value{
-		testColKey: common.NewString("a"), testColName: common.NewString("alice"),
+		testColKey: common.NewString("a"), testColName: common.NewString(testNameAlice),
 		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
 	})
 	ms.addEntry("b", map[string]common.Value{
-		testColKey: common.NewString("b"), testColName: common.NewString("bob"),
+		testColKey: common.NewString("b"), testColName: common.NewString(testNameBob),
 		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
 	})
 
