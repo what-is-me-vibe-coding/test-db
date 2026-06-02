@@ -99,6 +99,28 @@ func (v Value) Equal(other Value) bool {
 	}
 }
 
+// Less 比较 Value 是否小于另一个（类型不同或任一 NULL 时返回 false）。
+func (v Value) Less(other Value) bool {
+	if v.Typ != other.Typ {
+		return false
+	}
+	if !v.Valid || !other.Valid {
+		return false
+	}
+	switch v.Typ {
+	case TypeBool:
+		return v.Int64 < other.Int64
+	case TypeInt64, TypeTimestamp:
+		return v.Int64 < other.Int64
+	case TypeFloat64:
+		return v.Float64 < other.Float64
+	case TypeString:
+		return v.Str < other.Str
+	default:
+		return false
+	}
+}
+
 // String 返回 Value 的可读字符串表示。
 func (v Value) String() string {
 	if !v.Valid {
