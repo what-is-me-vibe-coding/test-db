@@ -224,9 +224,9 @@ func TestConvertWriteRowIgnoreUnknownColumn(t *testing.T) {
 	tbl, _ := srv.catalog.GetTable(testTable)
 
 	key, values, err := srv.convertWriteRow(tbl, map[string]interface{}{
-		"id":      float64(1),
-		testColName:    testName,
-		"unknown": "value",
+		"id":        float64(1),
+		testColName: testName,
+		"unknown":   "value",
 	})
 	if err != nil {
 		t.Fatalf("convertWriteRow 失败: %v", err)
