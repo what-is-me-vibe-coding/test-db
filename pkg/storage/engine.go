@@ -25,6 +25,8 @@ type Engine struct {
 	primaryIndex  *index.PrimaryIndex
 	bloomIndex    *index.BloomIndex
 	sparseIndex   *index.SparseIndex
+	indexCache    *index.Cache
+	blockCache    *BlockCache
 	columnMeta    []ColumnMeta
 }
 
@@ -32,6 +34,8 @@ type Engine struct {
 type EngineConfig struct {
 	DataDir         string
 	MaxMemTableSize int64
+	BlockCacheCfg   BlockCacheConfig
+	IndexCacheCfg   index.CacheConfig
 }
 
 // NewEngine 创建一个新的存储引擎实例。
@@ -63,6 +67,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		primaryIndex: index.NewPrimaryIndex(),
 		bloomIndex:   index.NewBloomIndex(),
 		sparseIndex:  index.NewSparseIndex(),
+		indexCache:   index.NewCache(cfg.IndexCacheCfg),
+		blockCache:   NewBlockCache(cfg.BlockCacheCfg),
 	}
 
 	return eng, nil
@@ -124,7 +130,14 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 	})
 
 	for _, segID := range sortedIDs {
-		if !e.bloomIndex.MayContain(segID, []byte(key)) {
+		// 优先从 IndexCache 查询布隆过滤器
+		var mayContain bool
+		if cached, ok := e.indexCache.GetBloom(segID); ok {
+			mayContain = cached.Test([]byte(key))
+		} else {
+			mayContain = e.bloomIndex.MayContain(segID, []byte(key))
+		}
+		if !mayContain {
 			continue
 		}
 
@@ -143,7 +156,7 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 			row.Columns = make(map[string]common.Value)
 		}
 		for colIdx, col := range e.columnMeta {
-			val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
+			val, err := e.getColumnValueCached(seg, uint32(colIdx), rowIdx)
 			if err != nil {
 				continue
 			}
@@ -153,6 +166,27 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 	}
 
 	return Row{}, false
+}
+
+// getColumnValueCached 优先从 BlockCache 获取解码后的列值，未命中则解码并缓存。
+func (e *Engine) getColumnValueCached(seg *Segment, colIdx uint32, rowIdx uint32) (common.Value, error) {
+	if block, ok := e.blockCache.Get(seg.ID, colIdx); ok {
+		return extractValueFromCachedBlock(block, rowIdx), nil
+	}
+
+	val, err := seg.GetColumnValue(colIdx, rowIdx)
+	if err != nil {
+		return common.NewNull(), err
+	}
+
+	// 解码整列并缓存，供后续查询复用
+	if colIdx < uint32(len(seg.Columns)) {
+		if block, err := decodeColumnForCache(seg, colIdx); err == nil {
+			e.blockCache.Put(seg.ID, colIdx, block)
+		}
+	}
+
+	return val, nil
 }
 
 func (e *Engine) findSegmentByID(segID uint64) *Segment {
@@ -222,28 +256,6 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
 	return nil
 }
 
-func (e *Engine) registerSegmentIndexes(seg *Segment, level int) {
-	segMeta := index.SegmentMeta{
-		ID:     seg.ID,
-		MinKey: seg.MinKey,
-		MaxKey: seg.MaxKey,
-		Level:  level,
-	}
-	_ = e.primaryIndex.RegisterSegment(segMeta)
-
-	if len(seg.Footer.BloomFilter) > 0 {
-		_ = e.bloomIndex.RegisterFromBytes(seg.ID, seg.Footer.BloomFilter)
-	}
-
-	e.sparseIndex.LoadFromSegment(seg, seg.MinKey, seg.MaxKey, level)
-}
-
-func (e *Engine) unregisterSegmentIndexes(segID uint64) {
-	_ = e.primaryIndex.UnregisterSegment(segID)
-	e.bloomIndex.Unregister(segID)
-	e.sparseIndex.UnregisterSegment(segID)
-}
-
 // Segments 返回所有 Segment 的副本。
 func (e *Engine) Segments() []*Segment {
 	e.mu.RLock()
@@ -265,13 +277,7 @@ func (e *Engine) SegmentCount() int {
 func (e *Engine) L0SegmentCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	count := 0
-	for _, lvl := range e.segmentLevels {
-		if lvl == 0 {
-			count++
-		}
-	}
-	return count
+	return e.l0Count()
 }
 
 // Compact 执行 Tiered Compaction，将 L0 合并到 L1。
@@ -346,6 +352,13 @@ func (e *Engine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	if e.blockCache != nil {
+		e.blockCache.Clear()
+	}
+	if e.indexCache != nil {
+		e.indexCache.Clear()
+	}
+
 	if err := e.wal.Sync(); err != nil {
 		return fmt.Errorf("engine close: sync wal: %w", err)
 	}
@@ -380,6 +393,29 @@ func (e *Engine) ColumnMeta() []ColumnMeta {
 	return result
 }
 
+// BlockCache 返回 BlockCache 实例。
+func (e *Engine) BlockCache() *BlockCache {
+	return e.blockCache
+}
+
+// IndexCache 返回 IndexCache 实例。
+func (e *Engine) IndexCache() *index.Cache {
+	return e.indexCache
+}
+
+// CacheStats 返回缓存统计信息。
+func (e *Engine) CacheStats() (BlockCacheStats, index.CacheStats) {
+	var bs BlockCacheStats
+	var is index.CacheStats
+	if e.blockCache != nil {
+		bs = e.blockCache.Stats()
+	}
+	if e.indexCache != nil {
+		is = e.indexCache.Stats()
+	}
+	return bs, is
+}
+
 func (e *Engine) rotateMemTable() error {
 	if e.activeMem.Len() == 0 {
 		return nil
@@ -389,38 +425,4 @@ func (e *Engine) rotateMemTable() error {
 	e.immutable = append(e.immutable, e.activeMem)
 	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
 	return nil
-}
-
-func (e *Engine) l0Count() int {
-	count := 0
-	for _, lvl := range e.segmentLevels {
-		if lvl == 0 {
-			count++
-		}
-	}
-	return count
-}
-
-func (e *Engine) collectL0Segments() ([]*Segment, []int) {
-	var segments []*Segment
-	var indices []int
-	for i, lvl := range e.segmentLevels {
-		if lvl == 0 {
-			segments = append(segments, e.segments[i])
-			indices = append(indices, i)
-		}
-	}
-	return segments, indices
-}
-
-func (e *Engine) collectL1Segments() ([]*Segment, []int) {
-	var segments []*Segment
-	var indices []int
-	for i, lvl := range e.segmentLevels {
-		if lvl == 1 {
-			segments = append(segments, e.segments[i])
-			indices = append(indices, i)
-		}
-	}
-	return segments, indices
 }
