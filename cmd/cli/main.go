@@ -18,6 +18,9 @@ import (
 )
 
 const (
+	modeTCP  = "tcp"
+	modeHTTP = "http"
+
 	banner = `widb-cli - WiDB 命令行客户端
 输入 SQL 语句执行查询，输入 \q 退出，输入 \h 查看帮助`
 	helpText = `可用命令:
@@ -66,9 +69,9 @@ func (c *cli) close() {
 // execute 执行 SQL 语句并返回格式化结果。
 func (c *cli) execute(sql string) (string, error) {
 	switch c.mode {
-	case "tcp":
+	case modeTCP:
 		return c.executeTCP(sql)
-	case "http":
+	case modeHTTP:
 		return c.executeHTTP(sql)
 	default:
 		return "", fmt.Errorf("未知模式: %s", c.mode)
@@ -124,7 +127,7 @@ func (c *cli) executeHTTP(sql string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("HTTP 请求失败: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer func() { _ = httpResp.Body.Close() }()
 
 	body, err := io.ReadAll(httpResp.Body)
 	if err != nil {
@@ -169,13 +172,13 @@ func (c *cli) pingTCP() (string, error) {
 
 // runInteractive 运行交互式 REPL，从 reader 读取输入，输出到 writer。
 func (c *cli) runInteractive(reader io.Reader, writer io.Writer) error {
-	fmt.Fprintln(writer, banner)
-	fmt.Fprintf(writer, "模式: %s | TCP: %s | HTTP: %s\n", c.mode, c.tcpAddr, c.httpAddr)
-	fmt.Fprintln(writer)
+	_, _ = fmt.Fprintln(writer, banner)
+	_, _ = fmt.Fprintf(writer, "模式: %s | TCP: %s | HTTP: %s\n", c.mode, c.tcpAddr, c.httpAddr)
+	_, _ = fmt.Fprintln(writer)
 
 	scanner := bufio.NewScanner(reader)
 	for {
-		fmt.Fprint(writer, "widb> ")
+		_, _ = fmt.Fprint(writer, "widb> ")
 		if !scanner.Scan() {
 			break
 		}
@@ -194,7 +197,7 @@ func (c *cli) runInteractive(reader io.Reader, writer io.Writer) error {
 		// 收集多行 SQL（以分号结尾）
 		sql := line
 		for !strings.HasSuffix(sql, ";") {
-			fmt.Fprint(writer, "  ...> ")
+			_, _ = fmt.Fprint(writer, "  ...> ")
 			if !scanner.Scan() {
 				break
 			}
@@ -208,10 +211,10 @@ func (c *cli) runInteractive(reader io.Reader, writer io.Writer) error {
 
 		result, err := c.execute(sql)
 		if err != nil {
-			fmt.Fprintf(writer, "错误: %v\n", err)
+			_, _ = fmt.Fprintf(writer, "错误: %v\n", err)
 			continue
 		}
-		fmt.Fprintln(writer, result)
+		_, _ = fmt.Fprintln(writer, result)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -224,26 +227,26 @@ func (c *cli) runInteractive(reader io.Reader, writer io.Writer) error {
 func (c *cli) handleCommand(writer io.Writer, cmd string) error {
 	switch cmd {
 	case "\\q", "\\quit":
-		fmt.Fprintln(writer, "再见!")
+		_, _ = fmt.Fprintln(writer, "再见!")
 		return io.EOF
 	case "\\h", "\\help":
-		fmt.Fprintln(writer, helpText)
+		_, _ = fmt.Fprintln(writer, helpText)
 	case "\\status":
 		result, err := c.pingTCP()
 		if err != nil {
-			fmt.Fprintf(writer, "服务器状态: 不可达 (%v)\n", err)
+			_, _ = fmt.Fprintf(writer, "服务器状态: 不可达 (%v)\n", err)
 		} else {
-			fmt.Fprintf(writer, "服务器状态: 正常 (%s)\n", result)
+			_, _ = fmt.Fprintf(writer, "服务器状态: 正常 (%s)\n", result)
 		}
 	case "\\use TCP":
-		c.mode = "tcp"
+		c.mode = modeTCP
 		c.conn = nil
-		fmt.Fprintln(writer, "已切换到 TCP 模式")
+		_, _ = fmt.Fprintln(writer, "已切换到 TCP 模式")
 	case "\\use HTTP":
-		c.mode = "http"
-		fmt.Fprintln(writer, "已切换到 HTTP 模式")
+		c.mode = modeHTTP
+		_, _ = fmt.Fprintln(writer, "已切换到 HTTP 模式")
 	default:
-		fmt.Fprintf(writer, "未知命令: %s，输入 \\h 查看帮助\n", cmd)
+		_, _ = fmt.Fprintf(writer, "未知命令: %s，输入 \\h 查看帮助\n", cmd)
 	}
 	return nil
 }
@@ -283,7 +286,7 @@ func runCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	execute := fs.String("e", "", "执行单条 SQL 语句后退出")
 
 	if err := fs.Parse(args); err != nil {
-		fmt.Fprintf(stderr, "参数解析错误: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "参数解析错误: %v\n", err)
 		return 1
 	}
 
@@ -293,15 +296,15 @@ func runCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *execute != "" {
 		result, err := c.execute(*execute)
 		if err != nil {
-			fmt.Fprintf(stderr, "错误: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "错误: %v\n", err)
 			return 1
 		}
-		fmt.Fprintln(stdout, result)
+		_, _ = fmt.Fprintln(stdout, result)
 		return 0
 	}
 
 	if err := c.runInteractive(stdin, stdout); err != nil && err != io.EOF {
-		fmt.Fprintf(stderr, "错误: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "错误: %v\n", err)
 		return 1
 	}
 	return 0

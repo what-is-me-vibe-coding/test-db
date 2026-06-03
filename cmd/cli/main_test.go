@@ -14,6 +14,14 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
 )
 
+const (
+	testModeTCP  = "tcp"
+	testModeHTTP = "http"
+	testPong     = "pong"
+	testFlagHTTP = "-http"
+	testFlagTCP  = "-tcp"
+)
+
 func startServer(t *testing.T) (string, string) {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "testdb-cli-*")
@@ -43,7 +51,7 @@ func startServer(t *testing.T) (string, string) {
 
 func TestCLIExecuteTCPQuery(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	result, err := c.execute("SELECT * FROM users")
 	if err != nil {
@@ -56,7 +64,7 @@ func TestCLIExecuteTCPQuery(t *testing.T) {
 
 func TestCLIExecuteHTTPQuery(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "http")
+	c := newCLI(tcpAddr, httpAddr, testModeHTTP)
 	defer c.close()
 	result, err := c.execute("SELECT * FROM users")
 	if err != nil {
@@ -69,7 +77,7 @@ func TestCLIExecuteHTTPQuery(t *testing.T) {
 
 func TestCLIPingTCP(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	if err := c.connect(); err != nil {
 		t.Fatalf("connect 失败: %v", err)
@@ -78,14 +86,14 @@ func TestCLIPingTCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pingTCP 失败: %v", err)
 	}
-	if result != "pong" {
+	if result != testPong {
 		t.Errorf("ping 结果 = %q, 期望 pong", result)
 	}
 }
 
 func TestCLIExecuteTCPWithExistingConn(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	_, _ = c.pingTCP() // 建立连接
 	result, err := c.execute("SELECT * FROM users")
@@ -99,12 +107,12 @@ func TestCLIExecuteTCPWithExistingConn(t *testing.T) {
 
 func TestCLIExecuteTCPWriteError(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	if err := c.connect(); err != nil {
 		t.Fatalf("connect 失败: %v", err)
 	}
-	c.conn.Close()
+	_ = c.conn.Close()
 	c.conn = nil // 让它重连
 	result, err := c.execute("SELECT * FROM users")
 	if err != nil {
@@ -117,12 +125,12 @@ func TestCLIExecuteTCPWriteError(t *testing.T) {
 
 func TestCLIPingTCPWriteError(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	if err := c.connect(); err != nil {
 		t.Fatalf("connect 失败: %v", err)
 	}
-	c.conn.Close()
+	_ = c.conn.Close()
 	_, err := c.pingTCP()
 	if err == nil {
 		t.Error("期望 ping 失败")
@@ -133,20 +141,20 @@ func TestCLIPingTCPWriteError(t *testing.T) {
 
 func TestCLICloseWithConnection(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	if err := c.connect(); err != nil {
 		t.Fatalf("connect 失败: %v", err)
 	}
 	c.close()
 }
 
-func TestCLICloseWithoutConnection(t *testing.T) {
-	c := newCLI("127.0.0.1:1", "127.0.0.1:1", "tcp")
+func TestCLICloseWithoutConnection(_ *testing.T) {
+	c := newCLI("127.0.0.1:1", "127.0.0.1:1", testModeTCP)
 	c.close()
 }
 
 func TestCLIConnectFailure(t *testing.T) {
-	c := newCLI("127.0.0.1:1", "127.0.0.1:1", "tcp")
+	c := newCLI("127.0.0.1:1", "127.0.0.1:1", testModeTCP)
 	defer c.close()
 	_, err := c.execute("SELECT 1")
 	if err == nil {
@@ -155,7 +163,7 @@ func TestCLIConnectFailure(t *testing.T) {
 }
 
 func TestCLIExecuteHTTPFailure(t *testing.T) {
-	c := newCLI("127.0.0.1:1", "127.0.0.1:1", "http")
+	c := newCLI("127.0.0.1:1", "127.0.0.1:1", testModeHTTP)
 	defer c.close()
 	_, err := c.execute("SELECT 1")
 	if err == nil {
@@ -182,7 +190,7 @@ func runInt(c *cli, input string) (string, error) {
 
 func TestCLIRunInteractiveQuit(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	out, err := runInt(c, "\\q\n")
 	if err != nil && err.Error() != "EOF" {
@@ -195,7 +203,7 @@ func TestCLIRunInteractiveQuit(t *testing.T) {
 
 func TestCLIRunInteractiveHelp(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "\\h\n\\q\n")
 	if !strings.Contains(out, "可用命令") {
@@ -205,7 +213,7 @@ func TestCLIRunInteractiveHelp(t *testing.T) {
 
 func TestCLIRunInteractiveSQL(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "SELECT * FROM users;\n\\q\n")
 	if !strings.Contains(out, "widb-cli") {
@@ -215,14 +223,14 @@ func TestCLIRunInteractiveSQL(t *testing.T) {
 
 func TestCLIRunInteractiveEmptyLine(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	_, _ = runInt(c, "\n\n\\q\n")
 }
 
 func TestCLIRunInteractiveSwitchMode(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "\\use HTTP\n\\q\n")
 	if !strings.Contains(out, "已切换到 HTTP 模式") {
@@ -232,7 +240,7 @@ func TestCLIRunInteractiveSwitchMode(t *testing.T) {
 
 func TestCLIRunInteractiveUnknownCommand(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "\\foo\n\\q\n")
 	if !strings.Contains(out, "未知命令") {
@@ -242,7 +250,7 @@ func TestCLIRunInteractiveUnknownCommand(t *testing.T) {
 
 func TestCLIRunInteractiveStatus(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "\\status\n\\q\n")
 	if !strings.Contains(out, "正常") {
@@ -251,7 +259,7 @@ func TestCLIRunInteractiveStatus(t *testing.T) {
 }
 
 func TestCLIRunInteractiveStatusUnreachable(t *testing.T) {
-	c := newCLI("127.0.0.1:1", "127.0.0.1:1", "tcp")
+	c := newCLI("127.0.0.1:1", "127.0.0.1:1", testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "\\status\n\\q\n")
 	if !strings.Contains(out, "不可达") {
@@ -260,7 +268,7 @@ func TestCLIRunInteractiveStatusUnreachable(t *testing.T) {
 }
 
 func TestCLIRunInteractiveSQLError(t *testing.T) {
-	c := newCLI("127.0.0.1:1", "127.0.0.1:1", "tcp")
+	c := newCLI("127.0.0.1:1", "127.0.0.1:1", testModeTCP)
 	defer c.close()
 	out, _ := runInt(c, "SELECT 1;\n\\q\n")
 	if !strings.Contains(out, "错误") {
@@ -270,14 +278,14 @@ func TestCLIRunInteractiveSQLError(t *testing.T) {
 
 func TestCLIRunInteractiveMultilineSQL(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	_, _ = runInt(c, "SELECT *\nFROM users;\n\\q\n")
 }
 
 func TestCLIRunInteractiveHTTPMode(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "http")
+	c := newCLI(tcpAddr, httpAddr, testModeHTTP)
 	defer c.close()
 	out, _ := runInt(c, "SELECT * FROM users;\n\\q\n")
 	if !strings.Contains(out, "widb-cli") {
@@ -287,7 +295,7 @@ func TestCLIRunInteractiveHTTPMode(t *testing.T) {
 
 func TestCLIRunInteractiveEOF(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
-	c := newCLI(tcpAddr, httpAddr, "tcp")
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
 	defer c.close()
 	_, err := runInt(c, "")
 	if err != nil {
@@ -347,8 +355,8 @@ func TestFormatResponseJSONRoundTrip(t *testing.T) {
 // --- newCLI 测试 ---
 
 func TestNewCLI(t *testing.T) {
-	c := newCLI("localhost:9000", "localhost:8080", "tcp")
-	if c.mode != "tcp" || c.tcpAddr != "localhost:9000" || c.httpAddr != "localhost:8080" || c.httpCli == nil {
+	c := newCLI("localhost:9000", "localhost:8080", testModeTCP)
+	if c.mode != testModeTCP || c.tcpAddr != "localhost:9000" || c.httpAddr != "localhost:8080" || c.httpCli == nil {
 		t.Errorf("newCLI 初始化不正确: %+v", c)
 	}
 }
@@ -358,7 +366,7 @@ func TestNewCLI(t *testing.T) {
 func TestRunCLIExecuteFlag(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
 	var stdout, stderr bytes.Buffer
-	code := runCLI([]string{"-tcp", tcpAddr, "-http", httpAddr, "-e", "SELECT * FROM users"}, strings.NewReader(""), &stdout, &stderr)
+	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, "-e", "SELECT * FROM users"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("exit code = %d, stderr: %s", code, stderr.String())
 	}
@@ -369,7 +377,7 @@ func TestRunCLIExecuteFlag(t *testing.T) {
 
 func TestRunCLIExecuteFlagError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := runCLI([]string{"-tcp", "127.0.0.1:1", "-e", "SELECT 1"}, strings.NewReader(""), &stdout, &stderr)
+	code := runCLI([]string{testFlagTCP, "127.0.0.1:1", "-e", "SELECT 1"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 {
 		t.Errorf("exit code = %d, want 1", code)
 	}
@@ -378,7 +386,7 @@ func TestRunCLIExecuteFlagError(t *testing.T) {
 func TestRunCLIInteractiveQuit(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
 	var stdout, stderr bytes.Buffer
-	code := runCLI([]string{"-tcp", tcpAddr, "-http", httpAddr}, strings.NewReader("\\q\n"), &stdout, &stderr)
+	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr}, strings.NewReader("\\q\n"), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("exit code = %d, stderr: %s", code, stderr.String())
 	}
@@ -395,7 +403,7 @@ func TestRunCLIInvalidArgs(t *testing.T) {
 func TestRunCLIHTTPMode(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
 	var stdout, stderr bytes.Buffer
-	code := runCLI([]string{"-tcp", tcpAddr, "-http", httpAddr, "-mode", "http", "-e", "SELECT * FROM users"}, strings.NewReader(""), &stdout, &stderr)
+	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, "-mode", testModeHTTP, "-e", "SELECT * FROM users"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("exit code = %d, stderr: %s", code, stderr.String())
 	}
