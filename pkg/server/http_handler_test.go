@@ -44,14 +44,19 @@ func TestHTTPMetrics(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	w := httptest.NewRecorder()
-	srv.httpMetrics(w, req)
+
+	mux := srv.registerHTTPHandlers()
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("状态码 = %d, 期望 %d", w.Code, http.StatusOK)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "test_db_memtable_size") {
-		t.Error("metrics 应包含 test_db_memtable_size")
+	if !strings.Contains(body, "widb_memtable_size_bytes") {
+		t.Error("metrics 应包含 widb_memtable_size_bytes")
+	}
+	if !strings.Contains(body, "widb_segment_count") {
+		t.Error("metrics 应包含 widb_segment_count")
 	}
 }
 
@@ -59,7 +64,9 @@ func TestHTTPMetricsWrongMethod(t *testing.T) {
 	srv := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/metrics", nil)
 	w := httptest.NewRecorder()
-	srv.httpMetrics(w, req)
+
+	mux := srv.registerHTTPHandlers()
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("状态码 = %d, 期望 %d", w.Code, http.StatusMethodNotAllowed)

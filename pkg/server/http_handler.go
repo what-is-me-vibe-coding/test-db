@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // registerHTTPHandlers 注册 HTTP REST 路由。
@@ -14,7 +15,7 @@ func (s *Server) registerHTTPHandlers() *http.ServeMux {
 	mux.HandleFunc("/query", s.httpQuery)
 	mux.HandleFunc("/write", s.httpWrite)
 	mux.HandleFunc("/health", s.httpHealth)
-	mux.HandleFunc("/metrics", s.httpMetrics)
+	mux.Handle("/metrics", s.metricsHandler())
 	return mux
 }
 
@@ -84,50 +85,19 @@ func (s *Server) httpHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, health)
 }
 
-// writeMetric 写入一条 Prometheus 指标行。
-func writeMetric(w http.ResponseWriter, help, typ, line string) {
-	_, _ = fmt.Fprint(w, help)
-	_, _ = fmt.Fprint(w, typ)
-	_, _ = fmt.Fprint(w, line)
-}
+// metricsHandler 返回 Prometheus 指标 HTTP 处理器。
+// 每次 scrape 前更新存储引擎的 Gauge 指标。
+func (s *Server) metricsHandler() http.Handler {
+	handler := promhttp.HandlerFor(s.metrics.registry, promhttp.HandlerOpts{})
 
-// httpMetrics 处理 GET /metrics 请求，返回 Prometheus 格式的指标。
-func (s *Server) httpMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "仅支持 GET 方法", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	writeMetric(w,
-		"# HELP test_db_memtable_size 当前 MemTable 大小\n",
-		"# TYPE test_db_memtable_size gauge\n",
-		fmt.Sprintf("test_db_memtable_size %d\n", s.storage.MemTableSize()),
-	)
-	writeMetric(w,
-		"# HELP test_db_segment_count Segment 数量\n",
-		"# TYPE test_db_segment_count gauge\n",
-		fmt.Sprintf("test_db_segment_count %d\n", s.storage.SegmentCount()),
-	)
-	writeMetric(w,
-		"# HELP test_db_l0_segment_count L0 Segment 数量\n",
-		"# TYPE test_db_l0_segment_count gauge\n",
-		fmt.Sprintf("test_db_l0_segment_count %d\n", s.storage.L0SegmentCount()),
-	)
-	writeMetric(w,
-		"# HELP test_db_go_goroutines 当前 goroutine 数量\n",
-		"# TYPE test_db_go_goroutines gauge\n",
-		fmt.Sprintf("test_db_go_goroutines %d\n", runtime.NumGoroutine()),
-	)
-	writeMetric(w,
-		"# HELP test_db_go_heap_alloc_bytes Go 堆分配字节数\n",
-		"# TYPE test_db_go_heap_alloc_bytes gauge\n",
-		fmt.Sprintf("test_db_go_heap_alloc_bytes %d\n", m.HeapAlloc),
-	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "仅支持 GET 方法", http.StatusMethodNotAllowed)
+			return
+		}
+		s.updateStorageMetrics()
+		handler.ServeHTTP(w, r)
+	})
 }
 
 // writeJSON 将响应以 JSON 格式写入 HTTP 响应。

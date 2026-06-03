@@ -226,7 +226,7 @@ func TestConvertWriteRowIgnoreUnknownColumn(t *testing.T) {
 	key, values, err := srv.convertWriteRow(tbl, map[string]interface{}{
 		"id":        float64(1),
 		testColName: testName,
-		"unknown":   "value",
+		"extra":     "value",
 	})
 	if err != nil {
 		t.Fatalf("convertWriteRow 失败: %v", err)
@@ -234,7 +234,7 @@ func TestConvertWriteRowIgnoreUnknownColumn(t *testing.T) {
 	if key != "1" {
 		t.Errorf("key = %q, 期望 '1'", key)
 	}
-	if _, ok := values["unknown"]; ok {
+	if _, ok := values["extra"]; ok {
 		t.Error("未知列应被忽略")
 	}
 	if len(values) != 2 {

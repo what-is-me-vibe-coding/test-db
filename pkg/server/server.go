@@ -35,6 +35,7 @@ type Server struct {
 	analyzer  *query.Analyzer
 	optimizer *query.Optimizer
 	executor  *query.Executor
+	metrics   *metrics
 
 	tcpListener  net.Listener
 	httpServer   *http.Server
@@ -95,6 +96,7 @@ func NewServer(cfg Config) (*Server, error) {
 		analyzer:  query.NewAnalyzer(cat),
 		optimizer: query.NewOptimizer(),
 		executor:  exec,
+		metrics:   newMetrics(),
 		done:      make(chan struct{}),
 	}
 
@@ -302,13 +304,18 @@ func (s *Server) handlePing() (*Packet, error) {
 
 // handleQuery 执行 SQL 查询。
 func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
+	start := time.Now()
+
 	stmt, err := s.parser.Parse(req.SQL)
 	if err != nil {
 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 解析错误: %v", err)}, nil
 	}
 
+	typ := statementType(stmt)
+
 	plan, err := s.analyzer.Analyze(stmt)
 	if err != nil {
+		s.metrics.recordQuery(typ, time.Since(start))
 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 分析错误: %v", err)}, nil
 	}
 
@@ -316,8 +323,11 @@ func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
 
 	chunks, err := s.executor.Execute(optimized)
 	if err != nil {
+		s.metrics.recordQuery(typ, time.Since(start))
 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 执行错误: %v", err)}, nil
 	}
+
+	s.metrics.recordQuery(typ, time.Since(start))
 
 	data := chunksToRows(chunks)
 	totalRows := countRows(chunks)
@@ -344,6 +354,8 @@ func (s *Server) handleWrite(req *WriteRequest) (*Response, error) {
 		}
 		written++
 	}
+
+	s.metrics.recordWrite()
 
 	return &Response{Code: 0, Rows: written}, nil
 }
@@ -406,4 +418,26 @@ func isClosedConnErr(err error) bool {
 		return opErr.Timeout()
 	}
 	return false
+}
+
+// 查询类型标签常量。
+const (
+	queryTypeSelect      = "select"
+	queryTypeInsert      = "insert"
+	queryTypeCreateTable = "create_table"
+	queryTypeUnknown     = "unknown"
+)
+
+// statementType 从 Statement 推断查询类型标签。
+func statementType(stmt query.Statement) string {
+	switch stmt.(type) {
+	case *query.SelectStatement:
+		return queryTypeSelect
+	case *query.InsertStatement:
+		return queryTypeInsert
+	case *query.CreateTableStatement:
+		return queryTypeCreateTable
+	default:
+		return queryTypeUnknown
+	}
 }
