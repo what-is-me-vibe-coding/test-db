@@ -324,7 +324,7 @@ func TestHTTPIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("请求 /health 失败: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/health 状态码 = %d, 期望 %d", resp.StatusCode, http.StatusOK)
 	}
@@ -333,7 +333,7 @@ func TestHTTPIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("请求 /metrics 失败: %v", err)
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusOK {
 		t.Errorf("/metrics 状态码 = %d, 期望 %d", resp2.StatusCode, http.StatusOK)
 	}
