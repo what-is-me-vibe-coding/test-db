@@ -86,9 +86,9 @@ func (s *Server) httpHealth(w http.ResponseWriter, r *http.Request) {
 
 // writeMetric 写入一条 Prometheus 指标行。
 func writeMetric(w http.ResponseWriter, help, typ, line string) {
-	fmt.Fprint(w, help)
-	fmt.Fprint(w, typ)
-	fmt.Fprint(w, line)
+	_, _ = fmt.Fprint(w, help)
+	_, _ = fmt.Fprint(w, typ)
+	_, _ = fmt.Fprint(w, line)
 }
 
 // httpMetrics 处理 GET /metrics 请求，返回 Prometheus 格式的指标。
@@ -134,5 +134,5 @@ func (s *Server) httpMetrics(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, statusCode int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }

@@ -118,7 +118,7 @@ func (s *Server) Start() error {
 
 	httpLn, err := net.Listen("tcp", s.cfg.HTTPAddr)
 	if err != nil {
-		s.tcpListener.Close()
+		_ = s.tcpListener.Close()
 		return fmt.Errorf("server: listen http %s: %w", s.cfg.HTTPAddr, err)
 	}
 	s.httpListener = httpLn
@@ -135,13 +135,13 @@ func (s *Server) Stop() error {
 	close(s.done)
 
 	if s.tcpListener != nil {
-		s.tcpListener.Close()
+		_ = s.tcpListener.Close()
 	}
 	if s.httpListener != nil {
-		s.httpListener.Close()
+		_ = s.httpListener.Close()
 	}
 	if s.httpServer != nil {
-		s.httpServer.Close()
+		_ = s.httpServer.Close()
 	}
 
 	s.wg.Wait()
@@ -196,7 +196,7 @@ func (s *Server) serveHTTP() {
 // handleTCPConn 处理单个 TCP 连接。
 func (s *Server) handleTCPConn(conn net.Conn) {
 	defer s.wg.Done()
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
 

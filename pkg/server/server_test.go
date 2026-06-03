@@ -24,7 +24,7 @@ func newTestServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("创建临时目录失败: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	cfg := Config{
 		TCPAddr:  "127.0.0.1:0",
@@ -124,7 +124,7 @@ func TestTCPPing(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -132,7 +132,7 @@ func TestTCPPing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("连接 TCP 失败: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	pingPkt := NewPacket(PacketPing, nil)
 	if _, err := conn.Write(pingPkt.Encode()); err != nil {
@@ -165,7 +165,7 @@ func TestTCPUnknownPacketType(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -173,7 +173,7 @@ func TestTCPUnknownPacketType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("连接 TCP 失败: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	pkt := NewPacket(99, nil)
 	if _, err := conn.Write(pkt.Encode()); err != nil {
@@ -199,7 +199,7 @@ func TestTCPQueryPacket(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -207,7 +207,7 @@ func TestTCPQueryPacket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("连接 TCP 失败: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	queryPayload, _ := json.Marshal(QueryRequest{SQL: "SELECT * FROM users"})
 	queryPkt := NewPacket(PacketQuery, queryPayload)
@@ -229,7 +229,7 @@ func TestTCPInvalidPayloads(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -247,7 +247,7 @@ func TestTCPInvalidPayloads(t *testing.T) {
 			if err != nil {
 				t.Fatalf("连接 TCP 失败: %v", err)
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 
 			invalidPkt := NewPacket(tt.pktType, []byte("not json"))
 			if _, err := conn.Write(invalidPkt.Encode()); err != nil {
@@ -275,7 +275,7 @@ func TestTCPWriteAndQuery(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -283,7 +283,7 @@ func TestTCPWriteAndQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("连接 TCP 失败: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	writePayload, _ := json.Marshal(WriteRequest{
 		Table: "users",
@@ -315,7 +315,7 @@ func TestHTTPIntegration(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 	baseURL := fmt.Sprintf("http://%s", srv.httpListener.Addr())
@@ -346,7 +346,7 @@ func TestStartTCPAddrInUse(t *testing.T) {
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start 失败: %v", err)
 	}
-	defer srv.Stop()
+	defer func() { _ = srv.Stop() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -355,7 +355,7 @@ func TestStartTCPAddrInUse(t *testing.T) {
 
 	err := srv2.Start()
 	if err == nil {
-		srv2.Stop()
+		_ = srv2.Stop()
 		t.Error("期望 TCP 端口冲突错误，但启动成功")
 	}
 	if !strings.Contains(err.Error(), "listen tcp") {
