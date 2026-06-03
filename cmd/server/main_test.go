@@ -12,7 +12,7 @@ import (
 
 const testListenAddr = "127.0.0.1:0"
 
-func TestMainBuild(t *testing.T) {
+func TestMainBuild(_ *testing.T) {
 	// 验证 main 包可以成功构建
 }
 
