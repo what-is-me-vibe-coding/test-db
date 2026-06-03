@@ -121,11 +121,13 @@ func deserializeCheckpointRecord(data []byte) (uint64, []ColumnMeta, error) {
 func findLastCheckpoint(records []RawRecord) (uint64, []ColumnMeta) {
 	var lastFlushedVersion uint64
 	var lastColumnMeta []ColumnMeta
+	var failedCount int
 	for _, rec := range records {
 		if rec.Type == walTypeCheckpoint {
 			version, colMeta, err := deserializeCheckpointRecord(rec.Payload)
 			if err != nil {
 				log.Printf("engine: failed to deserialize checkpoint record: %v", err)
+				failedCount++
 				continue
 			}
 			if version > lastFlushedVersion {
@@ -134,18 +136,23 @@ func findLastCheckpoint(records []RawRecord) (uint64, []ColumnMeta) {
 			}
 		}
 	}
+	if failedCount > 0 {
+		log.Printf("engine: warning: %d checkpoint records failed to deserialize during recovery", failedCount)
+	}
 	return lastFlushedVersion, lastColumnMeta
 }
 
 // applyWriteRecords applies write records with version > lastFlushedVersion to the memtable,
-// returning the maximum version seen.
-func applyWriteRecords(records []RawRecord, lastFlushedVersion uint64, mem *MemTable) uint64 {
+// returning the maximum version seen and the count of records that failed to deserialize.
+func applyWriteRecords(records []RawRecord, lastFlushedVersion uint64, mem *MemTable) (uint64, int) {
 	var maxVersion uint64
+	var failedCount int
 	for _, rec := range records {
 		if rec.Type == walTypeWrite {
 			key, version, columns, err := deserializeWriteRecord(rec.Payload)
 			if err != nil {
 				log.Printf("engine: failed to deserialize write record: %v", err)
+				failedCount++
 				continue
 			}
 			if version <= lastFlushedVersion {
@@ -161,7 +168,10 @@ func applyWriteRecords(records []RawRecord, lastFlushedVersion uint64, mem *MemT
 			}
 		}
 	}
-	return maxVersion
+	if failedCount > 0 {
+		log.Printf("engine: warning: %d write records failed to deserialize during recovery", failedCount)
+	}
+	return maxVersion, failedCount
 }
 
 // replayWALRecords 将 WAL 回放记录应用到 MemTable。
@@ -175,7 +185,11 @@ func (e *Engine) replayWALRecords(records []RawRecord) error {
 	}
 
 	// Apply write records with version > lastFlushedVersion
-	maxVersion := applyWriteRecords(records, lastFlushedVersion, e.activeMem)
+	maxVersion, failedCount := applyWriteRecords(records, lastFlushedVersion, e.activeMem)
+
+	if failedCount > 0 {
+		log.Printf("engine: warning: %d write records were skipped during WAL replay due to deserialization errors", failedCount)
+	}
 
 	// Update nextVersion to be greater than any version seen
 	if maxVersion >= e.nextVersion {
@@ -186,27 +200,26 @@ func (e *Engine) replayWALRecords(records []RawRecord) error {
 }
 
 // parseSegmentEntry parses a directory entry into a Segment, returning the segment,
-// its ID, and whether the entry was a valid segment file.
-func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool) {
+// its ID, whether the entry was a segment file, and an error if it was a segment file
+// that failed to load.
+func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool, error) {
 	if entry.IsDir() {
-		return nil, 0, false
+		return nil, 0, false, nil
 	}
 	name := entry.Name()
 	if !strings.HasPrefix(name, "segment_") || !strings.HasSuffix(name, ".widb") {
-		return nil, 0, false
+		return nil, 0, false, nil
 	}
 
 	filePath := filepath.Join(e.flusher.dataDir, name)
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		log.Printf("engine: failed to read segment file %s: %v", name, err)
-		return nil, 0, false
+		return nil, 0, true, fmt.Errorf("failed to read segment file %s: %w", name, err)
 	}
 
 	seg, err := DeserializeSegment(data)
 	if err != nil {
-		log.Printf("engine: failed to deserialize segment file %s: %v", name, err)
-		return nil, 0, false
+		return nil, 0, true, fmt.Errorf("failed to deserialize segment file %s: %w", name, err)
 	}
 	seg.FilePath = filePath
 
@@ -223,7 +236,7 @@ func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool) {
 		seg.MaxKey = seg.Keys[len(seg.Keys)-1]
 	}
 
-	return seg, segID, true
+	return seg, segID, true, nil
 }
 
 // loadSegments 从磁盘加载已有的 Segment 文件。
@@ -237,15 +250,30 @@ func (e *Engine) loadSegments() error {
 	}
 
 	var maxSegID uint64
+	var segFileCount int
+	var failedCount int
 	for _, entry := range entries {
-		seg, segID, ok := e.parseSegmentEntry(entry)
-		if !ok {
+		seg, segID, isSegFile, parseErr := e.parseSegmentEntry(entry)
+		if !isSegFile {
+			continue
+		}
+		segFileCount++
+		if parseErr != nil {
+			log.Printf("engine: %v", parseErr)
+			failedCount++
 			continue
 		}
 		e.segments = append(e.segments, seg)
 		e.segmentLevels = append(e.segmentLevels, 0)
 		if segID > maxSegID {
 			maxSegID = segID
+		}
+	}
+
+	if failedCount > 0 {
+		log.Printf("engine: warning: %d of %d segment files failed to load during recovery", failedCount, segFileCount)
+		if failedCount == segFileCount {
+			return fmt.Errorf("engine: all %d segment files failed to load during recovery", segFileCount)
 		}
 	}
 
