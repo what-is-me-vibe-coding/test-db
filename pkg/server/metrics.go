@@ -31,71 +31,26 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	factory := promauto.With(reg)
 
 	m := &Metrics{
-		QueriesTotal: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "queries_total",
-			Help:      "查询总数",
-		}, []string{"type"}),
-		QueryDuration: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "query_duration_seconds",
-			Help:      "查询耗时分布",
-			Buckets:   prometheus.DefBuckets,
-		}, []string{"type"}),
-		WritesTotal: factory.NewCounterVec(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "writes_total",
-			Help:      "写入总数",
-		}, []string{"result"}),
-		WriteDuration: factory.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: namespace,
-			Name:      "write_duration_seconds",
-			Help:      "写入耗时分布",
-			Buckets:   prometheus.DefBuckets,
-		}, []string{"result"}),
-		MemTableSize: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "memtable_size_bytes",
-			Help:      "当前 MemTable 大小",
-		}),
-		SegmentCount: factory.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "segment_count",
-			Help:      "Segment 数量",
-		}, []string{"level"}),
-		L0SegmentCount: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "l0_segment_count",
-			Help:      "L0 Segment 数量",
-		}),
-		WALSizeBytes: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "wal_size_bytes",
-			Help:      "WAL 文件大小",
-		}),
-		ActiveConns: factory.NewGauge(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "active_connections",
-			Help:      "当前活跃连接数",
-		}),
-		FlushTotal: factory.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "flush_total",
-			Help:      "MemTable 刷盘总次数",
-		}),
-		CompactTotal: factory.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "compact_total",
-			Help:      "Compaction 总次数",
-		}),
-		WALCleanTotal: factory.NewCounter(prometheus.CounterOpts{
-			Namespace: namespace,
-			Name:      "wal_clean_total",
-			Help:      "WAL 清理总次数",
-		}),
+		QueriesTotal:   newQueriesTotal(factory),
+		QueryDuration:  newQueryDuration(factory),
+		WritesTotal:    newWritesTotal(factory),
+		WriteDuration:  newWriteDuration(factory),
+		MemTableSize:   newGauge(factory, "memtable_size_bytes", "当前 MemTable 大小"),
+		SegmentCount:   newSegmentCount(factory),
+		L0SegmentCount: newGauge(factory, "l0_segment_count", "L0 Segment 数量"),
+		WALSizeBytes:   newGauge(factory, "wal_size_bytes", "WAL 文件大小"),
+		ActiveConns:    newGauge(factory, "active_connections", "当前活跃连接数"),
+		FlushTotal:     newCounter(factory, "flush_total", "MemTable 刷盘总次数"),
+		CompactTotal:   newCounter(factory, "compact_total", "Compaction 总次数"),
+		WALCleanTotal:  newCounter(factory, "wal_clean_total", "WAL 清理总次数"),
 	}
 
-	// 初始化标签组合，确保指标在未使用时也可见
+	m.initLabels()
+	return m
+}
+
+// initLabels 初始化标签组合，确保指标在未使用时也可见。
+func (m *Metrics) initLabels() {
 	m.QueriesTotal.WithLabelValues("success").Add(0)
 	m.QueriesTotal.WithLabelValues("parse_error").Add(0)
 	m.QueriesTotal.WithLabelValues("analyze_error").Add(0)
@@ -108,6 +63,48 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	m.WriteDuration.WithLabelValues("success").Observe(0)
 	m.SegmentCount.WithLabelValues("l0").Set(0)
 	m.SegmentCount.WithLabelValues("l1").Set(0)
+}
 
-	return m
+func newQueriesTotal(f promauto.Factory) *prometheus.CounterVec {
+	return f.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Name: "queries_total", Help: "查询总数",
+	}, []string{"type"})
+}
+
+func newQueryDuration(f promauto.Factory) *prometheus.HistogramVec {
+	return f.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace, Name: "query_duration_seconds",
+		Help: "查询耗时分布", Buckets: prometheus.DefBuckets,
+	}, []string{"type"})
+}
+
+func newWritesTotal(f promauto.Factory) *prometheus.CounterVec {
+	return f.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Name: "writes_total", Help: "写入总数",
+	}, []string{"result"})
+}
+
+func newWriteDuration(f promauto.Factory) *prometheus.HistogramVec {
+	return f.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace, Name: "write_duration_seconds",
+		Help: "写入耗时分布", Buckets: prometheus.DefBuckets,
+	}, []string{"result"})
+}
+
+func newSegmentCount(f promauto.Factory) *prometheus.GaugeVec {
+	return f.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace, Name: "segment_count", Help: "Segment 数量",
+	}, []string{"level"})
+}
+
+func newGauge(f promauto.Factory, name, help string) prometheus.Gauge {
+	return f.NewGauge(prometheus.GaugeOpts{
+		Namespace: namespace, Name: name, Help: help,
+	})
+}
+
+func newCounter(f promauto.Factory, name, help string) prometheus.Counter {
+	return f.NewCounter(prometheus.CounterOpts{
+		Namespace: namespace, Name: name, Help: help,
+	})
 }
