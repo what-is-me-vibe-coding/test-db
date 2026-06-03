@@ -159,7 +159,7 @@ func TestStorageAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建临时目录失败: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	eng, err := storage.NewEngine(storage.EngineConfig{
 		DataDir: dir, MaxMemTableSize: 1024 * 1024,
@@ -167,7 +167,7 @@ func TestStorageAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine 失败: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	sa := &storageAdapter{engine: eng}
 	_ = sa.ScanRange("", "\xff\xff\xff\xff")
@@ -188,7 +188,7 @@ func TestNewServerDefaultConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建临时目录失败: %v", err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	cfg := Config{
 		TCPAddr:  "127.0.0.1:0",
