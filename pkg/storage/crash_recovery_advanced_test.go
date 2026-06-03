@@ -221,7 +221,44 @@ func TestCrashRecovery_WALTruncateAfterCheckpoint(t *testing.T) {
 	}
 }
 
+// corruptSecondWALRecord corrupts the second WAL record's JSON payload
+// and recalculates its CRC so the corruption passes CRC check but fails JSON deserialization.
+func corruptSecondWALRecord(t *testing.T, walPath string) {
+	t.Helper()
+	data, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatalf("read wal: %v", err)
+	}
+	if len(data) < walMetaSize {
+		t.Fatalf("WAL file too small: %d bytes", len(data))
+	}
+
+	firstTotalLen := int(binary.LittleEndian.Uint32(data[0:4]))
+	firstRecordEnd := walHeaderSize + firstTotalLen
+	if firstRecordEnd+walHeaderSize > len(data) {
+		t.Fatalf("WAL file too small to contain second record")
+	}
+
+	secondTotalLen := int(binary.LittleEndian.Uint32(data[firstRecordEnd : firstRecordEnd+4]))
+	payloadOffset := firstRecordEnd + walHeaderSize + walTypeSize
+	if payloadOffset >= len(data) {
+		t.Fatalf("WAL second record payload offset out of bounds")
+	}
+
+	data[payloadOffset] ^= 0xFF
+	secondPayloadLen := secondTotalLen - walTypeSize - walCRCSize
+	crcData := data[firstRecordEnd+walHeaderSize : firstRecordEnd+walHeaderSize+walTypeSize+secondPayloadLen]
+	newCRC := crc32.Checksum(crcData, crcTable)
+	binary.LittleEndian.PutUint32(data[firstRecordEnd+walHeaderSize+walTypeSize+secondPayloadLen:], newCRC)
+
+	if err := os.WriteFile(walPath, data, 0644); err != nil {
+		t.Fatalf("write corrupted wal: %v", err)
+	}
+}
+
 // TestCrashRecovery_DeserializationErrors 验证WAL记录反序列化错误的容错性。
+// 构造一个包含多条记录的 WAL，损坏其中一条的 JSON payload（CRC 仍有效），
+// 验证引擎能正常启动、损坏记录被跳过、其余记录正常恢复。
 func TestCrashRecovery_DeserializationErrors(t *testing.T) {
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
@@ -231,59 +268,40 @@ func TestCrashRecovery_DeserializationErrors(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 
-	// Write valid data
 	_ = eng.Write(crKey1, map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write(crKey2, map[string]common.Value{colVal: common.NewInt64(2)})
+	_ = eng.Write(crKey3, map[string]common.Value{colVal: common.NewInt64(3)})
 
 	if err := eng.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
 	}
 
-	// Corrupt the WAL payload: modify a byte in the JSON payload and recalculate CRC
-	// WAL record format: [4-byte totalLen][1-byte type][payload][4-byte CRC]
-	walPath := filepath.Join(dir, "wal.log")
-	data, err := os.ReadFile(walPath)
-	if err != nil {
-		t.Fatalf("read wal: %v", err)
-	}
+	corruptSecondWALRecord(t, filepath.Join(dir, "wal.log"))
 
-	if len(data) < walMetaSize {
-		t.Fatalf("WAL file too small: %d bytes", len(data))
-	}
-
-	// Corrupt the payload by flipping a byte in the JSON payload area
-	// payload starts at offset walHeaderSize + walTypeSize
-	payloadOffset := walHeaderSize + walTypeSize
-	if payloadOffset < len(data) {
-		data[payloadOffset] ^= 0xFF // flip bits in first payload byte
-	}
-
-	// Recalculate CRC for the corrupted payload to make it pass CRC check
-	// but fail JSON deserialization
-	totalLen := int(binary.LittleEndian.Uint32(data[0:4]))
-	if totalLen < walTypeSize+walCRCSize {
-		t.Fatalf("invalid total length in WAL record")
-	}
-	payloadLen := totalLen - walTypeSize - walCRCSize
-	crcData := data[walHeaderSize : walHeaderSize+walTypeSize+payloadLen]
-	newCRC := crc32.Checksum(crcData, crcTable)
-	binary.LittleEndian.PutUint32(data[walHeaderSize+walTypeSize+payloadLen:], newCRC)
-
-	if err := os.WriteFile(walPath, data, 0644); err != nil {
-		t.Fatalf("write corrupted wal: %v", err)
-	}
-
-	// Reopen engine - should handle corrupted WAL record gracefully
 	eng2, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("reopen engine with corrupted WAL: %v", err)
 	}
 	defer func() { _ = eng2.Close() }()
 
-	// The corrupted key1 should not be recovered, but the engine should still work
-	_, ok := eng2.Get(crKey1)
-	// It's acceptable either way - the corrupted record is skipped
-	// What matters is the engine doesn't crash
-	_ = ok
+	row, ok := eng2.Get(crKey1)
+	if !ok {
+		t.Error("key1 should be recovered (not corrupted)")
+	} else if row.Columns[colVal].Int64 != 1 {
+		t.Errorf("key1: expected 1, got %d", row.Columns[colVal].Int64)
+	}
+
+	_, ok = eng2.Get(crKey2)
+	if ok {
+		t.Error("key2 should not be recovered (corrupted record)")
+	}
+
+	row, ok = eng2.Get(crKey3)
+	if !ok {
+		t.Error("key3 should be recovered (not corrupted)")
+	} else if row.Columns[colVal].Int64 != 3 {
+		t.Errorf("key3: expected 3, got %d", row.Columns[colVal].Int64)
+	}
 }
 
 // TestCrashRecovery_SegmentLoading 验证从磁盘加载段文件的正确性。
