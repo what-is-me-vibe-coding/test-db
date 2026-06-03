@@ -10,6 +10,8 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
 )
 
+const testListenAddr = "127.0.0.1:0"
+
 func TestMainBuild(t *testing.T) {
 	// 验证 main 包可以成功构建
 }
@@ -18,8 +20,8 @@ func TestServerCreateAndStart(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := server.Config{
-		TCPAddr:         "127.0.0.1:0",
-		HTTPAddr:        "127.0.0.1:0",
+		TCPAddr:         testListenAddr,
+		HTTPAddr:        testListenAddr,
 		DataDir:         dir,
 		MaxMemTableSize: 1024 * 1024,
 	}
@@ -40,8 +42,8 @@ func TestServerCreateAndStart(t *testing.T) {
 
 func TestServerInvalidDataDir(t *testing.T) {
 	cfg := server.Config{
-		TCPAddr:         "127.0.0.1:0",
-		HTTPAddr:        "127.0.0.1:0",
+		TCPAddr:         testListenAddr,
+		HTTPAddr:        testListenAddr,
 		DataDir:         "/proc/invalid/no-permission/data",
 		MaxMemTableSize: 1024 * 1024,
 	}
@@ -58,7 +60,7 @@ func TestRunSignalShutdown(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run("127.0.0.1:0", "127.0.0.1:0", dir, 1024*1024)
+		errCh <- run(testListenAddr, testListenAddr, dir, 1024*1024)
 	}()
 
 	// 等待服务器启动

@@ -133,7 +133,7 @@ func TestNewPacket(t *testing.T) {
 // --- JSON 结构测试 ---
 
 func TestQueryRequestJSON(t *testing.T) {
-	original := QueryRequest{SQL: "SELECT * FROM users"}
+	original := QueryRequest{SQL: testSelectAll}
 	data, err := json.Marshal(original)
 	if err != nil {
 		t.Fatalf("序列化失败: %v", err)
@@ -151,9 +151,9 @@ func TestQueryRequestJSON(t *testing.T) {
 
 func TestWriteRequestJSON(t *testing.T) {
 	original := WriteRequest{
-		Table: "users",
+		Table: testTable,
 		Rows: []map[string]interface{}{
-			{"id": float64(1), "name": "alice"},
+			{"id": float64(1), testColName: testName},
 		},
 	}
 	data, err := json.Marshal(original)

@@ -131,43 +131,43 @@ func TestExprHasAggregate(t *testing.T) {
 		want bool
 	}{
 		// 聚合函数
-		{"count函数返回true", &FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}}, true},
-		{"sum函数返回true", &FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}}, true},
-		{"min函数返回true", &FuncExpr{Name: "min", Args: []Expression{&ColumnExpr{Name: "age"}}}, true},
-		{"max函数返回true", &FuncExpr{Name: "max", Args: []Expression{&ColumnExpr{Name: "age"}}}, true},
-		{"avg函数返回true", &FuncExpr{Name: "avg", Args: []Expression{&ColumnExpr{Name: "age"}}}, true},
+		{"count函数返回true", &FuncExpr{Name: testFuncCount, Args: []Expression{&StarExpr{}}}, true},
+		{"sum函数返回true", &FuncExpr{Name: aggNameSum, Args: []Expression{&ColumnExpr{Name: testColAge}}}, true},
+		{"min函数返回true", &FuncExpr{Name: testFuncMin, Args: []Expression{&ColumnExpr{Name: testColAge}}}, true},
+		{"max函数返回true", &FuncExpr{Name: aggNameMax, Args: []Expression{&ColumnExpr{Name: testColAge}}}, true},
+		{"avg函数返回true", &FuncExpr{Name: testFuncAvg, Args: []Expression{&ColumnExpr{Name: testColAge}}}, true},
 		// 非聚合函数
-		{"非聚合函数返回false", &FuncExpr{Name: "abs", Args: []Expression{&ColumnExpr{Name: "age"}}}, false},
+		{"非聚合函数返回false", &FuncExpr{Name: testFuncAbs, Args: []Expression{&ColumnExpr{Name: testColAge}}}, false},
 		// 列表达式
-		{"列表达式返回false", &ColumnExpr{Name: "age"}, false},
+		{"列表达式返回false", &ColumnExpr{Name: testColAge}, false},
 		// 字面量
 		{"字面量返回false", &LiteralExpr{Value: common.NewInt64(1)}, false},
 		// 二元表达式包含聚合
 		{"二元表达式包含聚合", &BinaryExpr{
 			Op:    OpAdd,
-			Left:  &FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}},
+			Left:  &FuncExpr{Name: testFuncCount, Args: []Expression{&StarExpr{}}},
 			Right: &LiteralExpr{Value: common.NewInt64(1)},
 		}, true},
 		// 二元表达式不包含聚合
 		{"二元表达式不含聚合", &BinaryExpr{
 			Op:    OpAdd,
-			Left:  &ColumnExpr{Name: "age"},
+			Left:  &ColumnExpr{Name: testColAge},
 			Right: &LiteralExpr{Value: common.NewInt64(1)},
 		}, false},
 		// 一元表达式包含聚合
 		{"一元表达式包含聚合", &UnaryExpr{
 			Op:   OpNeg,
-			Expr: &FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
+			Expr: &FuncExpr{Name: aggNameSum, Args: []Expression{&ColumnExpr{Name: testColAge}}},
 		}, true},
 		// 一元表达式不含聚合
 		{"一元表达式不含聚合", &UnaryExpr{
 			Op:   OpNeg,
-			Expr: &ColumnExpr{Name: "age"},
+			Expr: &ColumnExpr{Name: testColAge},
 		}, false},
 		// 嵌套函数参数中的聚合
 		{"嵌套函数参数中的聚合", &FuncExpr{
-			Name: "abs",
-			Args: []Expression{&FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}}},
+			Name: testFuncAbs,
+			Args: []Expression{&FuncExpr{Name: testFuncCount, Args: []Expression{&StarExpr{}}}},
 		}, true},
 	}
 
@@ -193,29 +193,29 @@ type collectAggTestCase struct {
 func makeCollectAggTests() []collectAggTestCase {
 	return []collectAggTestCase{
 		{"单个count",
-			&FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}},
+			&FuncExpr{Name: testFuncCount, Args: []Expression{&StarExpr{}}},
 			1, []AggregateFunc{AggCount}},
 		{"单个sum",
-			&FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
+			&FuncExpr{Name: aggNameSum, Args: []Expression{&ColumnExpr{Name: testColAge}}},
 			1, []AggregateFunc{AggSum}},
 		{"二元表达式两个聚合",
 			&BinaryExpr{Op: OpAdd,
-				Left:  &FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
-				Right: &FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}}},
+				Left:  &FuncExpr{Name: aggNameSum, Args: []Expression{&ColumnExpr{Name: testColAge}}},
+				Right: &FuncExpr{Name: testFuncCount, Args: []Expression{&StarExpr{}}}},
 			2, []AggregateFunc{AggSum, AggCount}},
 		{"一元表达式包含聚合",
 			&UnaryExpr{Op: OpNeg,
-				Expr: &FuncExpr{Name: "avg", Args: []Expression{&ColumnExpr{Name: "score"}}}},
+				Expr: &FuncExpr{Name: testFuncAvg, Args: []Expression{&ColumnExpr{Name: testColScore}}}},
 			1, []AggregateFunc{AggAvg}},
 		{"非聚合函数不收集",
-			&FuncExpr{Name: "abs", Args: []Expression{&ColumnExpr{Name: "age"}}},
+			&FuncExpr{Name: testFuncAbs, Args: []Expression{&ColumnExpr{Name: testColAge}}},
 			0, nil},
 		{"嵌套函数中的聚合",
 			&FuncExpr{Name: "coalesce",
-				Args: []Expression{&FuncExpr{Name: "min", Args: []Expression{&ColumnExpr{Name: "age"}}}}},
+				Args: []Expression{&FuncExpr{Name: testFuncMin, Args: []Expression{&ColumnExpr{Name: testColAge}}}}},
 			1, []AggregateFunc{AggMin}},
 		{"无聚合的列表达式",
-			&ColumnExpr{Name: "age"},
+			&ColumnExpr{Name: testColAge},
 			0, nil},
 	}
 }

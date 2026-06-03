@@ -27,8 +27,8 @@ func newTestServer(t *testing.T) *Server {
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	cfg := Config{
-		TCPAddr:  "127.0.0.1:0",
-		HTTPAddr: "127.0.0.1:0",
+		TCPAddr:  testListenAddr,
+		HTTPAddr: testListenAddr,
 		DataDir:  dir,
 	}
 
@@ -45,9 +45,9 @@ func newTestServerWithTable(t *testing.T) *Server {
 
 	srv := newTestServer(t)
 
-	err := srv.catalog.CreateTable("users", []catalog.ColumnDef{
+	err := srv.catalog.CreateTable(testTable, []catalog.ColumnDef{
 		{Name: "id", Type: common.TypeInt64, Nullable: false},
-		{Name: "name", Type: common.TypeString, Nullable: true},
+		{Name: testColName, Type: common.TypeString, Nullable: true},
 		{Name: "score", Type: common.TypeFloat64, Nullable: true},
 	}, []string{"id"}, catalog.TableOptions{})
 	if err != nil {
@@ -209,7 +209,7 @@ func TestTCPQueryPacket(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	queryPayload, _ := json.Marshal(QueryRequest{SQL: "SELECT * FROM users"})
+	queryPayload, _ := json.Marshal(QueryRequest{SQL: testSelectAll})
 	queryPkt := NewPacket(PacketQuery, queryPayload)
 	if _, err := conn.Write(queryPkt.Encode()); err != nil {
 		t.Fatalf("写入查询包失败: %v", err)
@@ -286,8 +286,8 @@ func TestTCPWriteAndQuery(t *testing.T) {
 	defer func() { _ = conn.Close() }()
 
 	writePayload, _ := json.Marshal(WriteRequest{
-		Table: "users",
-		Rows:  []map[string]interface{}{{"id": float64(1), "name": "test"}},
+		Table: testTable,
+		Rows:  []map[string]interface{}{{"id": float64(1), testColName: testTableName}},
 	})
 	writePkt := NewPacket(PacketWrite, writePayload)
 	if _, err := conn.Write(writePkt.Encode()); err != nil {

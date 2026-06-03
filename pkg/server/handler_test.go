@@ -11,11 +11,20 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
+const (
+	testSelectAll  = "SELECT * FROM users"
+	testTable      = "users"
+	testName       = "alice"
+	testTableName  = "test"
+	testListenAddr = "127.0.0.1:0"
+	testColName    = "name"
+)
+
 // --- handleQuery / handleWrite 直接测试 ---
 
 func TestHandleQuerySelectFromTable(t *testing.T) {
 	srv := newTestServerWithTable(t)
-	resp, err := srv.handleQuery(&QueryRequest{SQL: "SELECT * FROM users"})
+	resp, err := srv.handleQuery(&QueryRequest{SQL: testSelectAll})
 	if err != nil {
 		t.Fatalf("handleQuery 失败: %v", err)
 	}
@@ -49,10 +58,10 @@ func TestHandleQueryTableNotExist(t *testing.T) {
 func TestHandleWriteSuccess(t *testing.T) {
 	srv := newTestServerWithTable(t)
 	resp, err := srv.handleWrite(&WriteRequest{
-		Table: "users",
+		Table: testTable,
 		Rows: []map[string]interface{}{
-			{"id": float64(1), "name": "alice"},
-			{"id": float64(2), "name": "bob"},
+			{"id": float64(1), testColName: testName},
+			{"id": float64(2), testColName: "bob"},
 		},
 	})
 	if err != nil {
@@ -83,8 +92,8 @@ func TestHandleWriteTableNotExist(t *testing.T) {
 func TestHandleWriteMissingPK(t *testing.T) {
 	srv := newTestServerWithTable(t)
 	resp, err := srv.handleWrite(&WriteRequest{
-		Table: "users",
-		Rows:  []map[string]interface{}{{"name": "alice"}},
+		Table: testTable,
+		Rows:  []map[string]interface{}{{testColName: testName}},
 	})
 	if err != nil {
 		t.Fatalf("handleWrite 失败: %v", err)
@@ -97,8 +106,8 @@ func TestHandleWriteMissingPK(t *testing.T) {
 func TestHandleWriteTypeMismatch(t *testing.T) {
 	srv := newTestServerWithTable(t)
 	resp, err := srv.handleWrite(&WriteRequest{
-		Table: "users",
-		Rows:  []map[string]interface{}{{"id": float64(1), "name": true}},
+		Table: testTable,
+		Rows:  []map[string]interface{}{{"id": float64(1), testColName: true}},
 	})
 	if err != nil {
 		t.Fatalf("handleWrite 失败: %v", err)
@@ -112,7 +121,7 @@ func TestHandleWriteTypeMismatch(t *testing.T) {
 
 func TestBuildPrimaryKey(t *testing.T) {
 	srv := newTestServer(t)
-	tbl := &catalog.Table{Name: "test", PrimaryKey: []string{"id"}}
+	tbl := &catalog.Table{Name: testTableName, PrimaryKey: []string{"id"}}
 
 	tests := []struct {
 		name    string
@@ -121,7 +130,7 @@ func TestBuildPrimaryKey(t *testing.T) {
 		wantErr bool
 	}{
 		{"单主键", map[string]interface{}{"id": 1}, "1", false},
-		{"缺失主键", map[string]interface{}{"name": "test"}, "", true},
+		{"缺失主键", map[string]interface{}{testColName: testTableName}, "", true},
 	}
 
 	for _, tt := range tests {
@@ -140,7 +149,7 @@ func TestBuildPrimaryKey(t *testing.T) {
 
 func TestBuildCompositePrimaryKey(t *testing.T) {
 	srv := newTestServer(t)
-	tbl := &catalog.Table{Name: "test", PrimaryKey: []string{"region", "id"}}
+	tbl := &catalog.Table{Name: testTableName, PrimaryKey: []string{"region", "id"}}
 
 	row := map[string]interface{}{"region": "us", "id": 42}
 	key, err := srv.buildPrimaryKey(tbl, row)
@@ -191,8 +200,8 @@ func TestNewServerDefaultConfig(t *testing.T) {
 	defer func() { _ = os.RemoveAll(dir) }()
 
 	cfg := Config{
-		TCPAddr:  "127.0.0.1:0",
-		HTTPAddr: "127.0.0.1:0",
+		TCPAddr:  testListenAddr,
+		HTTPAddr: testListenAddr,
 		DataDir:  filepath.Join(dir, "data"),
 	}
 
@@ -212,11 +221,11 @@ func TestNewServerDefaultConfig(t *testing.T) {
 
 func TestConvertWriteRowIgnoreUnknownColumn(t *testing.T) {
 	srv := newTestServerWithTable(t)
-	tbl, _ := srv.catalog.GetTable("users")
+	tbl, _ := srv.catalog.GetTable(testTable)
 
 	key, values, err := srv.convertWriteRow(tbl, map[string]interface{}{
 		"id":      float64(1),
-		"name":    "alice",
+		testColName:    testName,
 		"unknown": "value",
 	})
 	if err != nil {
