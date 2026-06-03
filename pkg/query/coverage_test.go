@@ -181,88 +181,59 @@ func TestExprHasAggregate(t *testing.T) {
 	}
 }
 
+// collectAggTestCase 是 collectAggregates 测试用例。
+type collectAggTestCase struct {
+	name      string
+	expr      Expression
+	wantCount int
+	wantFuncs []AggregateFunc
+}
+
+// makeCollectAggTests 返回 collectAggregates 的测试用例。
+func makeCollectAggTests() []collectAggTestCase {
+	return []collectAggTestCase{
+		{"单个count",
+			&FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}},
+			1, []AggregateFunc{AggCount}},
+		{"单个sum",
+			&FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
+			1, []AggregateFunc{AggSum}},
+		{"二元表达式两个聚合",
+			&BinaryExpr{Op: OpAdd,
+				Left:  &FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
+				Right: &FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}}},
+			2, []AggregateFunc{AggSum, AggCount}},
+		{"一元表达式包含聚合",
+			&UnaryExpr{Op: OpNeg,
+				Expr: &FuncExpr{Name: "avg", Args: []Expression{&ColumnExpr{Name: "score"}}}},
+			1, []AggregateFunc{AggAvg}},
+		{"非聚合函数不收集",
+			&FuncExpr{Name: "abs", Args: []Expression{&ColumnExpr{Name: "age"}}},
+			0, nil},
+		{"嵌套函数中的聚合",
+			&FuncExpr{Name: "coalesce",
+				Args: []Expression{&FuncExpr{Name: "min", Args: []Expression{&ColumnExpr{Name: "age"}}}}},
+			1, []AggregateFunc{AggMin}},
+		{"无聚合的列表达式",
+			&ColumnExpr{Name: "age"},
+			0, nil},
+	}
+}
+
 // TestCollectAggregates 测试 collectAggregates 函数。
 func TestCollectAggregates(t *testing.T) {
 	analyzer := NewAnalyzer(testCatalog())
-
-	tests := []struct {
-		name      string
-		expr      Expression
-		wantCount int
-		wantFuncs []AggregateFunc
-	}{
-		// 单个聚合函数
-		{
-			"单个count",
-			&FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}},
-			1,
-			[]AggregateFunc{AggCount},
-		},
-		// 单个 sum 聚合
-		{
-			"单个sum",
-			&FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
-			1,
-			[]AggregateFunc{AggSum},
-		},
-		// 二元表达式包含两个聚合
-		{
-			"二元表达式两个聚合",
-			&BinaryExpr{
-				Op:    OpAdd,
-				Left:  &FuncExpr{Name: "sum", Args: []Expression{&ColumnExpr{Name: "age"}}},
-				Right: &FuncExpr{Name: "count", Args: []Expression{&StarExpr{}}},
-			},
-			2,
-			[]AggregateFunc{AggSum, AggCount},
-		},
-		// 一元表达式包含聚合
-		{
-			"一元表达式包含聚合",
-			&UnaryExpr{
-				Op:   OpNeg,
-				Expr: &FuncExpr{Name: "avg", Args: []Expression{&ColumnExpr{Name: "score"}}},
-			},
-			1,
-			[]AggregateFunc{AggAvg},
-		},
-		// 非聚合函数不收集
-		{
-			"非聚合函数不收集",
-			&FuncExpr{Name: "abs", Args: []Expression{&ColumnExpr{Name: "age"}}},
-			0,
-			nil,
-		},
-		// 嵌套函数中的聚合
-		{
-			"嵌套函数中的聚合",
-			&FuncExpr{
-				Name: "coalesce",
-				Args: []Expression{&FuncExpr{Name: "min", Args: []Expression{&ColumnExpr{Name: "age"}}}},
-			},
-			1,
-			[]AggregateFunc{AggMin},
-		},
-		// 无聚合的列表达式
-		{
-			"无聚合的列表达式",
-			&ColumnExpr{Name: "age"},
-			0,
-			nil,
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range makeCollectAggTests() {
 		t.Run(tt.name, func(t *testing.T) {
 			var aggs []AggregateExpr
 			analyzer.collectAggregates(tt.expr, &aggs)
 			if len(aggs) != tt.wantCount {
-				t.Errorf("collectAggregates() 收集到 %d 个聚合, want %d", len(aggs), tt.wantCount)
+				t.Errorf("收集到 %d 个聚合, want %d", len(aggs), tt.wantCount)
 				return
 			}
 			for i, agg := range aggs {
 				if agg.Func != tt.wantFuncs[i] {
-					t.Errorf("collectAggregates()[%d].Func = %v, want %v", i, agg.Func, tt.wantFuncs[i])
+					t.Errorf("[%d].Func = %v, want %v", i, agg.Func, tt.wantFuncs[i])
 				}
 			}
 		})
