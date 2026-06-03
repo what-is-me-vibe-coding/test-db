@@ -153,6 +153,27 @@ func (s *Server) Start() error {
 	return nil
 }
 
+// TCPAddr 返回 TCP 监听地址，未启动时返回空字符串。
+func (s *Server) TCPAddr() string {
+	if s.tcpListener != nil {
+		return s.tcpListener.Addr().String()
+	}
+	return ""
+}
+
+// HTTPAddr 返回 HTTP 监听地址，未启动时返回空字符串。
+func (s *Server) HTTPAddr() string {
+	if s.httpListener != nil {
+		return s.httpListener.Addr().String()
+	}
+	return ""
+}
+
+// Catalog 返回服务器的 Catalog 实例。
+func (s *Server) Catalog() *catalog.Catalog {
+	return s.catalog
+}
+
 // Stop 优雅关闭服务器，等待所有活跃连接完成。
 func (s *Server) Stop() error {
 	close(s.done)
