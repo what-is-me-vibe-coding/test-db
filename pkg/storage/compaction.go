@@ -89,18 +89,9 @@ func (c *Compactor) readSegmentRows(seg *Segment, cols []ColumnMeta) ([]memRow, 
 
 	decodedCols := make([]columnData, numCols)
 	for i := range seg.Columns {
-		enc := &seg.Columns[i]
-		if err := DecompressColumn(enc); err != nil {
-			return nil, fmt.Errorf("compactor: decompress column %d: %w", i, err)
-		}
-		data, nulls, err := DecodeColumn(enc)
+		cd, err := decodeSegmentColumn(&seg.Columns[i], i)
 		if err != nil {
-			return nil, fmt.Errorf("compactor: decode column %d: %w", i, err)
-		}
-		cd := columnData{
-			data:  data,
-			nulls: nulls,
-			typ:   enc.Type,
+			return nil, err
 		}
 		decodedCols[i] = cd
 	}
@@ -134,6 +125,40 @@ func (c *Compactor) readSegmentRows(seg *Segment, cols []ColumnMeta) ([]memRow, 
 	}
 
 	return rows, nil
+}
+
+// decodeSegmentColumn copies and decodes a single segment column for compaction.
+// A copy is made to avoid modifying the shared segment data during concurrent reads.
+func decodeSegmentColumn(src *EncodedColumn, colIdx int) (columnData, error) {
+	enc := &EncodedColumn{
+		Encoding: src.Encoding,
+		Type:     src.Type,
+		RowCount: src.RowCount,
+	}
+	if len(src.Data) > 0 {
+		enc.Data = make([]byte, len(src.Data))
+		copy(enc.Data, src.Data)
+	}
+	if len(src.Offsets) > 0 {
+		enc.Offsets = make([]uint32, len(src.Offsets))
+		copy(enc.Offsets, src.Offsets)
+	}
+	if len(src.Dict) > 0 {
+		enc.Dict = make([]string, len(src.Dict))
+		copy(enc.Dict, src.Dict)
+	}
+	if len(src.Nulls) > 0 {
+		enc.Nulls = make([]byte, len(src.Nulls))
+		copy(enc.Nulls, src.Nulls)
+	}
+	if err := DecompressColumn(enc); err != nil {
+		return columnData{}, fmt.Errorf("compactor: decompress column %d: %w", colIdx, err)
+	}
+	data, nulls, err := DecodeColumn(enc)
+	if err != nil {
+		return columnData{}, fmt.Errorf("compactor: decode column %d: %w", colIdx, err)
+	}
+	return columnData{data: data, nulls: nulls, typ: enc.Type}, nil
 }
 
 type columnData struct {
