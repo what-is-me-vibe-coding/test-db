@@ -51,7 +51,7 @@ func (it *memTableIterator) Entry() ScanEntry {
 }
 
 func (it *memTableIterator) Err() error { return it.err }
-func (it *memTableIterator) Close()     {}
+func (it *memTableIterator) Close()     { it.pos = -1 }
 
 // segmentIterator iterates over a Segment's rows within a key range.
 type segmentIterator struct {
@@ -121,7 +121,7 @@ func (it *segmentIterator) Entry() ScanEntry {
 }
 
 func (it *segmentIterator) Err() error { return it.err }
-func (it *segmentIterator) Close()     {}
+func (it *segmentIterator) Close()     { it.finished = true }
 
 // mergeHeapEntry wraps an iterator for use in the merge heap.
 type mergeHeapEntry struct {
@@ -311,7 +311,7 @@ func (it *sliceIterator) Entry() ScanEntry {
 }
 
 func (it *sliceIterator) Err() error { return nil }
-func (it *sliceIterator) Close()     {}
+func (it *sliceIterator) Close()     { it.pos = -1 }
 
 // buildScanIterators creates iterators for all data sources in priority order.
 // Order: segments (lowest priority) → immutable memtables → active memtable (highest).
