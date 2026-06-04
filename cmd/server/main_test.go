@@ -86,3 +86,10 @@ func TestRunSignalShutdown(t *testing.T) {
 	// 恢复信号处理，避免影响其他测试
 	signal.Reset(syscall.SIGINT, syscall.SIGTERM)
 }
+
+func TestRunInvalidDataDir(t *testing.T) {
+	err := run(testListenAddr, testListenAddr, "/proc/invalid/no-perm/data", 1024*1024)
+	if err == nil {
+		t.Error("期望返回错误")
+	}
+}
