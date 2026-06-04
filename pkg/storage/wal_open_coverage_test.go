@@ -116,7 +116,7 @@ func TestOpenWALWithCorruptedTrailingData(t *testing.T) {
 // It replaces the WAL file with a symlink to /dev/null, which can be opened with
 // O_RDWR but does not support f.Truncate (returns EINVAL on Linux).
 func TestOpenWALTruncateError(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != skipWindows && runtime.GOOS != skipNonLinux {
 		t.Skip("test relies on /dev/null Truncate behavior on Linux")
 	}
 

@@ -8,6 +8,7 @@ import (
 )
 
 const skipWindows = "windows"
+const skipNonLinux = "linux"
 
 // TestTruncateSyncError 测试 Truncate 在底层文件已关闭时 Sync 失败的错误路径
 func TestTruncateSyncError(t *testing.T) {

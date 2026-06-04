@@ -9,7 +9,10 @@ import (
 )
 
 func TestCompressDecompressEmpty(t *testing.T) {
-	compressed := Compress(nil)
+	compressed, err := Compress(nil)
+	if err != nil {
+		t.Fatalf("Compress(nil) failed: %v", err)
+	}
 	if compressed != nil {
 		t.Errorf("Compress(nil) = %v, want nil", compressed)
 	}
@@ -45,7 +48,10 @@ func TestCompressDecompressRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compressed := Compress(tt.data)
+			compressed, err := Compress(tt.data)
+			if err != nil {
+				t.Fatalf("Compress failed: %v", err)
+			}
 			if len(compressed) == 0 {
 				t.Fatal("Compress returned empty data")
 			}
@@ -411,7 +417,10 @@ func TestDecompressCorruptedData(t *testing.T) {
 
 func TestCompressReduceSize(t *testing.T) {
 	data := bytes.Repeat([]byte{0x00, 0x01, 0x02, 0x03}, 10000)
-	compressed := Compress(data)
+	compressed, err := Compress(data)
+	if err != nil {
+		t.Fatalf("Compress failed: %v", err)
+	}
 	if len(compressed) == 0 {
 		t.Fatal("Compress returned empty data")
 	}
@@ -423,7 +432,10 @@ func TestCompressReduceSize(t *testing.T) {
 
 // TestCompressEmptyData 测试压缩空数据
 func TestCompressEmptyData(t *testing.T) {
-	compressed := Compress([]byte{})
+	compressed, err := Compress([]byte{})
+	if err != nil {
+		t.Fatalf("Compress([]byte{}) failed: %v", err)
+	}
 	if compressed != nil {
 		t.Errorf("Compress([]byte{}) = %v, want nil", compressed)
 	}
@@ -452,7 +464,10 @@ func TestDecompressEmptyData(t *testing.T) {
 func TestCompressLargeData(t *testing.T) {
 	// 创建 1MB 的重复数据
 	data := bytes.Repeat([]byte("large data block for compression test "), 30000)
-	compressed := Compress(data)
+	compressed, err := Compress(data)
+	if err != nil {
+		t.Fatalf("Compress large data failed: %v", err)
+	}
 	if len(compressed) == 0 {
 		t.Fatal("Compress returned empty data for large input")
 	}
