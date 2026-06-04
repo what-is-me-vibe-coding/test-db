@@ -169,26 +169,44 @@ func computeDictMinMax(enc *EncodedColumn, stat *ColumnStat) {
 }
 
 func computeRLEMinMax(enc *EncodedColumn, stat *ColumnStat) {
-	decoded, _, err := decodeRLE(enc)
-	if err != nil {
+	// 直接从 RLE runs 计算 min/max，避免完整解码
+	runCount := len(enc.Data) / 16
+	if runCount == 0 {
+		// 无有效 run 数据，但 RowCount>0 时，旧行为是全零数组
+		if enc.RowCount > 0 {
+			stat.Min = int64ToBytes(0)
+			stat.Max = int64ToBytes(0)
+		}
 		return
 	}
-	ints, ok := decoded.([]int64)
-	if !ok || len(ints) == 0 {
-		return
-	}
-	minVal := ints[0]
-	maxVal := ints[0]
-	for _, v := range ints {
-		if v < minVal {
-			minVal = v
+	first := true
+	var minVal, maxVal int64
+	for r := 0; r < runCount; r++ {
+		off := r * 16
+		if off+16 > len(enc.Data) {
+			break
 		}
-		if v > maxVal {
-			maxVal = v
+		val := int64(binary.LittleEndian.Uint64(enc.Data[off:]))
+		isNull := enc.Data[off+12] == 1
+		if isNull {
+			continue
+		}
+		if first {
+			minVal, maxVal = val, val
+			first = false
+		} else {
+			if val < minVal {
+				minVal = val
+			}
+			if val > maxVal {
+				maxVal = val
+			}
 		}
 	}
-	stat.Min = int64ToBytes(minVal)
-	stat.Max = int64ToBytes(maxVal)
+	if !first {
+		stat.Min = int64ToBytes(minVal)
+		stat.Max = int64ToBytes(maxVal)
+	}
 }
 
 func computeBitmapMinMax(enc *EncodedColumn, stat *ColumnStat) {
@@ -417,55 +435,4 @@ func (s *Segment) FindRowByKey(key string) (uint32, bool) {
 		}
 	}
 	return 0, false
-}
-
-// GetColumnValue 从指定列中提取给定行索引的值，使用副本避免修改原始数据。
-func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
-	if int(colIdx) >= len(s.Columns) {
-		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
-	}
-	src := &s.Columns[colIdx]
-	enc := &EncodedColumn{
-		Encoding: src.Encoding,
-		Type:     src.Type,
-		RowCount: src.RowCount,
-	}
-	if len(src.Data) > 0 {
-		enc.Data = make([]byte, len(src.Data))
-		copy(enc.Data, src.Data)
-	}
-	if len(src.Offsets) > 0 {
-		enc.Offsets = make([]uint32, len(src.Offsets))
-		copy(enc.Offsets, src.Offsets)
-	}
-	if len(src.Dict) > 0 {
-		enc.Dict = make([]string, len(src.Dict))
-		copy(enc.Dict, src.Dict)
-	}
-	if len(src.Nulls) > 0 {
-		enc.Nulls = make([]byte, len(src.Nulls))
-		copy(enc.Nulls, src.Nulls)
-	}
-	if err := DecompressColumn(enc); err != nil {
-		return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
-	}
-	decoded, nulls, err := DecodeColumn(enc)
-	if err != nil {
-		return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
-	}
-	cd := columnData{data: decoded, nulls: nulls, typ: enc.Type}
-	return extractValue(cd, rowIdx), nil
-}
-
-// GetAllColumnValues 提取指定行所有列的值。
-func (s *Segment) GetAllColumnValues(rowIdx uint32, colMeta []ColumnMeta) (map[string]common.Value, error) {
-	values := make(map[string]common.Value, len(colMeta))
-	for colIdx, col := range colMeta {
-		val, err := s.GetColumnValue(uint32(colIdx), rowIdx)
-		if err != nil {
-			continue
-		}
-		values[col.Name] = val
-	}
-	return values, nil
 }

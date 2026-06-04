@@ -50,8 +50,8 @@ func TestComputeRLEMinMax(t *testing.T) {
 			values:   []int64{1, 1, 3, 3},
 			rowCount: 4,
 			nulls:    func() *common.Bitmap { bm := common.NewBitmap(4); bm.Set(2); return bm }(),
-			// RLE 编码中 null 值被编码为 value=0，所以解码后包含 0
-			wantMin: 0,
+			// null 值不参与 min/max 计算，仅非 null 值 1 和 3
+			wantMin: 1,
 			wantMax: 3,
 		},
 	}
