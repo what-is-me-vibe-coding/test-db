@@ -20,6 +20,8 @@ const (
 	testPong     = "pong"
 	testFlagHTTP = "-http"
 	testFlagTCP  = "-tcp"
+	testFlagMode = "-mode"
+	testSQL      = "SELECT * FROM users"
 )
 
 func startServer(t *testing.T) (string, string) {
@@ -366,7 +368,7 @@ func TestNewCLI(t *testing.T) {
 func TestRunCLIExecuteFlag(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
 	var stdout, stderr bytes.Buffer
-	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, "-e", "SELECT * FROM users"}, strings.NewReader(""), &stdout, &stderr)
+	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, "-e", testSQL}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("exit code = %d, stderr: %s", code, stderr.String())
 	}
@@ -403,7 +405,7 @@ func TestRunCLIInvalidArgs(t *testing.T) {
 func TestRunCLIHTTPMode(t *testing.T) {
 	tcpAddr, httpAddr := startServer(t)
 	var stdout, stderr bytes.Buffer
-	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, "-mode", testModeHTTP, "-e", "SELECT * FROM users"}, strings.NewReader(""), &stdout, &stderr)
+	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, testFlagMode, testModeHTTP, "-e", testSQL}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("exit code = %d, stderr: %s", code, stderr.String())
 	}
