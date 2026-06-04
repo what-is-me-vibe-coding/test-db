@@ -165,7 +165,7 @@ func TestCrashRecovery_MultipleDataTypes(t *testing.T) {
 	}
 
 	row, ok = eng2.Get("string_key")
-	if !ok || row.Columns[colVal].Str != "hello" {
+	if !ok || row.Columns[colVal].Str != testStrHello {
 		t.Errorf("string_key not recovered correctly")
 	}
 

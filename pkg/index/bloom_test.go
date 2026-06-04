@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/bits-and-blooms/bloom/v3"
 )
 
 func TestBloomIndexRegisterAndMayContain(t *testing.T) {
@@ -253,5 +255,100 @@ func TestBloomIndexMultipleSegments(t *testing.T) {
 
 	if bi.MayContain(2, []byte("seg1-a")) {
 		t.Log("seg2 false positive for seg1-a")
+	}
+}
+
+func TestBloomIndexRegisterValidFilter(t *testing.T) {
+	bi := NewBloomIndex()
+
+	filter := bloom.NewWithEstimates(10, DefaultBloomFPRate)
+	filter.Add([]byte("hello"))
+	filter.Add([]byte("world"))
+
+	err := bi.Register(1, filter)
+	if err != nil {
+		t.Fatalf("Register with valid filter: %v", err)
+	}
+
+	if bi.Len() != 1 {
+		t.Errorf("Len: got %d, want 1", bi.Len())
+	}
+
+	if !bi.MayContain(1, []byte("hello")) {
+		t.Error("MayContain should return true for registered key 'hello'")
+	}
+	if !bi.MayContain(1, []byte("world")) {
+		t.Error("MayContain should return true for registered key 'world'")
+	}
+}
+
+func TestBloomIndexRegisterFromCorruptedBytes(t *testing.T) {
+	bi := NewBloomIndex()
+
+	corrupted := []byte{0xFF, 0xFE, 0xFD, 0xFC}
+	err := bi.RegisterFromBytes(1, corrupted)
+	if err == nil {
+		t.Error("RegisterFromBytes with corrupted data should return error")
+	}
+
+	if bi.Len() != 0 {
+		t.Errorf("Len: got %d, want 0 after failed register", bi.Len())
+	}
+}
+
+func TestBloomIndexBuildAndRegisterEmptyKeys(t *testing.T) {
+	bi := NewBloomIndex()
+
+	err := bi.BuildAndRegister(1, []string{}, DefaultBloomFPRate)
+	if err != nil {
+		t.Fatalf("BuildAndRegister with empty keys: %v", err)
+	}
+
+	if bi.Len() != 0 {
+		t.Errorf("Len: got %d, want 0 after BuildAndRegister with empty keys", bi.Len())
+	}
+}
+
+func TestBuildFromKeysFPRateGTE1(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	data, err := BuildFromKeys(keys, 1.0)
+	if err != nil {
+		t.Fatalf("BuildFromKeys with fpRate=1.0: %v", err)
+	}
+	if data == nil {
+		t.Fatal("BuildFromKeys should return non-nil data when fpRate >= 1")
+	}
+
+	bi := NewBloomIndex()
+	err = bi.RegisterFromBytes(1, data)
+	if err != nil {
+		t.Fatalf("RegisterFromBytes: %v", err)
+	}
+	for _, k := range keys {
+		if !bi.MayContain(1, []byte(k)) {
+			t.Errorf("MayContain(%q): expected true", k)
+		}
+	}
+}
+
+func TestBuildFromKeysFPRateNegative(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	data, err := BuildFromKeys(keys, -0.5)
+	if err != nil {
+		t.Fatalf("BuildFromKeys with fpRate=-0.5: %v", err)
+	}
+	if data == nil {
+		t.Fatal("BuildFromKeys should return non-nil data when fpRate < 0")
+	}
+
+	bi := NewBloomIndex()
+	err = bi.RegisterFromBytes(1, data)
+	if err != nil {
+		t.Fatalf("RegisterFromBytes: %v", err)
+	}
+	for _, k := range keys {
+		if !bi.MayContain(1, []byte(k)) {
+			t.Errorf("MayContain(%q): expected true", k)
+		}
 	}
 }
