@@ -1,0 +1,197 @@
+package catalog
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+)
+
+func TestSaveToFile_MkdirAllError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission-based test not reliable on Windows")
+	}
+	dir := t.TempDir()
+	// Create a regular file where a directory would need to be created.
+	// MkdirAll will fail because the path component is a file, not a directory.
+	blocker := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blocker, []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	path := filepath.Join(blocker, "sub", "catalog.json")
+	db := NewDatabase()
+	err := saveToFile(path, db)
+	if err == nil {
+		t.Error("saveToFile should return error when directory creation fails")
+	}
+}
+
+func TestSaveToFile_RenameError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("rename-based test not reliable on Windows")
+	}
+	dir := t.TempDir()
+	// Create the target file as a directory to make Rename fail.
+	path := filepath.Join(dir, "catalog.json")
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	db := NewDatabase()
+	err := saveToFile(path, db)
+	if err == nil {
+		t.Error("saveToFile should return error when rename fails")
+	}
+
+	// Clean up the .tmp file left behind.
+	tmpPath := path + ".tmp"
+	_ = os.Remove(tmpPath)
+}
+
+func TestLoadFromFile_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	db, err := loadFromFile(path)
+	if err != nil {
+		t.Fatalf("loadFromFile() error = %v", err)
+	}
+	if db.Version != 1 {
+		t.Errorf("version = %d, want 1", db.Version)
+	}
+	if len(db.Tables) != 0 {
+		t.Errorf("tables count = %d, want 0", len(db.Tables))
+	}
+}
+
+func TestLoadFromFile_CorruptedJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+	if err := os.WriteFile(path, []byte("{invalid json!!!"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := loadFromFile(path)
+	if err == nil {
+		t.Error("loadFromFile should return error for corrupted JSON")
+	}
+}
+
+func TestLoadFromFile_NilTablesMap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+	// Write JSON with a null Tables map — after unmarshal, db.Tables will be nil
+	// and loadFromFile should initialize it.
+	content := `{"Version":5,"Tables":null,"CreatedAt":"2025-01-01T00:00:00Z"}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	db, err := loadFromFile(path)
+	if err != nil {
+		t.Fatalf("loadFromFile() error = %v", err)
+	}
+	if db.Tables == nil {
+		t.Error("Tables should be initialized, got nil")
+	}
+	if len(db.Tables) != 0 {
+		t.Errorf("tables count = %d, want 0", len(db.Tables))
+	}
+	if db.Version != 5 {
+		t.Errorf("version = %d, want 5", db.Version)
+	}
+}
+
+func TestSaveAndLoad_RoundTripMultipleTables(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "catalog.json")
+
+	// Build a Database with multiple tables.
+	db := NewDatabase()
+	db.Tables["users"] = &Table{
+		Name:       "users",
+		Columns:    []ColumnDef{{Name: "id", Type: common.TypeInt64}, {Name: "name", Type: common.TypeString}},
+		PrimaryKey: []string{"id"},
+		SegmentList: []SegmentRef{
+			{ID: 1, Level: 0, MinKey: "a", MaxKey: "z", Size: 1024, RowCount: 50},
+			{ID: 2, Level: 1, MinKey: "b", MaxKey: "y", Size: 2048, RowCount: 100},
+		},
+		Options: TableOptions{MaxSegmentSize: 4096},
+		Version: 1,
+	}
+	db.Tables["orders"] = &Table{
+		Name:       "orders",
+		Columns:    []ColumnDef{{Name: "order_id", Type: common.TypeInt64}, {Name: "user_id", Type: common.TypeInt64}},
+		PrimaryKey: []string{"order_id"},
+		SegmentList: []SegmentRef{
+			{ID: 10, Level: 0, MinKey: "1", MaxKey: "999", Size: 512, RowCount: 20},
+		},
+		Options: TableOptions{},
+		Version: 1,
+	}
+	db.Version = 3
+
+	// Save and reload.
+	if err := saveToFile(path, db); err != nil {
+		t.Fatalf("saveToFile() error = %v", err)
+	}
+	loaded, err := loadFromFile(path)
+	if err != nil {
+		t.Fatalf("loadFromFile() error = %v", err)
+	}
+
+	// Verify top-level fields.
+	if loaded.Version != 3 {
+		t.Errorf("version = %d, want 3", loaded.Version)
+	}
+	if len(loaded.Tables) != 2 {
+		t.Fatalf("tables count = %d, want 2", len(loaded.Tables))
+	}
+
+	// Verify users table.
+	users, ok := loaded.Tables["users"]
+	if !ok {
+		t.Fatal("users table not found")
+	}
+	if users.Name != "users" {
+		t.Errorf("users.Name = %q, want %q", users.Name, "users")
+	}
+	if len(users.Columns) != 2 {
+		t.Errorf("users columns count = %d, want 2", len(users.Columns))
+	}
+	if len(users.PrimaryKey) != 1 || users.PrimaryKey[0] != "id" {
+		t.Errorf("users primary key = %v, want [id]", users.PrimaryKey)
+	}
+	if len(users.SegmentList) != 2 {
+		t.Fatalf("users segment count = %d, want 2", len(users.SegmentList))
+	}
+	if users.SegmentList[0].ID != 1 {
+		t.Errorf("users segment[0].ID = %d, want 1", users.SegmentList[0].ID)
+	}
+	if users.SegmentList[1].ID != 2 {
+		t.Errorf("users segment[1].ID = %d, want 2", users.SegmentList[1].ID)
+	}
+	if users.Options.MaxSegmentSize != 4096 {
+		t.Errorf("users MaxSegmentSize = %d, want 4096", users.Options.MaxSegmentSize)
+	}
+
+	// Verify orders table.
+	orders, ok := loaded.Tables["orders"]
+	if !ok {
+		t.Fatal("orders table not found")
+	}
+	if len(orders.Columns) != 2 {
+		t.Errorf("orders columns count = %d, want 2", len(orders.Columns))
+	}
+	if len(orders.SegmentList) != 1 {
+		t.Errorf("orders segment count = %d, want 1", len(orders.SegmentList))
+	}
+	if orders.SegmentList[0].ID != 10 {
+		t.Errorf("orders segment[0].ID = %d, want 10", orders.SegmentList[0].ID)
+	}
+}
