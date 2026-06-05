@@ -86,7 +86,17 @@ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]mem
 		return allRows[i].Key < allRows[j].Key
 	})
 
-	return allRows, nil
+	// 去重：同一 key 保留最新版本（L0 Segment ID 更大，排在后面，取最后一个）
+	deduped := make([]memRow, 0, len(allRows))
+	for i := range allRows {
+		if i > 0 && allRows[i].Key == allRows[i-1].Key {
+			deduped[len(deduped)-1] = allRows[i]
+		} else {
+			deduped = append(deduped, allRows[i])
+		}
+	}
+
+	return deduped, nil
 }
 
 func (c *Compactor) readSegmentRows(seg *Segment, cols []ColumnMeta) ([]memRow, error) {

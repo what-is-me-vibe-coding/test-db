@@ -318,3 +318,64 @@ func TestCompactorWithDifferentDataTypes(t *testing.T) {
 
 	verifyCompactedSegment(t, newSeg, 40, 5)
 }
+
+// verifyDedupKeyValue 验证去重后指定 key 的值是否符合预期
+func verifyDedupKeyValue(t *testing.T, results []ScanEntry, key string, wantVal int64) {
+	t.Helper()
+	for _, r := range results {
+		if r.Key != key {
+			continue
+		}
+		if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != wantVal {
+			t.Errorf("key %s: expected val=%d, got val=%d", key, wantVal, v.Int64)
+		}
+		return
+	}
+	t.Errorf("key %s not found in results", key)
+}
+
+// TestCompactionDeduplication 测试 Compaction 合并时对同一 key 的去重
+func TestCompactionDeduplication(t *testing.T) {
+	dir, err := os.MkdirTemp("", "compaction_dedup_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+	eng := setupEngine(t, dir, 64<<20)
+
+	// L0: 写入 key "a"=1, "b"=2
+	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
+	if err := eng.Flush(cols); err != nil {
+		t.Fatal(err)
+	}
+
+	// L0: 覆盖 key "a"=100, 新增 "c"=3
+	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(100)})
+	_ = eng.Write("c", map[string]common.Value{colVal: common.NewInt64(3)})
+	if err := eng.Flush(cols); err != nil {
+		t.Fatal(err)
+	}
+
+	// Compact
+	if err := eng.Compact(cols); err != nil {
+		t.Fatal(err)
+	}
+
+	// 验证合并后只有 3 行，key "a" 取最新值 100
+	if eng.SegmentCount() != 1 {
+		t.Fatalf("expected 1 segment, got %d", eng.SegmentCount())
+	}
+
+	results := eng.ScanRange("a", "c")
+	if len(results) != 3 {
+		t.Fatalf("expected 3 rows after dedup, got %d", len(results))
+	}
+
+	// 验证各 key 的值
+	verifyDedupKeyValue(t, results, "a", 100)
+	verifyDedupKeyValue(t, results, "b", 2)
+	verifyDedupKeyValue(t, results, "c", 3)
+}

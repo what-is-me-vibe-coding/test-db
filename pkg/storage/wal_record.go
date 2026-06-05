@@ -297,6 +297,7 @@ func (e *Engine) loadSegments() error {
 			continue
 		}
 		e.segments = append(e.segments, seg)
+		e.segmentMap[seg.ID] = seg
 		e.segmentLevels = append(e.segmentLevels, 0)
 		if segID > maxSegID {
 			maxSegID = segID

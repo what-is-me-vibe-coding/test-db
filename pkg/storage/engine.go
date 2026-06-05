@@ -20,6 +20,7 @@ type Engine struct {
 	flusher       *Flusher
 	compactor     *Compactor
 	segments      []*Segment
+	segmentMap    map[uint64]*Segment
 	segmentLevels []int
 	nextVersion   uint64
 	primaryIndex  *index.PrimaryIndex
@@ -49,6 +50,7 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		activeMem:    NewMemTableWithSize(maxSize),
 		flusher:      NewFlusher(cfg.DataDir),
 		compactor:    NewCompactor(cfg.DataDir),
+		segmentMap:   make(map[uint64]*Segment),
 		nextVersion:  1,
 		primaryIndex: index.NewPrimaryIndex(),
 		bloomIndex:   index.NewBloomIndex(),
@@ -181,12 +183,7 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 	return Row{}, false
 }
 func (e *Engine) findSegmentByID(segID uint64) *Segment {
-	for _, seg := range e.segments {
-		if seg.ID == segID {
-			return seg
-		}
-	}
-	return nil
+	return e.segmentMap[segID]
 }
 
 // Scan 扫描指定键范围内的所有行。
@@ -249,6 +246,7 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
 
 		e.mu.Lock()
 		e.segments = append(e.segments, seg)
+		e.segmentMap[seg.ID] = seg
 		e.segmentLevels = append(e.segmentLevels, 0)
 		e.registerSegmentIndexes(seg, 0)
 		e.mu.Unlock()
@@ -358,6 +356,7 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 
 	for _, seg := range allSegments {
 		e.unregisterSegmentIndexes(seg.ID)
+		delete(e.segmentMap, seg.ID)
 	}
 
 	sort.Slice(allIndices, func(i, j int) bool {
@@ -369,6 +368,7 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 	}
 
 	e.segments = append(e.segments, newSeg)
+	e.segmentMap[newSeg.ID] = newSeg
 	e.segmentLevels = append(e.segmentLevels, 1)
 	e.registerSegmentIndexes(newSeg, 1)
 
