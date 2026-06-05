@@ -27,10 +27,10 @@ func TestRegisterSegmentIndexesBloomError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建引擎失败: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// 写入数据并刷盘以创建 segment
-	if err := eng.Write("key1", map[string]common.Value{
+	if err := eng.Write(crKey1, map[string]common.Value{
 		colName: common.NewString("value1"),
 	}); err != nil {
 		t.Fatalf("写入数据失败: %v", err)
@@ -99,7 +99,7 @@ func TestOpenWALTruncateErrorPerm(t *testing.T) {
 	if err := os.Chmod(walPath, 0444); err != nil {
 		t.Fatalf("修改文件权限失败: %v", err)
 	}
-	defer os.Chmod(walPath, 0644) // 恢复权限以便清理
+	defer func() { _ = os.Chmod(walPath, 0644) }() // 恢复权限以便清理
 
 	// OpenWAL 应该在 Truncate 时失败
 	_, _, err = OpenWAL(walPath)
@@ -134,7 +134,7 @@ func TestOpenWALSeekError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开 WAL 失败: %v", err)
 	}
-	defer openedWAL.Close()
+	defer func() { _ = openedWAL.Close() }()
 
 	if len(records) != 1 {
 		t.Errorf("期望 1 条记录，得到 %d 条", len(records))
@@ -157,7 +157,7 @@ func TestWriteBatchSerializeError(t *testing.T) {
 
 	rows := []WriteRow{
 		{
-			Key: "key1",
+			Key: crKey1,
 			Values: map[string]common.Value{
 				colName: common.NewString("value1"),
 			},
@@ -178,14 +178,14 @@ func TestWriteBatchMemPutError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建引擎失败: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	// 冻结 activeMem，使 Put 返回 ErrReadOnly
 	eng.activeMem.Freeze()
 
 	rows := []WriteRow{
 		{
-			Key: "key1",
+			Key: crKey1,
 			Values: map[string]common.Value{
 				colName: common.NewString("value1"),
 			},
@@ -251,7 +251,7 @@ func TestGetColumnValueFromDecodedOutOfRange(t *testing.T) {
 		Columns: []EncodedColumn{
 			{Type: common.TypeString, RowCount: 1},
 		},
-		Keys: []string{"key1"},
+		Keys: []string{crKey1},
 	}
 
 	// 创建一个只包含一列的 decodedColumn 切片
@@ -272,7 +272,7 @@ func TestGetColumnValueOutOfRange(t *testing.T) {
 		Columns: []EncodedColumn{
 			{Type: common.TypeString, RowCount: 1},
 		},
-		Keys: []string{"key1"},
+		Keys: []string{crKey1},
 	}
 
 	// 使用越界的 colIdx
@@ -292,7 +292,7 @@ func TestTryCleanWALStatError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建引擎失败: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	sched := NewScheduler(eng, SchedulerConfig{
 		FlushInterval:     time.Hour,
@@ -307,7 +307,7 @@ func TestTryCleanWALStatError(t *testing.T) {
 	if err := os.MkdirAll(noPermDir, 0000); err != nil {
 		t.Fatalf("创建无权限目录失败: %v", err)
 	}
-	defer os.Chmod(noPermDir, 0755) // 恢复权限以便清理
+	defer func() { _ = os.Chmod(noPermDir, 0755) }() // 恢复权限以便清理
 
 	eng.mu.Lock()
 	originalWALPath := eng.wal.path
@@ -342,7 +342,7 @@ func TestTryCleanWALRemoveError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建引擎失败: %v", err)
 	}
-	defer eng.Close()
+	defer func() { _ = eng.Close() }()
 
 	sched := NewScheduler(eng, SchedulerConfig{
 		FlushInterval:     time.Hour,
@@ -362,7 +362,7 @@ func TestTryCleanWALRemoveError(t *testing.T) {
 	if err := os.Chmod(dir, 0555); err != nil {
 		t.Fatalf("修改目录权限失败: %v", err)
 	}
-	defer os.Chmod(dir, 0755) // 恢复权限以便清理
+	defer func() { _ = os.Chmod(dir, 0755) }() // 恢复权限以便清理
 
 	err = sched.tryCleanWAL()
 	if err == nil {
