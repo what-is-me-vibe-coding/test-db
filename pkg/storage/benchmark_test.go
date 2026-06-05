@@ -346,7 +346,7 @@ func BenchmarkCompress(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = Compress(data)
+		_, _ = Compress(data)
 	}
 	b.ReportAllocs()
 }
@@ -356,7 +356,7 @@ func BenchmarkDecompress(b *testing.B) {
 	for i := range data {
 		data[i] = byte(i % 256)
 	}
-	compressed := Compress(data)
+	compressed, _ := Compress(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
