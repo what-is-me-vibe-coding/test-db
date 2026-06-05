@@ -318,3 +318,63 @@ func TestCompactorWithDifferentDataTypes(t *testing.T) {
 
 	verifyCompactedSegment(t, newSeg, 40, 5)
 }
+
+// TestCompactionDeduplication 测试 Compaction 合并时对同一 key 的去重
+func TestCompactionDeduplication(t *testing.T) {
+	dir, err := os.MkdirTemp("", "compaction_dedup_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+	eng := setupEngine(t, dir, 64<<20)
+
+	// L0: 写入 key "a"=1, "b"=2
+	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
+	if err := eng.Flush(cols); err != nil {
+		t.Fatal(err)
+	}
+
+	// L0: 覆盖 key "a"=100, 新增 "c"=3
+	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(100)})
+	_ = eng.Write("c", map[string]common.Value{colVal: common.NewInt64(3)})
+	if err := eng.Flush(cols); err != nil {
+		t.Fatal(err)
+	}
+
+	// Compact
+	if err := eng.Compact(cols); err != nil {
+		t.Fatal(err)
+	}
+
+	// 验证合并后只有 3 行，key "a" 取最新值 100
+	if eng.SegmentCount() != 1 {
+		t.Fatalf("expected 1 segment, got %d", eng.SegmentCount())
+	}
+
+	results := eng.Scan("a", "c")
+	if len(results) != 3 {
+		t.Fatalf("expected 3 rows after dedup, got %d", len(results))
+	}
+
+	// 验证 key "a" 的值是最新版本
+	for _, r := range results {
+		if r.Key == "a" {
+			if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != 100 {
+				t.Errorf("key a: expected val=100 (latest), got val=%d", v.Int64)
+			}
+		}
+		if r.Key == "b" {
+			if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != 2 {
+				t.Errorf("key b: expected val=2, got val=%d", v.Int64)
+			}
+		}
+		if r.Key == "c" {
+			if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != 3 {
+				t.Errorf("key c: expected val=3, got val=%d", v.Int64)
+			}
+		}
+	}
+}
