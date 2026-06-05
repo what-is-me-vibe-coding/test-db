@@ -67,7 +67,7 @@ func TestParseSelectWithMultipleFuncArgs(t *testing.T) {
 	}
 	sel := stmt.(*SelectStatement)
 	fn, ok := sel.Columns[0].Expr.(*FuncExpr)
-	if !ok || fn.Name != "coalesce" || len(fn.Args) != 2 {
+	if !ok || fn.Name != "coalesce" || len(fn.Args) != 2 { //nolint:goconst
 		t.Errorf("expected coalesce with 2 args, got %v", sel.Columns[0].Expr)
 	}
 }

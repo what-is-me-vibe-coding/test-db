@@ -211,7 +211,7 @@ func makeCollectAggTests() []collectAggTestCase {
 			&FuncExpr{Name: testFuncAbs, Args: []Expression{&ColumnExpr{Name: testColAge}}},
 			0, nil},
 		{"嵌套函数中的聚合",
-			&FuncExpr{Name: "coalesce",
+			&FuncExpr{Name: "coalesce", //nolint:goconst
 				Args: []Expression{&FuncExpr{Name: testFuncMin, Args: []Expression{&ColumnExpr{Name: testColAge}}}}},
 			1, []AggregateFunc{AggMin}},
 		{"无聚合的列表达式",

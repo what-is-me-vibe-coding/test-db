@@ -81,7 +81,7 @@ func TestHandleWriteSuccess(t *testing.T) {
 func TestHandleWriteTableNotExist(t *testing.T) {
 	srv := newTestServer(t)
 	resp, err := srv.handleWrite(&WriteRequest{
-		Table: "nonexistent",
+		Table: "nonexistent", //nolint:goconst
 		Rows:  []map[string]interface{}{{"id": 1}},
 	})
 	if err != nil {
