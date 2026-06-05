@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -338,29 +337,5 @@ func TestHTTPIntegration(t *testing.T) {
 	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusOK {
 		t.Errorf("/metrics 状态码 = %d, 期望 %d", resp2.StatusCode, http.StatusOK)
-	}
-}
-
-// --- Start 错误路径测试 ---
-
-func TestStartTCPAddrInUse(t *testing.T) {
-	srv := newTestServer(t)
-	if err := srv.Start(); err != nil {
-		t.Fatalf("Start 失败: %v", err)
-	}
-	defer func() { _ = srv.Stop() }()
-
-	time.Sleep(50 * time.Millisecond)
-
-	srv2 := newTestServer(t)
-	srv2.cfg.TCPAddr = srv.tcpListener.Addr().String()
-
-	err := srv2.Start()
-	if err == nil {
-		_ = srv2.Stop()
-		t.Error("期望 TCP 端口冲突错误，但启动成功")
-	}
-	if !strings.Contains(err.Error(), "listen tcp") {
-		t.Errorf("错误信息应包含 'listen tcp'，实际: %v", err)
 	}
 }

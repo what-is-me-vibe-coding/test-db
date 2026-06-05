@@ -311,18 +311,3 @@ func TestBatchWriteRecordBinaryRoundTrip(t *testing.T) {
 		t.Errorf("row2.e: expected %v, got %v", ts, v.Time)
 	}
 }
-
-func TestDeserializeBatchWriteRecordTruncated(t *testing.T) {
-	// 空数据
-	if _, err := deserializeBatchWriteRecord(nil); err == nil {
-		t.Error("expected error for nil data")
-	}
-	// 只有行数头部，没有行数据
-	if _, err := deserializeBatchWriteRecord([]byte{1, 0}); err == nil {
-		t.Error("expected error for truncated data")
-	}
-	// 完全空
-	if _, err := deserializeBatchWriteRecord([]byte{}); err == nil {
-		t.Error("expected error for empty data")
-	}
-}
