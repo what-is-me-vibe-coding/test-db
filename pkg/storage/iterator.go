@@ -64,24 +64,43 @@ type segmentIterator struct {
 	started     bool
 	finished    bool
 	decodedCols []decodedColumn
+	decoded     bool
 }
 
 // newSegmentIterator creates an iterator over a Segment for the given range.
+// Column decoding is deferred until the first row is accessed, avoiding
+// unnecessary work for segments that are skipped by index pruning.
 func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string) *segmentIterator {
-	decodedCols, err := seg.decodeAllColumns()
 	return &segmentIterator{
-		seg:         seg,
-		colMeta:     colMeta,
-		start:       start,
-		end:         end,
-		rowIdx:      -1,
-		decodedCols: decodedCols,
-		err:         err,
+		seg:     seg,
+		colMeta: colMeta,
+		start:   start,
+		end:     end,
+		rowIdx:  -1,
 	}
+}
+
+// ensureDecoded lazily decodes all columns on first access.
+func (it *segmentIterator) ensureDecoded() {
+	if it.decoded {
+		return
+	}
+	it.decoded = true
+	decodedCols, err := it.seg.decodeAllColumns()
+	if err != nil {
+		it.err = err
+		return
+	}
+	it.decodedCols = decodedCols
 }
 
 func (it *segmentIterator) Next() bool {
 	if it.finished || it.err != nil {
+		return false
+	}
+
+	it.ensureDecoded()
+	if it.err != nil {
 		return false
 	}
 
