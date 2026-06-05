@@ -496,3 +496,64 @@ func TestEngineWriteOverwriteKey(t *testing.T) {
 		t.Errorf("expected 200, got %d", row.Columns[colVal].Int64)
 	}
 }
+
+// TestEngineRegisterSegmentIndexesBloomFilter verifies that segments with bloom
+// filters have their bloom indexes properly registered after flush and after
+// reopening the engine.
+func TestEngineRegisterSegmentIndexesBloomFilter(t *testing.T) {
+	dir := t.TempDir()
+
+	eng, err := NewEngine(EngineConfig{DataDir: dir})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	_ = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write("key2", map[string]common.Value{colVal: common.NewInt64(2)})
+	_ = eng.Write("key3", map[string]common.Value{colVal: common.NewInt64(3)})
+
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	// Verify the segment has a bloom filter
+	segs := eng.Segments()
+	if len(segs) != 1 {
+		t.Fatalf("expected 1 segment, got %d", len(segs))
+	}
+	if len(segs[0].Footer.BloomFilter) == 0 {
+		t.Error("expected segment to have bloom filter data")
+	}
+
+	// Verify point queries work (using bloom filter)
+	row, ok := eng.Get("key1")
+	if !ok {
+		t.Error("key1 not found")
+	} else if row.Columns[colVal].Int64 != 1 {
+		t.Errorf("key1: expected 1, got %d", row.Columns[colVal].Int64)
+	}
+
+	if err := eng.Close(); err != nil {
+		t.Fatalf("close engine: %v", err)
+	}
+
+	// Reopen and verify bloom filter is re-registered
+	eng2, err := NewEngine(EngineConfig{DataDir: dir})
+	if err != nil {
+		t.Fatalf("reopen engine: %v", err)
+	}
+	defer func() { _ = eng2.Close() }()
+
+	row, ok = eng2.Get("key2")
+	if !ok {
+		t.Error("key2 not found after reload")
+	} else if row.Columns[colVal].Int64 != 2 {
+		t.Errorf("key2 after reload: expected 2, got %d", row.Columns[colVal].Int64)
+	}
+
+	_, ok = eng2.Get("nonexistent_key")
+	if ok {
+		t.Error("expected nonexistent_key to not be found")
+	}
+}
