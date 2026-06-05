@@ -201,3 +201,44 @@ func TestOpenWALWithOnlyGarbageData(t *testing.T) {
 		t.Fatalf("AppendWrite after garbage recovery failed: %v", err)
 	}
 }
+
+// TestAppendBatchMaybeRotateError 测试 AppendBatch 在 maybeRotate 失败时返回错误
+func TestAppendBatchMaybeRotateError(t *testing.T) {
+	if runtime.GOOS == skipWindows {
+		t.Skip("cannot remove open file on Windows")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.wal")
+
+	w, err := CreateWAL(path)
+	if err != nil {
+		t.Fatalf("CreateWAL failed: %v", err)
+	}
+
+	// 设置很小的 maxSize 以触发轮转
+	w.maxSize = 1
+
+	// 写入数据使 offset 超过 maxSize
+	if err := w.AppendWrite([]byte("data")); err != nil {
+		_ = w.Close()
+		t.Fatalf("AppendWrite failed: %v", err)
+	}
+
+	// 删除文件目录项，使 maybeRotate 中的 Rename 失败（文件仍打开可写）
+	if err := os.Remove(path); err != nil {
+		_ = w.Close()
+		t.Fatalf("Remove file: %v", err)
+	}
+
+	// AppendBatch 应该在 maybeRotate 步骤失败
+	records := []BatchRecord{{Type: walTypeWrite, Payload: []byte("batch_data")}}
+	err = w.AppendBatch(records)
+	if err == nil {
+		_ = w.Close()
+		t.Fatal("expected error when AppendBatch triggers maybeRotate with removed file")
+	}
+
+	// WAL 处于不一致状态（轮转失败），忽略 Close 错误
+	_ = w.Close()
+}

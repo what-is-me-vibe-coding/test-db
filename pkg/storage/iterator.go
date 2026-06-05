@@ -2,6 +2,7 @@ package storage
 
 import (
 	"container/heap"
+	"sync"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
@@ -53,6 +54,11 @@ func (it *memTableIterator) Err() error { return it.err }
 func (it *memTableIterator) Close()     { it.pos = -1 }
 
 // segmentIterator iterates over a Segment's rows within a key range.
+// Column decoding is deferred until the first row is accessed, avoiding
+// unnecessary work for segments that are skipped by index pruning.
+// Thread safety: ensureDecoded uses sync.Once for idempotent lazy init;
+// all other methods are NOT safe for concurrent use — callers (e.g. MergeIterator)
+// must ensure serial access.
 type segmentIterator struct {
 	seg         *Segment
 	colMeta     []ColumnMeta
@@ -64,24 +70,44 @@ type segmentIterator struct {
 	started     bool
 	finished    bool
 	decodedCols []decodedColumn
+	decodeOnce  sync.Once
 }
 
 // newSegmentIterator creates an iterator over a Segment for the given range.
+// Column decoding is deferred until the first row is accessed, avoiding
+// unnecessary work for segments that are skipped by index pruning.
 func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string) *segmentIterator {
-	decodedCols, err := seg.decodeAllColumns()
 	return &segmentIterator{
-		seg:         seg,
-		colMeta:     colMeta,
-		start:       start,
-		end:         end,
-		rowIdx:      -1,
-		decodedCols: decodedCols,
-		err:         err,
+		seg:     seg,
+		colMeta: colMeta,
+		start:   start,
+		end:     end,
+		rowIdx:  -1,
 	}
+}
+
+// ensureDecoded lazily decodes all columns on first access.
+// Uses sync.Once to guarantee thread-safe, idempotent initialization.
+// On decode failure, decodedCols is set to an empty (non-nil) slice and err is recorded.
+func (it *segmentIterator) ensureDecoded() {
+	it.decodeOnce.Do(func() {
+		decodedCols, err := it.seg.decodeAllColumns()
+		if err != nil {
+			it.err = err
+			it.decodedCols = make([]decodedColumn, 0)
+			return
+		}
+		it.decodedCols = decodedCols
+	})
 }
 
 func (it *segmentIterator) Next() bool {
 	if it.finished || it.err != nil {
+		return false
+	}
+
+	it.ensureDecoded()
+	if it.err != nil {
 		return false
 	}
 
