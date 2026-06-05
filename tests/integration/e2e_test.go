@@ -8,6 +8,12 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
+const (
+	colName = "name"
+	colAge  = "age"
+	colVal  = "val"
+)
+
 // TestEndToEndWriteFlushScan 测试完整的写入→刷盘→扫描流程
 func TestEndToEndWriteFlushScan(t *testing.T) {
 	dir, err := os.MkdirTemp("", "e2e_test")
@@ -23,18 +29,18 @@ func TestEndToEndWriteFlushScan(t *testing.T) {
 	defer func() { _ = eng.Close() }()
 
 	cols := []storage.ColumnMeta{
-		{ID: 0, Name: "name", Type: common.TypeString},
-		{ID: 1, Name: "age", Type: common.TypeInt64},
+		{ID: 0, Name: colName, Type: common.TypeString},
+		{ID: 1, Name: colAge, Type: common.TypeInt64},
 	}
 
 	// 写入数据
 	_ = eng.Write("user1", map[string]common.Value{
-		"name": common.NewString("alice"),
-		"age":  common.NewInt64(30),
+		colName: common.NewString("alice"),
+		colAge:  common.NewInt64(30),
 	})
 	_ = eng.Write("user2", map[string]common.Value{
-		"name": common.NewString("bob"),
-		"age":  common.NewInt64(25),
+		colName: common.NewString("bob"),
+		colAge:  common.NewInt64(25),
 	})
 
 	// 刷盘
@@ -44,8 +50,8 @@ func TestEndToEndWriteFlushScan(t *testing.T) {
 
 	// 继续写入
 	_ = eng.Write("user3", map[string]common.Value{
-		"name": common.NewString("charlie"),
-		"age":  common.NewInt64(35),
+		colName: common.NewString("charlie"),
+		colAge:  common.NewInt64(35),
 	})
 
 	// 扫描：应包含刷盘和内存中的数据
@@ -60,13 +66,13 @@ func TestEndToEndWriteFlushScan(t *testing.T) {
 		resultMap[r.Key] = r.Value.Columns
 	}
 
-	if v := resultMap["user1"]["name"]; v.Str != "alice" {
+	if v := resultMap["user1"][colName]; v.Str != "alice" {
 		t.Errorf("user1 name: expected alice, got %s", v.Str)
 	}
-	if v := resultMap["user2"]["age"]; v.Int64 != 25 {
+	if v := resultMap["user2"][colAge]; v.Int64 != 25 {
 		t.Errorf("user2 age: expected 25, got %d", v.Int64)
 	}
-	if v := resultMap["user3"]["name"]; v.Str != "charlie" {
+	if v := resultMap["user3"][colName]; v.Str != "charlie" {
 		t.Errorf("user3 name: expected charlie, got %s", v.Str)
 	}
 }
@@ -85,18 +91,18 @@ func TestEndToEndOverwriteAndCompact(t *testing.T) {
 	}
 	defer func() { _ = eng.Close() }()
 
-	cols := []storage.ColumnMeta{{ID: 0, Name: "val", Type: common.TypeInt64}}
+	cols := []storage.ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
 	// 写入初始数据
-	_ = eng.Write("a", map[string]common.Value{"val": common.NewInt64(1)})
-	_ = eng.Write("b", map[string]common.Value{"val": common.NewInt64(2)})
+	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
 	if err := eng.Flush(cols); err != nil {
 		t.Fatal(err)
 	}
 
 	// 覆盖写入
-	_ = eng.Write("a", map[string]common.Value{"val": common.NewInt64(100)})
-	_ = eng.Write("c", map[string]common.Value{"val": common.NewInt64(3)})
+	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(100)})
+	_ = eng.Write("c", map[string]common.Value{colVal: common.NewInt64(3)})
 	if err := eng.Flush(cols); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +117,7 @@ func TestEndToEndOverwriteAndCompact(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to find key a")
 	}
-	if v, exists := row.Columns["val"]; !exists || v.Int64 != 100 {
+	if v, exists := row.Columns[colVal]; !exists || v.Int64 != 100 {
 		t.Errorf("key a: expected val=100, got %d", v.Int64)
 	}
 
@@ -135,8 +141,8 @@ func TestEndToEndCrashRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = eng1.Write("key1", map[string]common.Value{"val": common.NewInt64(42)})
-	_ = eng1.Write("key2", map[string]common.Value{"val": common.NewInt64(84)})
+	_ = eng1.Write("key1", map[string]common.Value{colVal: common.NewInt64(42)})
+	_ = eng1.Write("key2", map[string]common.Value{colVal: common.NewInt64(84)})
 
 	// 模拟崩溃：不调用 Close，直接放弃引擎
 	// WAL 中的数据应该已经 Sync
@@ -152,7 +158,7 @@ func TestEndToEndCrashRecovery(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to find key1 after recovery")
 	}
-	if v, exists := row.Columns["val"]; !exists || v.Int64 != 42 {
+	if v, exists := row.Columns[colVal]; !exists || v.Int64 != 42 {
 		t.Errorf("key1: expected val=42, got %d", v.Int64)
 	}
 
@@ -160,7 +166,7 @@ func TestEndToEndCrashRecovery(t *testing.T) {
 	if !ok {
 		t.Fatal("expected to find key2 after recovery")
 	}
-	if v, exists := row.Columns["val"]; !exists || v.Int64 != 84 {
+	if v, exists := row.Columns[colVal]; !exists || v.Int64 != 84 {
 		t.Errorf("key2: expected val=84, got %d", v.Int64)
 	}
 }

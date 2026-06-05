@@ -319,6 +319,21 @@ func TestCompactorWithDifferentDataTypes(t *testing.T) {
 	verifyCompactedSegment(t, newSeg, 40, 5)
 }
 
+// verifyDedupKeyValue 验证去重后指定 key 的值是否符合预期
+func verifyDedupKeyValue(t *testing.T, results []ScanEntry, key string, wantVal int64) {
+	t.Helper()
+	for _, r := range results {
+		if r.Key != key {
+			continue
+		}
+		if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != wantVal {
+			t.Errorf("key %s: expected val=%d, got val=%d", key, wantVal, v.Int64)
+		}
+		return
+	}
+	t.Errorf("key %s not found in results", key)
+}
+
 // TestCompactionDeduplication 测试 Compaction 合并时对同一 key 的去重
 func TestCompactionDeduplication(t *testing.T) {
 	dir, err := os.MkdirTemp("", "compaction_dedup_test")
@@ -354,27 +369,13 @@ func TestCompactionDeduplication(t *testing.T) {
 		t.Fatalf("expected 1 segment, got %d", eng.SegmentCount())
 	}
 
-	results := eng.Scan("a", "c")
+	results := eng.ScanRange("a", "c")
 	if len(results) != 3 {
 		t.Fatalf("expected 3 rows after dedup, got %d", len(results))
 	}
 
-	// 验证 key "a" 的值是最新版本
-	for _, r := range results {
-		if r.Key == "a" {
-			if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != 100 {
-				t.Errorf("key a: expected val=100 (latest), got val=%d", v.Int64)
-			}
-		}
-		if r.Key == "b" {
-			if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != 2 {
-				t.Errorf("key b: expected val=2, got val=%d", v.Int64)
-			}
-		}
-		if r.Key == "c" {
-			if v, ok := r.Value.Columns[colVal]; !ok || v.Int64 != 3 {
-				t.Errorf("key c: expected val=3, got val=%d", v.Int64)
-			}
-		}
-	}
+	// 验证各 key 的值
+	verifyDedupKeyValue(t, results, "a", 100)
+	verifyDedupKeyValue(t, results, "b", 2)
+	verifyDedupKeyValue(t, results, "c", 3)
 }
