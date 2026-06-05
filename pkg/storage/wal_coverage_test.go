@@ -77,7 +77,7 @@ func TestFindLastCheckpointInvalidPayload(t *testing.T) {
 // records are still processed and invalid ones are skipped.
 func TestFindLastCheckpointMixedValidInvalid(t *testing.T) {
 	validPayload, err := serializeCheckpointRecord(10, []ColumnMeta{
-		{ID: 1, Name: "col1", Type: common.TypeInt64},
+		{ID: 1, Name: crCol1, Type: common.TypeInt64},
 	})
 	if err != nil {
 		t.Fatalf("serializeCheckpointRecord failed: %v", err)
@@ -129,7 +129,7 @@ func TestFindLastCheckpointOnlyInvalidPayloads(t *testing.T) {
 // ignores non-checkpoint record types.
 func TestFindLastCheckpointWithNonCheckpointRecords(t *testing.T) {
 	validPayload, err := serializeCheckpointRecord(5, []ColumnMeta{
-		{ID: 1, Name: "col1", Type: common.TypeInt64},
+		{ID: 1, Name: crCol1, Type: common.TypeInt64},
 	})
 	if err != nil {
 		t.Fatalf("serializeCheckpointRecord failed: %v", err)

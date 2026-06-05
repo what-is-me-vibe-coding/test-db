@@ -350,7 +350,7 @@ func TestExecutorFilterWithFuncExpr(t *testing.T) {
 		Condition: &BinaryExpr{
 			Op:    OpAnd,
 			Left:  &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(25)}},
-			Right: &FuncExpr{Name: "unknown_func", Args: nil},
+			Right: &FuncExpr{Name: testFuncUnknownFunc, Args: nil},
 		},
 	}
 

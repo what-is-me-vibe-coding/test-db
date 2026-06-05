@@ -250,7 +250,7 @@ func TestParseAggFunc(t *testing.T) {
 		{"min", testFuncMin, AggMin},
 		{"max", testFuncMax, AggMax},
 		{"avg", testFuncAvg, AggAvg},
-		{"unknown", "unknown", AggCount},
+		{"unknown", testFuncUnknown, AggCount},
 	}
 
 	for _, tt := range tests {
