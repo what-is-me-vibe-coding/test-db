@@ -140,10 +140,10 @@ func (sl *skipList) scanRange(start, end string) []struct {
 	Key   string
 	Value Row
 } {
-	var result []struct {
+	result := make([]struct {
 		Key   string
 		Value Row
-	}
+	}, 0, 16)
 
 	x := sl.head.forward[0]
 	for x != nil && x.key < start {

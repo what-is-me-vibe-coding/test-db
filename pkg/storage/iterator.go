@@ -2,7 +2,6 @@ package storage
 
 import (
 	"container/heap"
-	"fmt"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
@@ -55,25 +54,27 @@ func (it *memTableIterator) Close()     { it.pos = -1 }
 
 // segmentIterator iterates over a Segment's rows within a key range.
 type segmentIterator struct {
-	seg      *Segment
-	colMeta  []ColumnMeta
-	start    string
-	end      string
-	rowIdx   int
-	current  ScanEntry
-	err      error
-	started  bool
-	finished bool
+	seg         *Segment
+	colMeta     []ColumnMeta
+	start       string
+	end         string
+	rowIdx      int
+	current     ScanEntry
+	err         error
+	started     bool
+	finished    bool
+	decodedCols []decodedColumn
 }
 
 // newSegmentIterator creates an iterator over a Segment for the given range.
 func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string) *segmentIterator {
 	return &segmentIterator{
-		seg:     seg,
-		colMeta: colMeta,
-		start:   start,
-		end:     end,
-		rowIdx:  -1,
+		seg:         seg,
+		colMeta:     colMeta,
+		start:       start,
+		end:         end,
+		rowIdx:      -1,
+		decodedCols: seg.decodeAllColumns(),
 	}
 }
 
@@ -98,10 +99,10 @@ func (it *segmentIterator) Next() bool {
 			return false
 		}
 
-		values, err := it.seg.GetAllColumnValues(uint32(it.rowIdx), it.colMeta)
-		if err != nil {
-			it.err = fmt.Errorf("segment iterator: row %d: %w", it.rowIdx, err)
-			return false
+		values := make(map[string]common.Value, len(it.colMeta))
+		for colIdx, col := range it.colMeta {
+			val := it.seg.getColumnValueFromDecoded(it.decodedCols, uint32(colIdx), uint32(it.rowIdx))
+			values[col.Name] = val
 		}
 
 		it.current = ScanEntry{
@@ -316,7 +317,9 @@ func (it *sliceIterator) Close()     { it.pos = -1 }
 // buildScanIterators creates iterators for all data sources in priority order.
 // Order: segments (lowest priority) → immutable memtables → active memtable (highest).
 func (e *Engine) buildScanIterators(start, end string) []ScanIterator {
-	var iters []ScanIterator
+	// 预分配迭代器切片容量
+	capacity := len(e.segments) + len(e.immutable) + 1
+	iters := make([]ScanIterator, 0, capacity)
 
 	for _, seg := range e.segments {
 		if seg.MinKey > end || seg.MaxKey < start {
@@ -346,7 +349,8 @@ func (e *Engine) ScanRange(start, end string) []ScanEntry {
 	mi := NewMergeIterator(iters...)
 	defer mi.Close()
 
-	var results []ScanEntry
+	// 预分配结果切片，减少扩容
+	results := make([]ScanEntry, 0, 64)
 	for mi.Next() {
 		entry := mi.Entry()
 		results = append(results, ScanEntry{
