@@ -226,7 +226,7 @@ func TestEvalExprFuncExprError(t *testing.T) {
 	row := map[string]common.Value{testColID: common.NewInt64(1)}
 	colIdxMap := map[string]int{testColID: 0}
 
-	expr := &FuncExpr{Name: "unknown_func", Args: nil}
+	expr := &FuncExpr{Name: testFuncUnknownFunc, Args: nil}
 	val, err := evalExpr(expr, row, colIdxMap)
 	if err == nil {
 		t.Fatal("expected error for FuncExpr in row eval, got nil")
