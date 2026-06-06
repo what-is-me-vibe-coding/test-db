@@ -1,0 +1,1848 @@
+diff --git a/pkg/query/coverage_executor_aggregate_v2_test.go b/pkg/query/coverage_executor_aggregate_v2_test.go
+new file mode 100644
+index 0000000..dd7e22f
+--- /dev/null
++++ b/pkg/query/coverage_executor_aggregate_v2_test.go
+@@ -0,0 +1,226 @@
++package query
++
++import (
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// TestExecuteAggregate_CountOnData tests COUNT aggregate with data.
++func TestExecuteAggregate_CountOnData(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
++	})
++	ms.addEntry("c", map[string]common.Value{
++		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
++		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	agg := &AggregateNode{
++		Child:   scan,
++		GroupBy: nil,
++		Aggregates: []AggregateExpr{
++			{Func: AggCount, Arg: &StarExpr{}},
++		},
++		schema: []ColumnDef{
++			{Name: testAggCountStar, Type: common.TypeInt64, Nullable: false},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(agg)
++	if err != nil {
++		t.Fatalf("executeAggregate COUNT: %v", err)
++	}
++
++	if len(chunks) == 0 || chunks[0].RowCount() == 0 {
++		t.Fatal("expected at least 1 row")
++	}
++
++	col, _ := chunks[0].GetColumn(0)
++	val := col.GetValue(0)
++	if val.Int64 != 3 {
++		t.Errorf("expected COUNT(*) = 3, got %d", val.Int64)
++	}
++}
++
++// TestExecuteAggregate_SumOnData tests SUM aggregate with data.
++func TestExecuteAggregate_SumOnData(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(90.0),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(20), testColScore: common.NewFloat64(80.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	agg := &AggregateNode{
++		Child:   scan,
++		GroupBy: nil,
++		Aggregates: []AggregateExpr{
++			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
++		},
++		schema: []ColumnDef{
++			{Name: testAggSumScore, Type: common.TypeFloat64, Nullable: true},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(agg)
++	if err != nil {
++		t.Fatalf("executeAggregate SUM: %v", err)
++	}
++
++	if len(chunks) == 0 || chunks[0].RowCount() == 0 {
++		t.Fatal("expected at least 1 row")
++	}
++
++	col, _ := chunks[0].GetColumn(0)
++	val := col.GetValue(0)
++	if val.Float64 != 170.0 {
++		t.Errorf("expected SUM(score) = 170.0, got %g", val.Float64)
++	}
++}
++
++// TestExecuteAggregate_AvgOnData tests AVG aggregate with data.
++func TestExecuteAggregate_AvgOnData(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(90.0),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(20), testColScore: common.NewFloat64(70.0),
++	})
++	ms.addEntry("c", map[string]common.Value{
++		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
++		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(80.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	agg := &AggregateNode{
++		Child:   scan,
++		GroupBy: nil,
++		Aggregates: []AggregateExpr{
++			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
++		},
++		schema: []ColumnDef{
++			{Name: testAggAvgScore, Type: common.TypeFloat64, Nullable: true},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(agg)
++	if err != nil {
++		t.Fatalf("executeAggregate AVG: %v", err)
++	}
++
++	if len(chunks) == 0 || chunks[0].RowCount() == 0 {
++		t.Fatal("expected at least 1 row")
++	}
++
++	col, _ := chunks[0].GetColumn(0)
++	val := col.GetValue(0)
++	expected := (90.0 + 70.0 + 80.0) / 3.0
++	if val.Float64 != expected {
++		t.Errorf("expected AVG(score) = %g, got %g", expected, val.Float64)
++	}
++}
++
++// TestExecuteAggregate_GroupByMultipleGroups tests GROUP BY with multiple groups.
++func TestExecuteAggregate_GroupByMultipleGroups(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++	ms.addEntry("d", map[string]common.Value{
++		testColID: common.NewInt64(4), testColName: common.NewString(testNameDiana),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(85.0),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
++	})
++	ms.addEntry("c", map[string]common.Value{
++		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
++		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	agg := &AggregateNode{
++		Child: scan,
++		GroupBy: []Expression{
++			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
++		},
++		Aggregates: []AggregateExpr{
++			{Func: AggCount, Arg: &StarExpr{}},
++			{Func: AggAvg, Arg: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}},
++		},
++		schema: []ColumnDef{
++			{Name: testColAge, Type: common.TypeInt64, Nullable: true},
++			{Name: testAggCountStar, Type: common.TypeInt64, Nullable: false},
++			{Name: testAggAvgScore, Type: common.TypeFloat64, Nullable: true},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(agg)
++	if err != nil {
++		t.Fatalf("executeAggregate GROUP BY multiple groups: %v", err)
++	}
++
++	totalRows := countRows(chunks)
++	if totalRows != 3 {
++		t.Errorf("expected 3 groups, got %d", totalRows)
++	}
++
++	// Find the group with age=30 (should have count=2)
++	foundGroup30 := false
++	for row := uint32(0); row < chunks[0].RowCount(); row++ {
++		ageCol, _ := chunks[0].GetColumn(0)
++		countCol, _ := chunks[0].GetColumn(1)
++		ageVal := ageCol.GetValue(row)
++		countVal := countCol.GetValue(row)
++		if ageVal.Int64 == 30 {
++			foundGroup30 = true
++			if countVal.Int64 != 2 {
++				t.Errorf("group age=30: expected COUNT=2, got %d", countVal.Int64)
++			}
++		}
++	}
++	if !foundGroup30 {
++		t.Error("expected group with age=30")
++	}
++}
+diff --git a/pkg/query/coverage_executor_v2_test.go b/pkg/query/coverage_executor_v2_test.go
+new file mode 100644
+index 0000000..339a10a
+--- /dev/null
++++ b/pkg/query/coverage_executor_v2_test.go
+@@ -0,0 +1,387 @@
++package query
++
++import (
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
++)
++
++// ============================================================================
++// executeFilter tests
++// ============================================================================
++
++// TestExecuteFilter_EmptyInput tests executeFilter with empty input chunks (no rows).
++func TestExecuteFilter_EmptyInput(t *testing.T) {
++	ms := newMockStorage() // no entries
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	filter := &FilterNode{
++		Child:     scan,
++		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(10)}},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(filter)
++	if err != nil {
++		t.Fatalf("executeFilter empty input: %v", err)
++	}
++
++	totalRows := countRows(chunks)
++	if totalRows != 0 {
++		t.Errorf("expected 0 rows for empty input, got %d", totalRows)
++	}
++}
++
++// TestExecuteFilter_SelectsAllRows tests executeFilter with a condition that selects all rows.
++func TestExecuteFilter_SelectsAllRows(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	// age > 0 selects all rows
++	filter := &FilterNode{
++		Child:     scan,
++		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(0)}},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(filter)
++	if err != nil {
++		t.Fatalf("executeFilter selects all: %v", err)
++	}
++
++	totalRows := countRows(chunks)
++	if totalRows != 2 {
++		t.Errorf("expected 2 rows (all pass filter), got %d", totalRows)
++	}
++}
++
++// TestExecuteFilter_SelectsNoRows tests executeFilter with a condition that selects no rows.
++func TestExecuteFilter_SelectsNoRows(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	// age > 1000 selects no rows
++	filter := &FilterNode{
++		Child:     scan,
++		Condition: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(1000)}},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(filter)
++	if err != nil {
++		t.Fatalf("executeFilter selects none: %v", err)
++	}
++
++	totalRows := countRows(chunks)
++	if totalRows != 0 {
++		t.Errorf("expected 0 rows (none pass filter), got %d", totalRows)
++	}
++}
++
++// TestExecuteFilter_ComplexAndOr tests executeFilter with complex AND/OR conditions.
++func TestExecuteFilter_ComplexAndOr(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++	ms.addEntry("b", map[string]common.Value{
++		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
++		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
++	})
++	ms.addEntry("c", map[string]common.Value{
++		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
++		testColAge: common.NewInt64(35), testColScore: common.NewFloat64(72.0),
++	})
++	ms.addEntry("d", map[string]common.Value{
++		testColID: common.NewInt64(4), testColName: common.NewString(testNameDiana),
++		testColAge: common.NewInt64(28), testColScore: common.NewFloat64(60.0),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	// (age > 25 AND score > 80) OR (age < 26)
++	// alice: (30>25 AND 95.5>80) = true -> selected
++	// bob: (25>25=false) OR (25<26=true) = true -> selected
++	// charlie: (35>25 AND 72>80=false) OR (35<26=false) = false -> not selected
++	// diana: (28>25 AND 60>80=false) OR (28<26=false) = false -> not selected
++	filter := &FilterNode{
++		Child: scan,
++		Condition: &BinaryExpr{
++			Op: OpOr,
++			Left: &BinaryExpr{
++				Op:    OpAnd,
++				Left:  &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(25)}},
++				Right: &BinaryExpr{Op: OpGt, Left: &ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64}, Right: &LiteralExpr{Value: common.NewFloat64(80)}},
++			},
++			Right: &BinaryExpr{Op: OpLt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(26)}},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(filter)
++	if err != nil {
++		t.Fatalf("executeFilter complex AND/OR: %v", err)
++	}
++
++	totalRows := countRows(chunks)
++	if totalRows != 2 {
++		t.Errorf("expected 2 rows (complex AND/OR), got %d", totalRows)
++	}
++}
++
++// ============================================================================
++// executeProject tests
++// ============================================================================
++
++// TestExecuteProject_EmptyInput tests executeProject with empty input chunks.
++func TestExecuteProject_EmptyInput(t *testing.T) {
++	ms := newMockStorage() // no entries
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	project := &ProjectNode{
++		Child: scan,
++		Expressions: []Expression{
++			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
++		},
++		Aliases: []string{testColName},
++		schema: []ColumnDef{
++			{Name: testColName, Type: common.TypeString, Nullable: true},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(project)
++	if err != nil {
++		t.Fatalf("executeProject empty input: %v", err)
++	}
++
++	totalRows := countRows(chunks)
++	if totalRows != 0 {
++		t.Errorf("expected 0 rows for empty input, got %d", totalRows)
++	}
++}
++
++// TestExecuteProject_TypeCoercion tests executeProject with expression that requires type coercion.
++func TestExecuteProject_TypeCoercion(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	// Project Int64 column into Float64 output schema (triggers coerceValue)
++	project := &ProjectNode{
++		Child: scan,
++		Expressions: []Expression{
++			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
++		},
++		Aliases: []string{"age_float"},
++		schema: []ColumnDef{
++			{Name: "age_float", Type: common.TypeFloat64, Nullable: true},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(project)
++	if err != nil {
++		t.Fatalf("executeProject type coercion: %v", err)
++	}
++
++	if len(chunks) == 0 || chunks[0].RowCount() == 0 {
++		t.Fatal("expected at least 1 row")
++	}
++
++	col, _ := chunks[0].GetColumn(0)
++	val := col.GetValue(0)
++	if val.Float64 != 30.0 {
++		t.Errorf("expected 30.0 (coerced int->float), got %g", val.Float64)
++	}
++}
++
++// TestExecuteProject_MultipleExpressions tests executeProject with multiple expressions.
++func TestExecuteProject_MultipleExpressions(t *testing.T) {
++	ms := newMockStorage()
++	ms.addEntry("a", map[string]common.Value{
++		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
++		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
++	})
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColName, testColAge, testColScore},
++		schema:  buildTestSchema(),
++	}
++
++	project := &ProjectNode{
++		Child: scan,
++		Expressions: []Expression{
++			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
++			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
++			&ResolvedColumnExpr{Name: testColScore, Idx: 3, typ: common.TypeFloat64},
++		},
++		Aliases: []string{testColName, testColAge, testColScore},
++		schema: []ColumnDef{
++			{Name: testColName, Type: common.TypeString, Nullable: true},
++			{Name: testColAge, Type: common.TypeInt64, Nullable: true},
++			{Name: testColScore, Type: common.TypeFloat64, Nullable: true},
++		},
++	}
++
++	exec := NewExecutor(ms)
++	chunks, err := exec.Execute(project)
++	if err != nil {
++		t.Fatalf("executeProject multiple expressions: %v", err)
++	}
++
++	if len(chunks) == 0 || chunks[0].RowCount() == 0 {
++		t.Fatal("expected at least 1 row")
++	}
++
++	if chunks[0].ColumnCount() != 3 {
++		t.Errorf("expected 3 columns, got %d", chunks[0].ColumnCount())
++	}
++
++	nameCol, _ := chunks[0].GetColumn(0)
++	if nameCol.GetValue(0).Str != testNameAlice {
++		t.Errorf("expected name='alice', got %q", nameCol.GetValue(0).Str)
++	}
++
++	ageCol, _ := chunks[0].GetColumn(1)
++	if ageCol.GetValue(0).Int64 != 30 {
++		t.Errorf("expected age=30, got %d", ageCol.GetValue(0).Int64)
++	}
++
++	scoreCol, _ := chunks[0].GetColumn(2)
++	if scoreCol.GetValue(0).Float64 != 95.5 {
++		t.Errorf("expected score=95.5, got %g", scoreCol.GetValue(0).Float64)
++	}
++}
++
++// ============================================================================
++// projectChunk tests
++// ============================================================================
++
++// TestProjectChunk_LiteralExpression tests projectChunk with a literal expression.
++func TestProjectChunk_LiteralExpression(t *testing.T) {
++	inputSchema := []ColumnDef{
++		{Name: testColID, Type: common.TypeInt64, Nullable: false},
++	}
++	outputSchema := []ColumnDef{
++		{Name: "constant", Type: common.TypeInt64, Nullable: false},
++	}
++	colIdxMap := buildColIdxMapFromSchema(inputSchema)
++
++	chunk := storage.NewChunk(defaultChunkSize)
++	col := storage.NewColumnVector(0, common.TypeInt64, 2)
++	_ = col.Append(common.NewInt64(1))
++	_ = col.Append(common.NewInt64(2))
++	_ = chunk.AddColumn(col)
++
++	// Project a constant literal value
++	exprs := []Expression{&LiteralExpr{Value: common.NewInt64(42)}}
++	output, err := projectChunk(chunk, exprs, inputSchema, outputSchema, colIdxMap)
++	if err != nil {
++		t.Fatalf("projectChunk literal expr: %v", err)
++	}
++	if output.RowCount() != 2 {
++		t.Errorf("expected 2 rows, got %d", output.RowCount())
++	}
++
++	col0, _ := output.GetColumn(0)
++	// Both rows should have the literal value 42
++	if col0.GetValue(0).Int64 != 42 {
++		t.Errorf("expected literal value 42 at row 0, got %d", col0.GetValue(0).Int64)
++	}
++	if col0.GetValue(1).Int64 != 42 {
++		t.Errorf("expected literal value 42 at row 1, got %d", col0.GetValue(1).Int64)
++	}
++}
++
++// TestProjectChunk_ColumnReferenceExpression tests projectChunk with a column reference expression.
++func TestProjectChunk_ColumnReferenceExpression(t *testing.T) {
++	inputSchema := []ColumnDef{
++		{Name: testColID, Type: common.TypeInt64, Nullable: false},
++		{Name: testColName, Type: common.TypeString, Nullable: true},
++	}
++	outputSchema := []ColumnDef{
++		{Name: testColName, Type: common.TypeString, Nullable: true},
++	}
++	colIdxMap := buildColIdxMapFromSchema(inputSchema)
++
++	chunk := storage.NewChunk(defaultChunkSize)
++	idCol := storage.NewColumnVector(0, common.TypeInt64, 2)
++	_ = idCol.Append(common.NewInt64(1))
++	_ = idCol.Append(common.NewInt64(2))
++	_ = chunk.AddColumn(idCol)
++
++	nameCol := storage.NewColumnVector(1, common.TypeString, 2)
++	_ = nameCol.Append(common.NewString(testNameAlice))
++	_ = nameCol.Append(common.NewString(testNameBob))
++	_ = chunk.AddColumn(nameCol)
++
++	// Project the name column using ResolvedColumnExpr
++	exprs := []Expression{&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString}}
++	output, err := projectChunk(chunk, exprs, inputSchema, outputSchema, colIdxMap)
++	if err != nil {
++		t.Fatalf("projectChunk column ref: %v", err)
++	}
++	if output.RowCount() != 2 {
++		t.Errorf("expected 2 rows, got %d", output.RowCount())
++	}
++
++	col0, _ := output.GetColumn(0)
++	if col0.GetValue(0).Str != testNameAlice {
++		t.Errorf("expected 'alice' at row 0, got %q", col0.GetValue(0).Str)
++	}
++	if col0.GetValue(1).Str != testNameBob {
++		t.Errorf("expected 'bob' at row 1, got %q", col0.GetValue(1).Str)
++	}
++}
+diff --git a/pkg/server/coverage_handler_v2_test.go b/pkg/server/coverage_handler_v2_test.go
+new file mode 100644
+index 0000000..0b85f74
+--- /dev/null
++++ b/pkg/server/coverage_handler_v2_test.go
+@@ -0,0 +1,173 @@
++package server
++
++import (
++	"encoding/json"
++	"testing"
++)
++
++// --- handleQueryPacket: happy path with valid query request ---
++
++func TestHandleQueryPacket_ValidQuery(t *testing.T) {
++	srv := newTestServerWithTable(t)
++	defer func() { _ = srv.Stop() }()
++
++	payload, _ := json.Marshal(QueryRequest{SQL: testSelectAll})
++	pkt := NewPacket(PacketQuery, payload)
++
++	resp, err := srv.handleQueryPacket(pkt)
++	if err != nil {
++		t.Fatalf("handleQueryPacket 失败: %v", err)
++	}
++	if resp == nil {
++		t.Fatal("handleQueryPacket 返回 nil 响应包")
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != 0 {
++		t.Errorf("响应 Code = %d, 期望 0; Message = %q", response.Code, response.Message)
++	}
++}
++
++// --- handleWritePacket: happy path with valid write request ---
++
++func TestHandleWritePacket_ValidWrite(t *testing.T) {
++	srv := newTestServerWithTable(t)
++	defer func() { _ = srv.Stop() }()
++
++	payload, _ := json.Marshal(WriteRequest{
++		Table: testTable,
++		Rows: []map[string]interface{}{
++			{"id": float64(1), testColName: testName},
++		},
++	})
++	pkt := NewPacket(PacketWrite, payload)
++
++	resp, err := srv.handleWritePacket(pkt)
++	if err != nil {
++		t.Fatalf("handleWritePacket 失败: %v", err)
++	}
++	if resp == nil {
++		t.Fatal("handleWritePacket 返回 nil 响应包")
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != 0 {
++		t.Errorf("响应 Code = %d, 期望 0; Message = %q", response.Code, response.Message)
++	}
++	if response.Rows != 1 {
++		t.Errorf("写入行数 = %d, 期望 1", response.Rows)
++	}
++}
++
++// --- handlePing: returns correct response with "pong" message ---
++
++func TestHandlePing_ReturnsPong(t *testing.T) {
++	srv := newTestServer(t)
++	defer func() { _ = srv.Stop() }()
++
++	resp, err := srv.handlePing()
++	if err != nil {
++		t.Fatalf("handlePing 失败: %v", err)
++	}
++	if resp == nil {
++		t.Fatal("handlePing 返回 nil 响应包")
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析心跳响应失败: %v", err)
++	}
++	if response.Code != 0 {
++		t.Errorf("响应 Code = %d, 期望 0", response.Code)
++	}
++	if response.Message != msgPong {
++		t.Errorf("响应 Message = %q, 期望 %q", response.Message, msgPong)
++	}
++}
++
++// --- handlePacket: default case with unknown packet type ---
++
++func TestHandlePacket_UnknownTypeDefault(t *testing.T) {
++	srv := newTestServer(t)
++	defer func() { _ = srv.Stop() }()
++
++	// Use a packet type that doesn't match any known type
++	pkt := NewPacket(99, nil)
++	resp, err := srv.handlePacket(pkt)
++	if err == nil {
++		t.Error("handlePacket(未知类型) 期望返回错误, 得到 nil")
++	}
++	if resp != nil {
++		t.Errorf("handlePacket(未知类型) 响应 = %v, 期望 nil", resp)
++	}
++}
++
++// --- handlePacket: routes to handleQueryPacket ---
++
++func TestHandlePacket_QueryRoute(t *testing.T) {
++	srv := newTestServerWithTable(t)
++	defer func() { _ = srv.Stop() }()
++
++	payload, _ := json.Marshal(QueryRequest{SQL: testSelectAll})
++	pkt := NewPacket(PacketQuery, payload)
++
++	resp, err := srv.handlePacket(pkt)
++	if err != nil {
++		t.Fatalf("handlePacket(Query) 失败: %v", err)
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++}
++
++// --- handlePacket: routes to handleWritePacket ---
++
++func TestHandlePacket_WriteRoute(t *testing.T) {
++	srv := newTestServerWithTable(t)
++	defer func() { _ = srv.Stop() }()
++
++	payload, _ := json.Marshal(WriteRequest{
++		Table: testTable,
++		Rows:  []map[string]interface{}{{"id": float64(1), testColName: testName}},
++	})
++	pkt := NewPacket(PacketWrite, payload)
++
++	resp, err := srv.handlePacket(pkt)
++	if err != nil {
++		t.Fatalf("handlePacket(Write) 失败: %v", err)
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++}
++
++// --- handlePacket: routes to handlePing ---
++
++func TestHandlePacket_PingRoute(t *testing.T) {
++	srv := newTestServer(t)
++	defer func() { _ = srv.Stop() }()
++
++	pkt := NewPacket(PacketPing, nil)
++	resp, err := srv.handlePacket(pkt)
++	if err != nil {
++		t.Fatalf("handlePacket(Ping) 失败: %v", err)
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++}
+diff --git a/pkg/storage/coverage_low_wal_v2_test.go b/pkg/storage/coverage_low_wal_v2_test.go
+new file mode 100644
+index 0000000..a780bea
+--- /dev/null
++++ b/pkg/storage/coverage_low_wal_v2_test.go
+@@ -0,0 +1,463 @@
++package storage
++
++import (
++	"os"
++	"path/filepath"
++	"runtime"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// ---------------------------------------------------------------------------
++// OpenWAL (76.5%) - seek error path after truncate
++// ---------------------------------------------------------------------------
++
++// TestOpenWALSeekErrorAfterTruncate tests the seek error path in OpenWAL.
++// After a successful Truncate, if Seek fails, OpenWAL should return an error
++// containing "wal seek". We trigger this by creating a symlink to /dev/null,
++// which on Linux can be opened with O_RDWR and Truncate(0) succeeds, but
++// the file is a character device where Seek may behave differently.
++// Note: On Linux, Seek on /dev/null actually succeeds, so this test verifies
++// the Truncate error path instead (which is the more reliably triggerable path).
++func TestOpenWALSeekErrorAfterTruncate(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("seek/truncate error test relies on Linux-specific behavior")
++	}
++
++	dir := t.TempDir()
++	path := filepath.Join(dir, "test.wal")
++
++	// Create a symlink to /dev/null. On Linux, /dev/null can be opened with O_RDWR,
++	// but f.Truncate returns EINVAL for non-regular files.
++	if err := os.Symlink("/dev/null", path); err != nil {
++		t.Fatalf("Symlink to /dev/null failed: %v", err)
++	}
++
++	_, _, err := OpenWAL(path)
++	if err == nil {
++		t.Fatal("expected error when opening /dev/null symlink as WAL, got nil")
++	}
++}
++
++// TestOpenWALReadOnlyFileOpenError tests OpenWAL when the file cannot be opened
++// with O_RDWR. We create a directory at the WAL path; opening a directory with
++// O_RDWR should fail.
++func TestOpenWALReadOnlyFileOpenError(t *testing.T) {
++	dir := t.TempDir()
++	walPath := filepath.Join(dir, "test.wal")
++
++	// Create a directory at the WAL path; O_RDWR on a directory fails on Linux
++	if err := os.Mkdir(walPath, 0755); err != nil {
++		t.Fatalf("Mkdir failed: %v", err)
++	}
++
++	_, _, err := OpenWAL(walPath)
++	if err == nil {
++		t.Fatal("expected error when opening directory as WAL, got nil")
++	}
++}
++
++// verifyWALRecords 验证 WAL 记录的数量和内容
++func verifyWALRecords(t *testing.T, records []RawRecord, wantLen int, wantType byte, wantPayload string, idx int) {
++	t.Helper()
++	if len(records) != wantLen {
++		t.Fatalf("expected %d records, got %d", wantLen, len(records))
++	}
++	if records[idx].Type != wantType {
++		t.Errorf("record %d: type=%d, want %d", idx, records[idx].Type, wantType)
++	}
++	if string(records[idx].Payload) != wantPayload {
++		t.Errorf("record %d: payload=%q, want %q", idx, string(records[idx].Payload), wantPayload)
++	}
++}
++
++// TestOpenWALWithRecordsAndAppend verifies OpenWAL returns a WAL that can append
++// new records after recovering existing ones.
++func TestOpenWALWithRecordsAndAppend(t *testing.T) {
++	dir := t.TempDir()
++	walPath := filepath.Join(dir, "append_after_open.wal")
++
++	// Create WAL and write records
++	w, err := CreateWAL(walPath)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++	_ = w.AppendWrite([]byte("record_a"))
++	_ = w.AppendCheckpoint([]byte("checkpoint_1"))
++	_ = w.Close()
++
++	// Open the WAL and verify records
++	opened, records, err := OpenWAL(walPath)
++	if err != nil {
++		t.Fatalf("OpenWAL failed: %v", err)
++	}
++	defer func() { _ = opened.Close() }()
++
++	verifyWALRecords(t, records, 2, walTypeWrite, "record_a", 0)
++	if records[1].Type != walTypeCheckpoint {
++		t.Errorf("record 1: type=%d, want %d", records[1].Type, walTypeCheckpoint)
++	}
++
++	// Append new record and re-open to verify persistence
++	_ = opened.AppendWrite([]byte("new_record"))
++	_ = opened.Sync()
++	_ = opened.Close()
++
++	opened2, records2, err := OpenWAL(walPath)
++	if err != nil {
++		t.Fatalf("second OpenWAL failed: %v", err)
++	}
++	defer func() { _ = opened2.Close() }()
++
++	verifyWALRecords(t, records2, 3, walTypeWrite, "new_record", 2)
++}
++
++// ---------------------------------------------------------------------------
++// Compress (83.3%) - empty input and round-trip
++// ---------------------------------------------------------------------------
++
++// TestCompressV2EmptyInput verifies Compress returns (nil, nil) for empty input.
++func TestCompressV2EmptyInput(t *testing.T) {
++	result, err := Compress([]byte{})
++	if err != nil {
++		t.Fatalf("Compress([]byte{}) returned unexpected error: %v", err)
++	}
++	if result != nil {
++		t.Errorf("Compress([]byte{}) = %v, want nil", result)
++	}
++}
++
++// TestCompressV2NilInput verifies Compress returns (nil, nil) for nil input.
++func TestCompressV2NilInput(t *testing.T) {
++	result, err := Compress(nil)
++	if err != nil {
++		t.Fatalf("Compress(nil) returned unexpected error: %v", err)
++	}
++	if result != nil {
++		t.Errorf("Compress(nil) = %v, want nil", result)
++	}
++}
++
++// TestCompressV2RoundTrip verifies Compress followed by Decompress recovers original data.
++func TestCompressV2RoundTrip(t *testing.T) {
++	original := []byte("test data for v2 compress round trip verification")
++	compressed, err := Compress(original)
++	if err != nil {
++		t.Fatalf("Compress failed: %v", err)
++	}
++	if compressed == nil {
++		t.Fatal("Compress returned nil for non-empty input")
++	}
++
++	decompressed, err := Decompress(compressed)
++	if err != nil {
++		t.Fatalf("Decompress failed: %v", err)
++	}
++	if string(decompressed) != string(original) {
++		t.Errorf("round-trip mismatch: got %q, want %q", string(decompressed), string(original))
++	}
++}
++
++// ---------------------------------------------------------------------------
++// Decompress (88.9%) - empty input and invalid data
++// ---------------------------------------------------------------------------
++
++// TestDecompressV2EmptyInput verifies Decompress returns (nil, nil) for empty input.
++func TestDecompressV2EmptyInput(t *testing.T) {
++	result, err := Decompress([]byte{})
++	if err != nil {
++		t.Fatalf("Decompress([]byte{}) returned unexpected error: %v", err)
++	}
++	if result != nil {
++		t.Errorf("Decompress([]byte{}) = %v, want nil", result)
++	}
++}
++
++// TestDecompressV2NilInput verifies Decompress returns (nil, nil) for nil input.
++func TestDecompressV2NilInput(t *testing.T) {
++	result, err := Decompress(nil)
++	if err != nil {
++		t.Fatalf("Decompress(nil) returned unexpected error: %v", err)
++	}
++	if result != nil {
++		t.Errorf("Decompress(nil) = %v, want nil", result)
++	}
++}
++
++// TestDecompressV2CorruptedData verifies Decompress returns error for corrupted data.
++func TestDecompressV2CorruptedData(t *testing.T) {
++	_, err := Decompress([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE})
++	if err == nil {
++		t.Fatal("expected error for corrupted compressed data, got nil")
++	}
++}
++
++// TestDecompressV2TruncatedZstdHeader verifies Decompress returns error for
++// data that looks like a zstd frame but is truncated.
++func TestDecompressV2TruncatedZstdHeader(t *testing.T) {
++	// Valid zstd magic number is 0xFD2FB528, but with truncated/corrupted rest
++	_, err := Decompress([]byte{0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x01})
++	if err == nil {
++		t.Fatal("expected error for truncated zstd frame, got nil")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// CompressColumn (85.7%) - nil and empty data
++// ---------------------------------------------------------------------------
++
++// TestCompressColumnV2NilEncodedColumn verifies CompressColumn returns error for nil EncodedColumn.
++func TestCompressColumnV2NilEncodedColumn(t *testing.T) {
++	err := CompressColumn(nil)
++	if err == nil {
++		t.Fatal("expected error for nil EncodedColumn in CompressColumn, got nil")
++	}
++}
++
++// TestCompressColumnV2EmptyData verifies CompressColumn with empty Data field.
++// Compress([]byte{}) returns (nil, nil), so the column's Data should become nil.
++func TestCompressColumnV2EmptyData(t *testing.T) {
++	enc := &EncodedColumn{
++		Encoding: EncodingPlain,
++		Type:     common.TypeInt64,
++		RowCount: 0,
++		Data:     []byte{},
++	}
++	err := CompressColumn(enc)
++	if err != nil {
++		t.Fatalf("CompressColumn with empty data returned unexpected error: %v", err)
++	}
++	if enc.Data != nil {
++		t.Errorf("expected Data to be nil after compressing empty data, got %v", enc.Data)
++	}
++}
++
++// TestCompressColumnV2WithData verifies CompressColumn with actual data compresses correctly.
++func TestCompressColumnV2WithData(t *testing.T) {
++	enc := &EncodedColumn{
++		Encoding: EncodingPlain,
++		Type:     common.TypeInt64,
++		RowCount: 10,
++		Data:     make([]byte, 80), // 10 int64s
++	}
++	for i := range 10 {
++		enc.Data[i*8] = byte(i)
++	}
++
++	err := CompressColumn(enc)
++	if err != nil {
++		t.Fatalf("CompressColumn failed: %v", err)
++	}
++	if len(enc.Data) == 0 {
++		t.Fatal("expected compressed data to be non-empty")
++	}
++}
++
++// TestDecompressColumnV2NilEncodedColumn verifies DecompressColumn returns error for nil EncodedColumn.
++func TestDecompressColumnV2NilEncodedColumn(t *testing.T) {
++	err := DecompressColumn(nil)
++	if err == nil {
++		t.Fatal("expected error for nil EncodedColumn in DecompressColumn, got nil")
++	}
++}
++
++// TestDecompressColumnV2EmptyData verifies DecompressColumn with empty Data returns nil without error.
++func TestDecompressColumnV2EmptyData(t *testing.T) {
++	enc := &EncodedColumn{
++		Encoding: EncodingPlain,
++		Type:     common.TypeInt64,
++		RowCount: 0,
++		Data:     []byte{},
++	}
++	err := DecompressColumn(enc)
++	if err != nil {
++		t.Fatalf("DecompressColumn with empty data returned unexpected error: %v", err)
++	}
++	if enc.Data != nil {
++		t.Errorf("expected Data to remain nil after decompressing empty data, got %v", enc.Data)
++	}
++}
++
++// TestCompressDecompressColumnV2RoundTrip verifies CompressColumn/DecompressColumn round-trip.
++func TestCompressDecompressColumnV2RoundTrip(t *testing.T) {
++	original := []byte("column data for round trip test")
++	enc := &EncodedColumn{
++		Encoding: EncodingPlain,
++		Type:     common.TypeString,
++		RowCount: 1,
++		Data:     original,
++	}
++
++	if err := CompressColumn(enc); err != nil {
++		t.Fatalf("CompressColumn failed: %v", err)
++	}
++	if err := DecompressColumn(enc); err != nil {
++		t.Fatalf("DecompressColumn failed: %v", err)
++	}
++	if string(enc.Data) != string(original) {
++		t.Errorf("round-trip mismatch: got %q, want %q", string(enc.Data), string(original))
++	}
++}
++
++// ---------------------------------------------------------------------------
++// EncodeColumn (85.7%) - edge cases
++// ---------------------------------------------------------------------------
++
++// TestEncodeColumnV2EmptyValues tests EncodeColumn with empty values slice.
++func TestEncodeColumnV2EmptyValues(t *testing.T) {
++	enc, err := EncodeColumn(common.TypeInt64, []int64{}, 0, nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with empty int64 slice failed: %v", err)
++	}
++	if enc.RowCount != 0 {
++		t.Errorf("expected RowCount=0, got %d", enc.RowCount)
++	}
++	if enc.Encoding != EncodingPlain {
++		t.Errorf("expected Plain encoding, got %v", enc.Encoding)
++	}
++}
++
++// TestEncodeColumnV2EmptyFloat64 tests EncodeColumn with empty float64 slice.
++func TestEncodeColumnV2EmptyFloat64(t *testing.T) {
++	enc, err := EncodeColumn(common.TypeFloat64, []float64{}, 0, nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with empty float64 slice failed: %v", err)
++	}
++	if enc.RowCount != 0 {
++		t.Errorf("expected RowCount=0, got %d", enc.RowCount)
++	}
++}
++
++// TestEncodeColumnV2EmptyString tests EncodeColumn with empty string slice.
++func TestEncodeColumnV2EmptyString(t *testing.T) {
++	enc, err := EncodeColumn(common.TypeString, []string{}, 0, nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with empty string slice failed: %v", err)
++	}
++	if enc.RowCount != 0 {
++		t.Errorf("expected RowCount=0, got %d", enc.RowCount)
++	}
++}
++
++// TestEncodeColumnV2BoolType tests EncodeColumn with bool type selects Bitmap encoding.
++func TestEncodeColumnV2BoolType(t *testing.T) {
++	bools := []uint64{1, 0, 1, 1, 0}
++	enc, err := EncodeColumn(common.TypeBool, bools, uint32(len(bools)), nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with bool type failed: %v", err)
++	}
++	if enc.Encoding != EncodingBitmap {
++		t.Errorf("expected Bitmap encoding for bool type, got %v", enc.Encoding)
++	}
++	if enc.RowCount != uint32(len(bools)) {
++		t.Errorf("expected RowCount=%d, got %d", len(bools), enc.RowCount)
++	}
++}
++
++// TestEncodeColumnV2StringType tests EncodeColumn with string type selects Dict encoding.
++func TestEncodeColumnV2StringType(t *testing.T) {
++	strs := []string{"alpha", "beta", "gamma"}
++	enc, err := EncodeColumn(common.TypeString, strs, uint32(len(strs)), nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with string type failed: %v", err)
++	}
++	if enc.Encoding != EncodingDict {
++		t.Errorf("expected Dict encoding for string type, got %v", enc.Encoding)
++	}
++}
++
++// TestEncodeColumnV2RLEInt64 tests EncodeColumn with RLE-eligible int64 data.
++func TestEncodeColumnV2RLEInt64(t *testing.T) {
++	// Create data with many repeated values to trigger RLE encoding
++	ints := make([]int64, 1000)
++	for i := range ints {
++		ints[i] = int64(i / 100) // 100 runs of 10 identical values each
++	}
++	enc, err := EncodeColumn(common.TypeInt64, ints, uint32(len(ints)), nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with RLE-eligible data failed: %v", err)
++	}
++	if enc.Encoding != EncodingRLE {
++		t.Errorf("expected RLE encoding for highly repetitive int64 data, got %v", enc.Encoding)
++	}
++}
++
++// TestEncodeColumnV2PlainInt64 tests EncodeColumn with non-RLE int64 data selects Plain encoding.
++func TestEncodeColumnV2PlainInt64(t *testing.T) {
++	ints := []int64{1, 2, 3, 4, 5} // Too few runs to trigger RLE
++	enc, err := EncodeColumn(common.TypeInt64, ints, uint32(len(ints)), nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with non-RLE int64 data failed: %v", err)
++	}
++	if enc.Encoding != EncodingPlain {
++		t.Errorf("expected Plain encoding for non-RLE int64 data, got %v", enc.Encoding)
++	}
++}
++
++// TestEncodeColumnV2Timestamp tests EncodeColumn with timestamp type.
++func TestEncodeColumnV2Timestamp(t *testing.T) {
++	times := []int64{1000000, 2000000, 3000000}
++	enc, err := EncodeColumn(common.TypeTimestamp, times, uint32(len(times)), nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with timestamp type failed: %v", err)
++	}
++	if enc.Encoding != EncodingPlain {
++		t.Errorf("expected Plain encoding for timestamp type, got %v", enc.Encoding)
++	}
++	if enc.RowCount != uint32(len(times)) {
++		t.Errorf("expected RowCount=%d, got %d", len(times), enc.RowCount)
++	}
++}
++
++// TestEncodeColumnV2WithNulls tests EncodeColumn with null bitmap.
++func TestEncodeColumnV2WithNulls(t *testing.T) {
++	ints := []int64{10, 20, 30, 40, 50}
++	nulls := common.NewBitmap(5)
++	nulls.Set(1) // row 1 is null
++	nulls.Set(3) // row 3 is null
++
++	enc, err := EncodeColumn(common.TypeInt64, ints, 5, nulls)
++	if err != nil {
++		t.Fatalf("EncodeColumn with nulls failed: %v", err)
++	}
++	if enc.Nulls == nil {
++		t.Fatal("expected Nulls to be set in encoded column")
++	}
++}
++
++// TestEncodeColumnV2WrongType tests EncodeColumn with mismatched data type.
++func TestEncodeColumnV2WrongType(t *testing.T) {
++	// Pass []string but declare TypeInt64 - should fail at type assertion
++	_, err := EncodeColumn(common.TypeInt64, []string{"not_int64"}, 1, nil)
++	if err == nil {
++		t.Fatal("expected error for type mismatch in EncodeColumn, got nil")
++	}
++}
++
++// TestEncodeColumnV2Float64 tests EncodeColumn with float64 data.
++func TestEncodeColumnV2Float64(t *testing.T) {
++	floats := []float64{1.1, 2.2, 3.3, 4.4, 5.5}
++	enc, err := EncodeColumn(common.TypeFloat64, floats, uint32(len(floats)), nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn with float64 failed: %v", err)
++	}
++	if enc.Encoding != EncodingPlain {
++		t.Errorf("expected Plain encoding for float64, got %v", enc.Encoding)
++	}
++
++	// Verify round-trip through DecodeColumn
++	decoded, _, err := DecodeColumn(enc)
++	if err != nil {
++		t.Fatalf("DecodeColumn failed: %v", err)
++	}
++	decodedFloats, ok := decoded.([]float64)
++	if !ok {
++		t.Fatalf("expected []float64, got %T", decoded)
++	}
++	for i, v := range floats {
++		if decodedFloats[i] != v {
++			t.Errorf("row %d: got %f, want %f", i, decodedFloats[i], v)
++		}
++	}
++}
+diff --git a/tests/integration/e2e_full_test.go b/tests/integration/e2e_full_test.go
+new file mode 100644
+index 0000000..586e10e
+--- /dev/null
++++ b/tests/integration/e2e_full_test.go
+@@ -0,0 +1,357 @@
++package integration
++
++import (
++	"fmt"
++	"os"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
++)
++
++// verifyMultiColRow 验证多类型列行的数据正确性
++func verifyMultiColRow(t *testing.T, row storage.Row, ts time.Time, suffix string) {
++	t.Helper()
++	if v := row.Columns["id"]; v.Int64 != 42 {
++		t.Errorf("id%s: expected 42, got %d", suffix, v.Int64)
++	}
++	if v := row.Columns[colScore]; v.Float64 != 3.14 {
++		t.Errorf("score%s: expected 3.14, got %g", suffix, v.Float64)
++	}
++	if v := row.Columns["label"]; v.Str != "hello" {
++		t.Errorf("label%s: expected hello, got %s", suffix, v.Str)
++	}
++	if v := row.Columns["active"]; v.Int64 != 1 {
++		t.Errorf("active%s: expected true (1), got %d", suffix, v.Int64)
++	}
++	if v := row.Columns["created"]; !v.Time.Equal(ts) {
++		t.Errorf("created%s: expected %v, got %v", suffix, ts, v.Time)
++	}
++}
++
++// TestEndToEndMultiColumnTypes 测试在单行中写入和读取多种列类型
++func TestEndToEndMultiColumnTypes(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_multi_col_types")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []storage.ColumnMeta{
++		{ID: 0, Name: "id", Type: common.TypeInt64},
++		{ID: 1, Name: colScore, Type: common.TypeFloat64},
++		{ID: 2, Name: "label", Type: common.TypeString},
++		{ID: 3, Name: "active", Type: common.TypeBool},
++		{ID: 4, Name: "created", Type: common.TypeTimestamp},
++	}
++
++	ts := time.Date(2025, 6, 15, 10, 30, 0, 0, time.UTC)
++	_ = eng.Write("row1", map[string]common.Value{
++		"id": common.NewInt64(42), colScore: common.NewFloat64(3.14),
++		"label": common.NewString("hello"), "active": common.NewBool(true),
++		"created": common.NewTimestamp(ts),
++	})
++
++	// 刷盘前验证
++	row, ok := eng.Get("row1")
++	if !ok {
++		t.Fatal("expected to find row1 before flush")
++	}
++	verifyMultiColRow(t, row, ts, " before flush")
++
++	// 刷盘后再次验证
++	if err := eng.Flush(cols); err != nil {
++		t.Fatal(err)
++	}
++	row, ok = eng.Get("row1")
++	if !ok {
++		t.Fatal("expected to find row1 after flush")
++	}
++	verifyMultiColRow(t, row, ts, " after flush")
++}
++
++// TestEndToEndBatchWriteAndScan 测试 WriteBatch 后使用 ScanRange 验证批量写入是否正确持久化
++func TestEndToEndBatchWriteAndScan(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_batch_write")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []storage.ColumnMeta{
++		{ID: 0, Name: colName, Type: common.TypeString},
++		{ID: 1, Name: colValue, Type: common.TypeInt64},
++	}
++
++	batch := []storage.WriteRow{
++		{Key: "batch1", Values: map[string]common.Value{colName: common.NewString("alpha"), colValue: common.NewInt64(10)}},
++		{Key: "batch2", Values: map[string]common.Value{colName: common.NewString("beta"), colValue: common.NewInt64(20)}},
++		{Key: "batch3", Values: map[string]common.Value{colName: common.NewString("gamma"), colValue: common.NewInt64(30)}},
++	}
++
++	if err := eng.WriteBatch(batch); err != nil {
++		t.Fatalf("WriteBatch failed: %v", err)
++	}
++
++	// 刷盘前验证
++	results := eng.Scan("batch1", "batch3")
++	if len(results) != 3 {
++		t.Fatalf("expected 3 results before flush, got %d", len(results))
++	}
++
++	// 刷盘后验证
++	if err := eng.Flush(cols); err != nil {
++		t.Fatal(err)
++	}
++	results = eng.Scan("batch1", "batch3")
++	if len(results) != 3 {
++		t.Fatalf("expected 3 results after flush, got %d", len(results))
++	}
++
++	resultMap := make(map[string]map[string]common.Value)
++	for _, r := range results {
++		resultMap[r.Key] = r.Value.Columns
++	}
++	if v := resultMap["batch1"][colName]; v.Str != "alpha" {
++		t.Errorf("batch1 name: expected alpha, got %s", v.Str)
++	}
++	if v := resultMap["batch2"][colValue]; v.Int64 != 20 {
++		t.Errorf("batch2 value: expected 20, got %d", v.Int64)
++	}
++}
++
++// TestEndToEndMultipleFlushCycles 测试多次写入-刷盘循环后所有数据是否可访问
++func TestEndToEndMultipleFlushCycles(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_multi_flush")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []storage.ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
++
++	// 三轮写入-刷盘
++	for round := 0; round < 3; round++ {
++		k1 := fmt.Sprintf("k%d", round*2+1)
++		k2 := fmt.Sprintf("k%d", round*2+2)
++		_ = eng.Write(k1, map[string]common.Value{colVal: common.NewInt64(int64(round*2 + 1))})
++		_ = eng.Write(k2, map[string]common.Value{colVal: common.NewInt64(int64(round*2 + 2))})
++		if err := eng.Flush(cols); err != nil {
++			t.Fatalf("flush %d failed: %v", round+1, err)
++		}
++	}
++
++	// 验证所有数据都可访问
++	results := eng.Scan("k1", "k6")
++	if len(results) != 6 {
++		t.Fatalf("expected 6 results, got %d", len(results))
++	}
++	for i, r := range results {
++		expectedKey := fmt.Sprintf("k%d", i+1)
++		if r.Key != expectedKey {
++			t.Errorf("result[%d]: expected key %s, got %s", i, expectedKey, r.Key)
++		}
++	}
++}
++
++// writeAndFlush 写入一行并执行刷盘
++func writeAndFlush(t *testing.T, eng *storage.Engine, key string, val int64, cols []storage.ColumnMeta) {
++	t.Helper()
++	_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(val)})
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("flush failed for key %s: %v", key, err)
++	}
++}
++
++// TestEndToEndCompactionDedup 测试跨多次刷盘写入同一 key 后，Compaction 正确去重并返回最新值
++func TestEndToEndCompactionDedup(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_compact_dedup")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []storage.ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
++
++	// 三次覆盖 key "dup"，同时写入不同的 other key
++	writeAndFlush(t, eng, "dup", 1, cols)
++	writeAndFlush(t, eng, "other1", 10, cols)
++	writeAndFlush(t, eng, "dup", 2, cols)
++	writeAndFlush(t, eng, "other2", 20, cols)
++	writeAndFlush(t, eng, "dup", 3, cols)
++	writeAndFlush(t, eng, "other3", 30, cols)
++
++	// 执行 Compaction
++	if err := eng.Compact(cols); err != nil {
++		t.Fatalf("compact failed: %v", err)
++	}
++
++	// 验证 "dup" 返回最新值
++	row, ok := eng.Get("dup")
++	if !ok {
++		t.Fatal("expected to find key dup after compaction")
++	}
++	if v := row.Columns[colVal]; v.Int64 != 3 {
++		t.Errorf("key dup: expected val=3 (latest), got %d", v.Int64)
++	}
++
++	// 验证 Scan 结果没有重复 key
++	results := eng.Scan("dup", "other3")
++	keyCount := make(map[string]int)
++	for _, r := range results {
++		keyCount[r.Key]++
++	}
++	for key, count := range keyCount {
++		if count > 1 {
++			t.Errorf("key %s appeared %d times after compaction, expected 1", key, count)
++		}
++	}
++}
++
++// TestEndToEndConcurrentWriteRead 测试并发读写，验证线程安全性
++func TestEndToEndConcurrentWriteRead(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_concurrent")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	const numWriters = 4
++	const numKeysPerWriter = 50
++	var wg sync.WaitGroup
++
++	// 并发写入
++	for w := 0; w < numWriters; w++ {
++		wg.Add(1)
++		go func(writerID int) {
++			defer wg.Done()
++			for k := 0; k < numKeysPerWriter; k++ {
++				key := fmt.Sprintf("w%d_k%d", writerID, k)
++				_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(writerID*numKeysPerWriter + k))})
++			}
++		}(w)
++	}
++
++	// 并发读取
++	for r := 0; r < numWriters; r++ {
++		wg.Add(1)
++		go func(readerID int) {
++			defer wg.Done()
++			for k := 0; k < numKeysPerWriter; k++ {
++				_, _ = eng.Get(fmt.Sprintf("w%d_k%d", readerID, k))
++			}
++		}(r)
++	}
++
++	wg.Wait()
++
++	// 写入完成后验证所有数据可读
++	cols := []storage.ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatal(err)
++	}
++	for w := 0; w < numWriters; w++ {
++		for k := 0; k < numKeysPerWriter; k++ {
++			key := fmt.Sprintf("w%d_k%d", w, k)
++			if _, ok := eng.Get(key); !ok {
++				t.Errorf("expected to find key %s after flush", key)
++			}
++		}
++	}
++}
++
++// TestEndToEndEngineRecoveryAfterMultipleFlushes 测试多次刷盘后的崩溃恢复
++func TestEndToEndEngineRecoveryAfterMultipleFlushes(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_recovery_multi_flush")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	cols := []storage.ColumnMeta{
++		{ID: 0, Name: colName, Type: common.TypeString},
++		{ID: 1, Name: colValue, Type: common.TypeInt64},
++	}
++
++	// 第一个引擎实例：多次写入和刷盘
++	eng1, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	// 三轮刷盘
++	for i := 1; i <= 5; i++ {
++		_ = eng1.Write(fmt.Sprintf("key%d", i), map[string]common.Value{
++			colName: common.NewString(fmt.Sprintf("val%d", i)), colValue: common.NewInt64(int64(i)),
++		})
++		if i%2 == 0 {
++			if err := eng1.Flush(cols); err != nil {
++				t.Fatalf("flush failed: %v", err)
++			}
++		}
++	}
++	// 最后一次刷盘确保所有 segment 数据落盘
++	if err := eng1.Flush(cols); err != nil {
++		t.Fatalf("final flush failed: %v", err)
++	}
++
++	// 写入一条不刷盘的数据（在 WAL 中）
++	_ = eng1.Write("key6", map[string]common.Value{
++		colName: common.NewString("val6"), colValue: common.NewInt64(6),
++	})
++
++	// 模拟崩溃：不调用 Close
++	eng2, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng2.Close() }()
++
++	// 验证所有数据都恢复
++	for i := 1; i <= 6; i++ {
++		key := fmt.Sprintf("key%d", i)
++		row, ok := eng2.Get(key)
++		if !ok {
++			t.Errorf("expected to find key %s after recovery", key)
++			continue
++		}
++		if v := row.Columns[colName]; v.Str != fmt.Sprintf("val%d", i) {
++			t.Errorf("key %s name: expected val%d, got %s", key, i, v.Str)
++		}
++		if v := row.Columns[colValue]; v.Int64 != int64(i) {
++			t.Errorf("key %s value: expected %d, got %d", key, i, v.Int64)
++		}
++	}
++}
+diff --git a/tests/integration/e2e_test.go b/tests/integration/e2e_test.go
+index 6a49852..2527daf 100644
+--- a/tests/integration/e2e_test.go
++++ b/tests/integration/e2e_test.go
+@@ -9,9 +9,11 @@ import (
+ )
+ 
+ const (
+-	colName = "name"
+-	colAge  = "age"
+-	colVal  = "val"
++	colName  = "name"
++	colAge   = "age"
++	colVal   = "val"
++	colScore = "score"
++	colValue = "value"
+ )
+ 
+ // TestEndToEndWriteFlushScan 测试完整的写入→刷盘→扫描流程
+diff --git a/tests/integration/e2e_wide_null_test.go b/tests/integration/e2e_wide_null_test.go
+new file mode 100644
+index 0000000..d44c5ae
+--- /dev/null
++++ b/tests/integration/e2e_wide_null_test.go
+@@ -0,0 +1,187 @@
++package integration
++
++import (
++	"fmt"
++	"os"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
++)
++
++// verifyNullRow 验证含 NULL 值的行
++func verifyNullRow(t *testing.T, row storage.Row, nameExpected string, nameIsNull, ageIsNull bool, scoreVal float64, suffix string) {
++	t.Helper()
++	if nameIsNull {
++		if v := row.Columns[colName]; !v.IsNull() {
++			t.Errorf("name%s: expected NULL, got %v", suffix, v)
++		}
++	} else if v := row.Columns[colName]; v.Str != nameExpected {
++		t.Errorf("name%s: expected %s, got %s", suffix, nameExpected, v.Str)
++	}
++	if v := row.Columns[colAge]; v.IsNull() != ageIsNull {
++		t.Errorf("age%s: isNull=%v, expected=%v", suffix, v.IsNull(), ageIsNull)
++	}
++	if v := row.Columns[colScore]; !v.IsNull() {
++		if v.Float64 != scoreVal {
++			t.Errorf("score%s: expected %g, got %g", suffix, scoreVal, v.Float64)
++		}
++	}
++}
++
++// TestEndToEndNullValues 测试写入包含 NULL 值的行，验证 NULL 值正确存储和检索
++func TestEndToEndNullValues(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_null_values")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []storage.ColumnMeta{
++		{ID: 0, Name: colName, Type: common.TypeString},
++		{ID: 1, Name: colAge, Type: common.TypeInt64},
++		{ID: 2, Name: colScore, Type: common.TypeFloat64},
++	}
++
++	_ = eng.Write("row1", map[string]common.Value{
++		colName: common.NewString("alice"), colAge: common.NewInt64(30), colScore: common.NewNull(),
++	})
++	_ = eng.Write("row2", map[string]common.Value{
++		colName: common.NewNull(), colAge: common.NewNull(), colScore: common.NewFloat64(99.5),
++	})
++
++	// 刷盘前验证
++	row, ok := eng.Get("row1")
++	if !ok {
++		t.Fatal("expected to find row1 before flush")
++	}
++	verifyNullRow(t, row, "alice", false, false, 0, " row1 before flush")
++
++	row, ok = eng.Get("row2")
++	if !ok {
++		t.Fatal("expected to find row2 before flush")
++	}
++	verifyNullRow(t, row, "", true, true, 99.5, " row2 before flush")
++
++	// 刷盘后验证
++	if err := eng.Flush(cols); err != nil {
++		t.Fatal(err)
++	}
++	row, ok = eng.Get("row1")
++	if !ok {
++		t.Fatal("expected to find row1 after flush")
++	}
++	verifyNullRow(t, row, "alice", false, false, 0, " row1 after flush")
++}
++
++// buildWideCols 构建 50 列的元数据
++func buildWideCols(numCols int) []storage.ColumnMeta {
++	cols := make([]storage.ColumnMeta, numCols)
++	for i := 0; i < numCols; i++ {
++		name := fmt.Sprintf("col_%d", i)
++		var typ common.DataType
++		switch i % 4 {
++		case 0:
++			typ = common.TypeInt64
++		case 1:
++			typ = common.TypeString
++		case 2:
++			typ = common.TypeFloat64
++		case 3:
++			typ = common.TypeBool
++		}
++		cols[i] = storage.ColumnMeta{ID: uint32(i), Name: name, Type: typ}
++	}
++	return cols
++}
++
++// buildWideValues 构建 50 列的值
++func buildWideValues(cols []storage.ColumnMeta) map[string]common.Value {
++	values := make(map[string]common.Value, len(cols))
++	for i, col := range cols {
++		switch i % 4 {
++		case 0:
++			values[col.Name] = common.NewInt64(int64(i * 100))
++		case 1:
++			values[col.Name] = common.NewString(fmt.Sprintf("str_%d", i))
++		case 2:
++			values[col.Name] = common.NewFloat64(float64(i) * 1.1)
++		case 3:
++			values[col.Name] = common.NewBool(i%2 == 0)
++		}
++	}
++	return values
++}
++
++// verifyWideRow 验证宽表行的数据正确性
++func verifyWideRow(t *testing.T, row storage.Row, cols []storage.ColumnMeta, suffix string) {
++	t.Helper()
++	for i, col := range cols {
++		val, exists := row.Columns[col.Name]
++		if !exists {
++			t.Errorf("column %s%s not found in result", col.Name, suffix)
++			continue
++		}
++		switch i % 4 {
++		case 0:
++			if val.Int64 != int64(i*100) {
++				t.Errorf("col %s%s: expected %d, got %d", col.Name, suffix, i*100, val.Int64)
++			}
++		case 1:
++			expected := fmt.Sprintf("str_%d", i)
++			if val.Str != expected {
++				t.Errorf("col %s%s: expected %s, got %s", col.Name, suffix, expected, val.Str)
++			}
++		case 2:
++			if val.Float64 != float64(i)*1.1 {
++				t.Errorf("col %s%s: expected %g, got %g", col.Name, suffix, float64(i)*1.1, val.Float64)
++			}
++		case 3:
++			if (val.Int64 != 0) != (i%2 == 0) {
++				t.Errorf("col %s%s: bool mismatch", col.Name, suffix)
++			}
++		}
++	}
++}
++
++// TestEndToEndWideTable 测试宽表场景（50列），验证宽表支持
++func TestEndToEndWideTable(t *testing.T) {
++	dir, err := os.MkdirTemp("", "e2e_wide_table")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = os.RemoveAll(dir) }()
++
++	eng, err := storage.NewEngine(storage.EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := buildWideCols(50)
++	values := buildWideValues(cols)
++	_ = eng.Write("wide_row", values)
++
++	// 刷盘前验证
++	row, ok := eng.Get("wide_row")
++	if !ok {
++		t.Fatal("expected to find wide_row before flush")
++	}
++	verifyWideRow(t, row, cols, " before flush")
++
++	// 刷盘后验证
++	if err := eng.Flush(cols); err != nil {
++		t.Fatal(err)
++	}
++	row, ok = eng.Get("wide_row")
++	if !ok {
++		t.Fatal("expected to find wide_row after flush")
++	}
++	verifyWideRow(t, row, cols, " after flush")
++}

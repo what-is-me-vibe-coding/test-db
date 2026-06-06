@@ -1,0 +1,255 @@
+diff --git a/pkg/catalog/schema.go b/pkg/catalog/schema.go
+index a28129d..03c6aea 100644
+--- a/pkg/catalog/schema.go
++++ b/pkg/catalog/schema.go
+@@ -39,6 +39,22 @@ type Table struct {
+ 	Options     TableOptions
+ 	Version     uint64 // 表结构版本号
+ 	CreatedAt   time.Time
++
++	// colTypeMap 是列名到数据类型的缓存映射，延迟初始化。
++	// 避免每次写入请求都重建 map，减少热点路径上的内存分配。
++	colTypeMap map[string]common.DataType
++}
++
++// ColTypeMap 返回列名到数据类型的映射，延迟初始化并缓存。
++func (t *Table) ColTypeMap() map[string]common.DataType {
++	if t.colTypeMap == nil {
++		m := make(map[string]common.DataType, len(t.Columns))
++		for _, col := range t.Columns {
++			m[col.Name] = col.Type
++		}
++		t.colTypeMap = m
++	}
++	return t.colTypeMap
+ }
+ 
+ // Database 是 Catalog 的顶层结构，包含所有表定义。
+diff --git a/pkg/catalog/schema_test.go b/pkg/catalog/schema_test.go
+index ee1d6cf..81045ab 100644
+--- a/pkg/catalog/schema_test.go
++++ b/pkg/catalog/schema_test.go
+@@ -96,3 +96,35 @@ func TestTableHasColumn(t *testing.T) {
+ 		t.Error("HasColumn(notexist) = true, want false")
+ 	}
+ }
++
++func TestTableColTypeMap(t *testing.T) {
++	tbl := &Table{
++		Name: tableUsers,
++		Columns: []ColumnDef{
++			{Name: "id", Type: common.TypeInt64},
++			{Name: colName, Type: common.TypeString},
++			{Name: "score", Type: common.TypeFloat64},
++		},
++	}
++
++	// 首次调用应创建映射
++	m := tbl.ColTypeMap()
++	if len(m) != 3 {
++		t.Errorf("ColTypeMap length = %d, want 3", len(m))
++	}
++	if m["id"] != common.TypeInt64 {
++		t.Errorf("ColTypeMap[id] = %v, want TypeInt64", m["id"])
++	}
++	if m[colName] != common.TypeString {
++		t.Errorf("ColTypeMap[name] = %v, want TypeString", m[colName])
++	}
++	if m["score"] != common.TypeFloat64 {
++		t.Errorf("ColTypeMap[score] = %v, want TypeFloat64", m["score"])
++	}
++
++	// 再次调用应返回缓存的同一映射
++	m2 := tbl.ColTypeMap()
++	if len(m2) != 3 {
++		t.Errorf("ColTypeMap second call length = %d, want 3", len(m2))
++	}
++}
+diff --git a/pkg/query/executor_ops.go b/pkg/query/executor_ops.go
+index 0adb2b0..dddf87b 100644
+--- a/pkg/query/executor_ops.go
++++ b/pkg/query/executor_ops.go
+@@ -31,6 +31,18 @@ func (e *Executor) executeFilter(filter *FilterNode) (*execResult, error) {
+ 	return &execResult{chunks: chunks, schema: schema}, nil
+ }
+ 
++// fillRowVals 将 chunk 中指定行的列值填入 rowVals map（复用已有 map）。
++func fillRowVals(rowVals map[string]common.Value, cols []*storage.ColumnVector, schema []ColumnDef, row uint32) {
++	for k := range rowVals {
++		delete(rowVals, k)
++	}
++	for i, col := range cols {
++		if i < len(schema) {
++			rowVals[schema[i].Name] = col.GetValue(row)
++		}
++	}
++}
++
+ // filterChunk 对单个 Chunk 执行向量化过滤。
+ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colIdxMap map[string]int) (*storage.Chunk, error) {
+ 	rowCount := input.RowCount()
+@@ -38,9 +50,12 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
+ 		return storage.NewChunk(defaultChunkSize), nil
+ 	}
+ 
++	rowVals := make(map[string]common.Value, len(schema))
++	cols := input.Columns()
++
+ 	selection := make([]uint32, 0, rowCount)
+ 	for row := uint32(0); row < rowCount; row++ {
+-		rowVals := buildRowValues(input, schema, row)
++		fillRowVals(rowVals, cols, schema, row)
+ 		val, err := evalExpr(cond, rowVals, colIdxMap)
+ 		if err != nil {
+ 			continue
+@@ -55,7 +70,7 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
+ 	}
+ 
+ 	output := storage.NewChunk(defaultChunkSize)
+-	for _, col := range input.Columns() {
++	for _, col := range cols {
+ 		newCol := storage.NewColumnVector(col.ColumnID, col.Typ, uint32(len(selection)))
+ 		for _, rowIdx := range selection {
+ 			v := col.GetValue(rowIdx)
+@@ -96,27 +111,37 @@ func (e *Executor) executeProject(proj *ProjectNode) (*execResult, error) {
+ 	return &execResult{chunks: chunks, schema: outputSchema}, nil
+ }
+ 
++// appendProjectValue 尝试将值追加到列向量，必要时进行类型强制转换。
++func appendProjectValue(col *storage.ColumnVector, val common.Value, colDef ColumnDef, row uint32) error {
++	if err := col.Append(val); err != nil {
++		typedVal := coerceValue(val, colDef.Type)
++		if err2 := col.Append(typedVal); err2 != nil {
++			return fmt.Errorf("executor project: row %d: %w", row, err)
++		}
++	}
++	return nil
++}
++
+ // projectChunk 对单个 Chunk 执行投影。
+ func projectChunk(input *storage.Chunk, exprs []Expression, inputSchema, outputSchema []ColumnDef, colIdxMap map[string]int) (*storage.Chunk, error) {
+ 	rowCount := input.RowCount()
+ 	output := storage.NewChunk(defaultChunkSize)
+ 
++	rowVals := make(map[string]common.Value, len(inputSchema))
++	cols := input.Columns()
++
+ 	for exprIdx, expr := range exprs {
+ 		colDef := outputSchema[exprIdx]
+ 		newCol := storage.NewColumnVector(uint32(exprIdx), colDef.Type, rowCount)
+ 
+ 		for row := uint32(0); row < rowCount; row++ {
+-			rowVals := buildRowValues(input, inputSchema, row)
+-
++			fillRowVals(rowVals, cols, inputSchema, row)
+ 			val, err := evalExpr(expr, rowVals, colIdxMap)
+ 			if err != nil {
+ 				return nil, fmt.Errorf("executor project: row %d: %w", row, err)
+ 			}
+-			if err := newCol.Append(val); err != nil {
+-				typedVal := coerceValue(val, colDef.Type)
+-				if err2 := newCol.Append(typedVal); err2 != nil {
+-					return nil, fmt.Errorf("executor project: row %d: %w", row, err)
+-				}
++			if err := appendProjectValue(newCol, val, colDef, row); err != nil {
++				return nil, err
+ 			}
+ 		}
+ 
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 514daef..e023308 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -416,11 +416,7 @@ func (s *Server) convertWriteRow(
+ 	tbl *catalog.Table, row map[string]interface{},
+ ) (string, map[string]common.Value, error) {
+ 	values := make(map[string]common.Value, len(row))
+-
+-	colTypes := make(map[string]common.DataType, len(tbl.Columns))
+-	for _, col := range tbl.Columns {
+-		colTypes[col.Name] = col.Type
+-	}
++	colTypes := tbl.ColTypeMap()
+ 
+ 	for colName, rawVal := range row {
+ 		colType, ok := colTypes[colName]
+diff --git a/pkg/storage/iterator.go b/pkg/storage/iterator.go
+index c9d47e0..12b1912 100644
+--- a/pkg/storage/iterator.go
++++ b/pkg/storage/iterator.go
+@@ -390,11 +390,7 @@ func (e *Engine) ScanRange(start, end string) []ScanEntry {
+ 
+ 	results := make([]ScanEntry, 0, estimatedSize)
+ 	for mi.Next() {
+-		entry := mi.Entry()
+-		results = append(results, ScanEntry{
+-			Key:   entry.Key,
+-			Value: entry.Value,
+-		})
++		results = append(results, mi.Entry())
+ 	}
+ 
+ 	if mi.Err() != nil {
+diff --git a/pkg/storage/wal.go b/pkg/storage/wal.go
+index 41cea16..fdd68c7 100644
+--- a/pkg/storage/wal.go
++++ b/pkg/storage/wal.go
+@@ -113,6 +113,7 @@ func (w *WAL) Append(tp byte, payload []byte) error {
+ 	}
+ 
+ 	buf := encodeRecord(tp, payload)
++	defer putRecordBuf(buf)
+ 	n, err := w.file.Write(buf)
+ 	if err != nil {
+ 		return fmt.Errorf("wal write: %w", err)
+@@ -136,6 +137,7 @@ func (w *WAL) AppendBatch(records []BatchRecord) error {
+ 		}
+ 		buf := encodeRecord(rec.Type, rec.Payload)
+ 		n, err := w.file.Write(buf)
++		putRecordBuf(buf)
+ 		if err != nil {
+ 			return fmt.Errorf("wal write batch: %w", err)
+ 		}
+@@ -229,10 +231,27 @@ func (w *WAL) maybeRotate() error {
+ 	return nil
+ }
+ 
++// recordBufPool 复用 WAL 记录编码缓冲区，减少写路径上的堆分配。
++var recordBufPool = sync.Pool{
++	New: func() interface{} {
++		buf := make([]byte, 0, 256)
++		return &buf
++	},
++}
++
+ // encodeRecord 将一条记录编码为字节流。
++// 使用 sync.Pool 复用缓冲区，调用者用完后应调用 putRecordBuf 归还。
+ func encodeRecord(tp byte, payload []byte) []byte {
+ 	totalLen := walTypeSize + len(payload) + walCRCSize
+-	buf := make([]byte, walHeaderSize+totalLen)
++	need := walHeaderSize + totalLen
++
++	bufPtr := recordBufPool.Get().(*[]byte)
++	buf := *bufPtr
++	if cap(buf) < need {
++		buf = make([]byte, need)
++	} else {
++		buf = buf[:need]
++	}
+ 
+ 	binary.LittleEndian.PutUint32(buf[0:4], uint32(totalLen))
+ 	buf[4] = tp
+@@ -244,6 +263,13 @@ func encodeRecord(tp byte, payload []byte) []byte {
+ 	return buf
+ }
+ 
++// putRecordBuf 将 encodeRecord 分配的缓冲区归还到池中。
++func putRecordBuf(buf []byte) {
++	if cap(buf) > 0 {
++		recordBufPool.Put(&buf)
++	}
++}
++
+ // replayWAL 从文件中回放所有有效记录，返回记录列表和最后一条有效记录的偏移量。
+ // 遇到部分写入或损坏记录时停止回放（不返回错误），以支持崩溃恢复场景。
+ func replayWAL(f *os.File) ([]RawRecord, int64, error) {

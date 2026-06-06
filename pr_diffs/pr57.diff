@@ -1,0 +1,1418 @@
+diff --git a/pkg/query/parser_test.go b/pkg/query/parser_test.go
+index b510fe8..5ad9e95 100644
+--- a/pkg/query/parser_test.go
++++ b/pkg/query/parser_test.go
+@@ -435,7 +435,7 @@ func TestParseCreateTableColumnTypes(t *testing.T) {
+ 		{"double", "CREATE TABLE t (c DOUBLE NOT NULL)", common.TypeFloat64},
+ 		{"string", "CREATE TABLE t (c STRING NOT NULL)", common.TypeString},
+ 		{"varchar", "CREATE TABLE t (c VARCHAR(255) NOT NULL)", common.TypeString},
+-		{"bool", "CREATE TABLE t (c BOOL NOT NULL)", common.TypeBool},
++		{"bool_type", "CREATE TABLE t (c BOOL NOT NULL)", common.TypeBool},
+ 		{"boolean", "CREATE TABLE t (c BOOLEAN NOT NULL)", common.TypeBool},
+ 		{"timestamp", "CREATE TABLE t (c TIMESTAMP NOT NULL)", common.TypeTimestamp},
+ 	}
+diff --git a/pkg/server/metrics.go b/pkg/server/metrics.go
+index 69dd6a5..e8dc8e4 100644
+--- a/pkg/server/metrics.go
++++ b/pkg/server/metrics.go
+@@ -21,6 +21,10 @@ type Metrics struct {
+ 	FlushTotal     prometheus.Counter
+ 	CompactTotal   prometheus.Counter
+ 	WALCleanTotal  prometheus.Counter
++	CacheHits      *prometheus.CounterVec
++	CacheMisses    *prometheus.CounterVec
++	CacheSizeBytes *prometheus.GaugeVec
++	CacheEntries   *prometheus.GaugeVec
+ }
+ 
+ // NewMetrics 创建并注册所有 Prometheus 指标。
+@@ -43,6 +47,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
+ 		FlushTotal:     newCounter(factory, "flush_total", "MemTable 刷盘总次数"),
+ 		CompactTotal:   newCounter(factory, "compact_total", "Compaction 总次数"),
+ 		WALCleanTotal:  newCounter(factory, "wal_clean_total", "WAL 清理总次数"),
++		CacheHits:      newCacheCounter(factory, "cache_hits_total", "缓存命中次数"),
++		CacheMisses:    newCacheCounter(factory, "cache_misses_total", "缓存未命中次数"),
++		CacheSizeBytes: newCacheGauge(factory, "cache_size_bytes", "缓存占用字节数"),
++		CacheEntries:   newCacheGauge(factory, "cache_entries", "缓存条目数"),
+ 	}
+ 
+ 	m.initLabels()
+@@ -63,6 +71,14 @@ func (m *Metrics) initLabels() {
+ 	m.WriteDuration.WithLabelValues("success").Observe(0)
+ 	m.SegmentCount.WithLabelValues("l0").Set(0)
+ 	m.SegmentCount.WithLabelValues("l1").Set(0)
++	m.CacheHits.WithLabelValues("block").Add(0)
++	m.CacheHits.WithLabelValues("index").Add(0)
++	m.CacheMisses.WithLabelValues("block").Add(0)
++	m.CacheMisses.WithLabelValues("index").Add(0)
++	m.CacheSizeBytes.WithLabelValues("block").Set(0)
++	m.CacheSizeBytes.WithLabelValues("index").Set(0)
++	m.CacheEntries.WithLabelValues("block").Set(0)
++	m.CacheEntries.WithLabelValues("index").Set(0)
+ }
+ 
+ func newQueriesTotal(f promauto.Factory) *prometheus.CounterVec {
+@@ -108,3 +124,15 @@ func newCounter(f promauto.Factory, name, help string) prometheus.Counter {
+ 		Namespace: namespace, Name: name, Help: help,
+ 	})
+ }
++
++func newCacheCounter(f promauto.Factory, name, help string) *prometheus.CounterVec {
++	return f.NewCounterVec(prometheus.CounterOpts{
++		Namespace: namespace, Name: name, Help: help,
++	}, []string{"cache"})
++}
++
++func newCacheGauge(f promauto.Factory, name, help string) *prometheus.GaugeVec {
++	return f.NewGaugeVec(prometheus.GaugeOpts{
++		Namespace: namespace, Name: name, Help: help,
++	}, []string{"cache"})
++}
+diff --git a/pkg/storage/bugfix_test.go b/pkg/storage/bugfix_test.go
+index 14ece1c..52ef545 100644
+--- a/pkg/storage/bugfix_test.go
++++ b/pkg/storage/bugfix_test.go
+@@ -225,7 +225,7 @@ func TestSegmentIteratorDecodeError(t *testing.T) {
+ 	}
+ 
+ 	colMeta := []ColumnMeta{{ID: 0, Name: "col_0", Type: common.TypeInt64}}
+-	it := newSegmentIterator(seg, colMeta, "a", "z")
++	it := newSegmentIterator(seg, colMeta, "a", "z", nil)
+ 
+ 	// 迭代器应该报告错误
+ 	if it.Next() {
+diff --git a/pkg/storage/cache.go b/pkg/storage/cache.go
+new file mode 100644
+index 0000000..bb13b91
+--- /dev/null
++++ b/pkg/storage/cache.go
+@@ -0,0 +1,352 @@
++package storage
++
++import (
++	"container/list"
++	"sync"
++	"time"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// CacheKey 标识一个缓存条目，由 Segment ID 和列索引组成。
++type CacheKey struct {
++	SegmentID uint64
++	ColumnIdx uint32
++}
++
++// cacheEntry 是 LRU 链表中的缓存条目。
++type cacheEntry struct {
++	key  CacheKey
++	data decodedColumn
++	size int64
++}
++
++// BlockCache 是 Segment 列数据的 LRU 缓存。
++// 缓存已解码的列数据，避免重复解压和解码，提升点查和范围扫描性能。
++type BlockCache struct {
++	mu       sync.Mutex
++	capacity int64
++	used     int64
++	items    map[CacheKey]*list.Element
++	order    *list.List
++	hits     int64
++	misses   int64
++}
++
++// NewBlockCache 创建一个指定容量（字节）的 BlockCache。
++// capacity <= 0 表示不缓存。
++func NewBlockCache(capacity int64) *BlockCache {
++	return &BlockCache{
++		capacity: capacity,
++		items:    make(map[CacheKey]*list.Element),
++		order:    list.New(),
++	}
++}
++
++// get 从缓存中获取指定列的已解码数据。
++// 返回 (decodedColumn, true) 表示命中，(decodedColumn{}, false) 表示未命中。
++func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
++	if c == nil || c.capacity <= 0 {
++		return decodedColumn{}, false
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if elem, ok := c.items[key]; ok {
++		c.order.MoveToFront(elem)
++		c.hits++
++		return elem.Value.(*cacheEntry).data, true
++	}
++
++	c.misses++
++	return decodedColumn{}, false
++}
++
++// put 将已解码的列数据放入缓存。
++// 如果缓存已满，会按 LRU 策略淘汰最久未使用的条目。
++func (c *BlockCache) put(key CacheKey, data decodedColumn) {
++	if c == nil || c.capacity <= 0 {
++		return
++	}
++
++	size := estimateDecodedSize(data)
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	// 如果已存在，更新数据并移到前端
++	if elem, ok := c.items[key]; ok {
++		entry := elem.Value.(*cacheEntry)
++		c.used -= entry.size
++		entry.data = data
++		entry.size = size
++		c.used += size
++		c.order.MoveToFront(elem)
++		return
++	}
++
++	// 淘汰旧条目直到有足够空间
++	for c.used+size > c.capacity && c.order.Len() > 0 {
++		oldest := c.order.Back()
++		if oldest == nil {
++			break
++		}
++		entry := c.order.Remove(oldest).(*cacheEntry)
++		delete(c.items, entry.key)
++		c.used -= entry.size
++	}
++
++	entry := &cacheEntry{key: key, data: data, size: size}
++	elem := c.order.PushFront(entry)
++	c.items[key] = elem
++	c.used += size
++}
++
++// Invalidate 使指定 Segment 的所有缓存条目失效。
++// 在 Compaction 或 Segment 删除时调用。
++func (c *BlockCache) Invalidate(segmentID uint64) {
++	if c == nil || c.capacity <= 0 {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	// 收集需要删除的 key
++	var keysToDelete []CacheKey
++	for key := range c.items {
++		if key.SegmentID == segmentID {
++			keysToDelete = append(keysToDelete, key)
++		}
++	}
++
++	for _, key := range keysToDelete {
++		if elem, ok := c.items[key]; ok {
++			entry := c.order.Remove(elem).(*cacheEntry)
++			c.used -= entry.size
++			delete(c.items, key)
++		}
++	}
++}
++
++// Clear 清空所有缓存条目。
++func (c *BlockCache) Clear() {
++	if c == nil {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	c.items = make(map[CacheKey]*list.Element)
++	c.order.Init()
++	c.used = 0
++}
++
++// CacheStats holds cache statistics.
++type CacheStats struct {
++	Hits     int64
++	Misses   int64
++	Size     int64
++	Capacity int64
++	Entries  int
++	HitRate  float64
++}
++
++// Stats 返回当前缓存的统计信息。
++func (c *BlockCache) Stats() CacheStats {
++	if c == nil {
++		return CacheStats{}
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	total := c.hits + c.misses
++	var hitRate float64
++	if total > 0 {
++		hitRate = float64(c.hits) / float64(total)
++	}
++
++	return CacheStats{
++		Hits:     c.hits,
++		Misses:   c.misses,
++		Size:     c.used,
++		Capacity: c.capacity,
++		Entries:  len(c.items),
++		HitRate:  hitRate,
++	}
++}
++
++// estimateDecodedSize 估算已解码列数据的内存占用。
++func estimateDecodedSize(dc decodedColumn) int64 {
++	const overhead = 64 // decodedColumn 结构体本身的开销
++
++	if dc.data == nil {
++		return overhead
++	}
++
++	var dataSize int64
++	switch v := dc.data.(type) {
++	case []int64:
++		dataSize = int64(len(v)) * 8
++	case []float64:
++		dataSize = int64(len(v)) * 8
++	case []uint64:
++		dataSize = int64(len(v)) * 8
++	case []string:
++		for _, s := range v {
++			dataSize += int64(len(s)) + 16 // 字符串头开销
++		}
++	case []time.Time:
++		dataSize = int64(len(v)) * 24
++	default:
++		dataSize = 256 // 未知类型默认估算
++	}
++
++	// NULL 位图开销
++	if dc.nulls != nil {
++		dataSize += int64(dc.nulls.Len()/8 + 32)
++	}
++
++	return overhead + dataSize
++}
++
++// IndexCache 缓存 Segment 级别的索引元数据。
++// 当前 BloomIndex 和 SparseIndex 已在内存中维护，
++// IndexCache 主要缓存 Segment Footer 的列统计信息，
++// 避免重复解析 Segment 文件。
++type IndexCache struct {
++	mu       sync.Mutex
++	capacity int
++	used     int
++	items    map[uint64]*list.Element // key: segmentID
++	order    *list.List
++}
++
++type indexCacheEntry struct {
++	segmentID uint64
++	stats     []ColumnStat
++}
++
++// NewIndexCache 创建指定容量（条目数）的 IndexCache。
++func NewIndexCache(capacity int) *IndexCache {
++	return &IndexCache{
++		capacity: capacity,
++		items:    make(map[uint64]*list.Element),
++		order:    list.New(),
++	}
++}
++
++// GetColumnStats 从缓存中获取指定 Segment 的列统计信息。
++func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
++	if c == nil || c.capacity <= 0 {
++		return nil, false
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if elem, ok := c.items[segmentID]; ok {
++		c.order.MoveToFront(elem)
++		return elem.Value.(*indexCacheEntry).stats, true
++	}
++
++	return nil, false
++}
++
++// PutColumnStats 将 Segment 的列统计信息放入缓存。
++func (c *IndexCache) PutColumnStats(segmentID uint64, stats []ColumnStat) {
++	if c == nil || c.capacity <= 0 {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if elem, ok := c.items[segmentID]; ok {
++		entry := elem.Value.(*indexCacheEntry)
++		entry.stats = stats
++		c.order.MoveToFront(elem)
++		return
++	}
++
++	// LRU 淘汰
++	for c.used >= c.capacity && c.order.Len() > 0 {
++		oldest := c.order.Back()
++		if oldest == nil {
++			break
++		}
++		entry := c.order.Remove(oldest).(*indexCacheEntry)
++		delete(c.items, entry.segmentID)
++		c.used--
++	}
++
++	entry := &indexCacheEntry{segmentID: segmentID, stats: stats}
++	elem := c.order.PushFront(entry)
++	c.items[segmentID] = elem
++	c.used++
++}
++
++// Invalidate 使指定 Segment 的缓存条目失效。
++func (c *IndexCache) Invalidate(segmentID uint64) {
++	if c == nil {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	if elem, ok := c.items[segmentID]; ok {
++		c.order.Remove(elem)
++		delete(c.items, segmentID)
++		c.used--
++	}
++}
++
++// Clear 清空所有缓存条目。
++func (c *IndexCache) Clear() {
++	if c == nil {
++		return
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	c.items = make(map[uint64]*list.Element)
++	c.order.Init()
++	c.used = 0
++}
++
++// Len 返回当前缓存条目数。
++func (c *IndexCache) Len() int {
++	if c == nil {
++		return 0
++	}
++
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	return c.used
++}
++
++// BlockCache 返回 Engine 的 BlockCache 实例。
++func (e *Engine) BlockCache() *BlockCache {
++	return e.blockCache
++}
++
++// IndexCache 返回 Engine 的 IndexCache 实例。
++func (e *Engine) IndexCache() *IndexCache {
++	return e.indexCache
++}
++
++// CacheStats 返回 BlockCache 和 IndexCache 的统计信息。
++func (e *Engine) CacheStats() (blockStats CacheStats, indexEntries int) {
++	blockStats = e.blockCache.Stats()
++	indexEntries = e.indexCache.Len()
++	return
++}
++
++// ensure common.Bitmap is available for estimateDecodedSize
++var _ = common.NewBitmap
+diff --git a/pkg/storage/cache_test.go b/pkg/storage/cache_test.go
+new file mode 100644
+index 0000000..562770d
+--- /dev/null
++++ b/pkg/storage/cache_test.go
+@@ -0,0 +1,345 @@
++package storage
++
++import (
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++func TestBlockCacheBasic(t *testing.T) {
++	cache := NewBlockCache(1024)
++
++	key := CacheKey{SegmentID: 1, ColumnIdx: 0}
++
++	// 缓存未命中
++	_, ok := cache.get(key)
++	if ok {
++		t.Fatal("expected cache miss")
++	}
++
++	// 放入缓存
++	dc := decodedColumn{
++		data:  []int64{1, 2, 3},
++		nulls: nil,
++		typ:   common.TypeInt64,
++	}
++	cache.put(key, dc)
++
++	// 缓存命中
++	got, ok := cache.get(key)
++	if !ok {
++		t.Fatal("expected cache hit")
++	}
++	ints, ok := got.data.([]int64)
++	if !ok {
++		t.Fatal("expected []int64 data")
++	}
++	if len(ints) != 3 || ints[0] != 1 || ints[1] != 2 || ints[2] != 3 {
++		t.Fatalf("unexpected data: %v", ints)
++	}
++}
++
++func TestBlockCacheLRUEviction(t *testing.T) {
++	// 小容量缓存，测试 LRU 淘汰
++	cache := NewBlockCache(200)
++
++	// 放入多个条目
++	for i := uint32(0); i < 5; i++ {
++		key := CacheKey{SegmentID: 1, ColumnIdx: i}
++		dc := decodedColumn{
++			data: []int64{1, 2, 3, 4, 5},
++			typ:  common.TypeInt64,
++		}
++		cache.put(key, dc)
++	}
++
++	stats := cache.Stats()
++	if stats.Entries == 0 {
++		t.Fatal("expected some entries in cache")
++	}
++
++	// 最早的条目应该被淘汰
++	key0 := CacheKey{SegmentID: 1, ColumnIdx: 0}
++	_, ok := cache.get(key0)
++	if ok {
++		t.Fatal("expected column 0 to be evicted")
++	}
++
++	// 较新的条目应该还在
++	key4 := CacheKey{SegmentID: 1, ColumnIdx: 4}
++	_, ok = cache.get(key4)
++	if !ok {
++		t.Fatal("expected column 4 to be in cache")
++	}
++}
++
++func TestBlockCacheInvalidate(t *testing.T) {
++	cache := NewBlockCache(4096)
++
++	// 放入两个 Segment 的数据
++	for i := uint32(0); i < 3; i++ {
++		cache.put(CacheKey{SegmentID: 1, ColumnIdx: i}, decodedColumn{
++			data: []int64{1}, typ: common.TypeInt64,
++		})
++		cache.put(CacheKey{SegmentID: 2, ColumnIdx: i}, decodedColumn{
++			data: []int64{2}, typ: common.TypeInt64,
++		})
++	}
++
++	// 使 Segment 1 失效
++	cache.Invalidate(1)
++
++	// Segment 1 的数据应该被清除
++	_, ok := cache.get(CacheKey{SegmentID: 1, ColumnIdx: 0})
++	if ok {
++		t.Fatal("expected segment 1 data to be invalidated")
++	}
++
++	// Segment 2 的数据应该还在
++	_, ok = cache.get(CacheKey{SegmentID: 2, ColumnIdx: 0})
++	if !ok {
++		t.Fatal("expected segment 2 data to remain")
++	}
++}
++
++func TestBlockCacheStats(t *testing.T) {
++	cache := NewBlockCache(4096)
++
++	key := CacheKey{SegmentID: 1, ColumnIdx: 0}
++
++	// 未命中
++	cache.get(key)
++	cache.get(key)
++
++	stats := cache.Stats()
++	if stats.Misses != 2 {
++		t.Fatalf("expected 2 misses, got %d", stats.Misses)
++	}
++
++	// 放入并命中
++	cache.put(key, decodedColumn{data: []int64{1}, typ: common.TypeInt64})
++	cache.get(key)
++	cache.get(key)
++
++	stats = cache.Stats()
++	if stats.Hits != 2 {
++		t.Fatalf("expected 2 hits, got %d", stats.Hits)
++	}
++	if stats.Misses != 2 {
++		t.Fatalf("expected 2 misses, got %d", stats.Misses)
++	}
++	if stats.HitRate != 0.5 {
++		t.Fatalf("expected 0.5 hit rate, got %f", stats.HitRate)
++	}
++}
++
++func TestBlockCacheNil(t *testing.T) {
++	var cache *BlockCache
++
++	// nil 缓存不应 panic
++	_, ok := cache.get(CacheKey{SegmentID: 1, ColumnIdx: 0})
++	if ok {
++		t.Fatal("expected miss on nil cache")
++	}
++
++	cache.put(CacheKey{SegmentID: 1, ColumnIdx: 0}, decodedColumn{})
++	cache.Invalidate(1)
++	cache.Clear()
++
++	stats := cache.Stats()
++	if stats.Hits != 0 || stats.Misses != 0 {
++		t.Fatal("expected zero stats on nil cache")
++	}
++}
++
++func TestBlockCacheDisabled(t *testing.T) {
++	cache := NewBlockCache(0) // 容量 <= 0 表示不缓存
++
++	key := CacheKey{SegmentID: 1, ColumnIdx: 0}
++	cache.put(key, decodedColumn{data: []int64{1}, typ: common.TypeInt64})
++
++	_, ok := cache.get(key)
++	if ok {
++		t.Fatal("expected miss on disabled cache")
++	}
++}
++
++func TestBlockCacheUpdateExisting(t *testing.T) {
++	cache := NewBlockCache(4096)
++
++	key := CacheKey{SegmentID: 1, ColumnIdx: 0}
++
++	// 放入初始值
++	cache.put(key, decodedColumn{data: []int64{1}, typ: common.TypeInt64})
++
++	// 更新值
++	cache.put(key, decodedColumn{data: []int64{2, 3}, typ: common.TypeInt64})
++
++	got, ok := cache.get(key)
++	if !ok {
++		t.Fatal("expected cache hit")
++	}
++	ints := got.data.([]int64)
++	if len(ints) != 2 || ints[0] != 2 || ints[1] != 3 {
++		t.Fatalf("unexpected updated data: %v", ints)
++	}
++}
++
++func TestBlockCacheClear(t *testing.T) {
++	cache := NewBlockCache(4096)
++
++	for i := uint32(0); i < 5; i++ {
++		cache.put(CacheKey{SegmentID: 1, ColumnIdx: i}, decodedColumn{
++			data: []int64{1}, typ: common.TypeInt64,
++		})
++	}
++
++	cache.Clear()
++
++	stats := cache.Stats()
++	if stats.Entries != 0 {
++		t.Fatalf("expected 0 entries after clear, got %d", stats.Entries)
++	}
++	if stats.Size != 0 {
++		t.Fatalf("expected 0 size after clear, got %d", stats.Size)
++	}
++}
++
++func TestEstimateDecodedSize(t *testing.T) {
++	tests := []struct {
++		name string
++		dc   decodedColumn
++	}{
++		{"int64", decodedColumn{data: make([]int64, 100), typ: common.TypeInt64}},
++		{"float64", decodedColumn{data: make([]float64, 100), typ: common.TypeFloat64}},
++		{"bool_type", decodedColumn{data: make([]uint64, 2), typ: common.TypeBool}},
++		{"string", decodedColumn{data: make([]string, 10), typ: common.TypeString}},
++		{"nil_data", decodedColumn{data: nil, typ: common.TypeInt64}},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			size := estimateDecodedSize(tt.dc)
++			if size <= 0 {
++				t.Fatalf("expected positive size, got %d", size)
++			}
++		})
++	}
++}
++
++func TestIndexCacheBasic(t *testing.T) {
++	cache := NewIndexCache(10)
++
++	stats := []ColumnStat{
++		{ColumnID: 0, NullCount: 5},
++		{ColumnID: 1, NullCount: 3},
++	}
++
++	// 未命中
++	_, ok := cache.GetColumnStats(1)
++	if ok {
++		t.Fatal("expected cache miss")
++	}
++
++	// 放入缓存
++	cache.PutColumnStats(1, stats)
++
++	// 命中
++	got, ok := cache.GetColumnStats(1)
++	if !ok {
++		t.Fatal("expected cache hit")
++	}
++	if len(got) != 2 || got[0].ColumnID != 0 || got[1].ColumnID != 1 {
++		t.Fatalf("unexpected stats: %v", got)
++	}
++}
++
++func TestIndexCacheLRUEviction(t *testing.T) {
++	cache := NewIndexCache(3)
++
++	// 放入 4 个条目，容量为 3
++	for i := uint64(1); i <= 4; i++ {
++		cache.PutColumnStats(i, []ColumnStat{{ColumnID: uint32(i)}})
++	}
++
++	// 最早的条目应该被淘汰
++	_, ok := cache.GetColumnStats(1)
++	if ok {
++		t.Fatal("expected segment 1 to be evicted")
++	}
++
++	// 较新的条目应该还在
++	_, ok = cache.GetColumnStats(4)
++	if !ok {
++		t.Fatal("expected segment 4 to be in cache")
++	}
++}
++
++func TestIndexCacheInvalidate(t *testing.T) {
++	cache := NewIndexCache(10)
++
++	cache.PutColumnStats(1, []ColumnStat{{ColumnID: 0}})
++	cache.PutColumnStats(2, []ColumnStat{{ColumnID: 1}})
++
++	cache.Invalidate(1)
++
++	_, ok := cache.GetColumnStats(1)
++	if ok {
++		t.Fatal("expected segment 1 to be invalidated")
++	}
++
++	_, ok = cache.GetColumnStats(2)
++	if !ok {
++		t.Fatal("expected segment 2 to remain")
++	}
++}
++
++func TestIndexCacheNil(t *testing.T) {
++	var cache *IndexCache
++
++	_, ok := cache.GetColumnStats(1)
++	if ok {
++		t.Fatal("expected miss on nil cache")
++	}
++
++	cache.PutColumnStats(1, nil)
++	cache.Invalidate(1)
++	cache.Clear()
++
++	if cache.Len() != 0 {
++		t.Fatal("expected 0 length on nil cache")
++	}
++}
++
++func TestIndexCacheUpdateExisting(t *testing.T) {
++	cache := NewIndexCache(10)
++
++	cache.PutColumnStats(1, []ColumnStat{{ColumnID: 0}})
++	cache.PutColumnStats(1, []ColumnStat{{ColumnID: 0}, {ColumnID: 1}})
++
++	got, ok := cache.GetColumnStats(1)
++	if !ok {
++		t.Fatal("expected cache hit")
++	}
++	if len(got) != 2 {
++		t.Fatalf("expected 2 stats, got %d", len(got))
++	}
++}
++
++func TestIndexCacheLen(t *testing.T) {
++	cache := NewIndexCache(10)
++
++	if cache.Len() != 0 {
++		t.Fatal("expected 0 length")
++	}
++
++	cache.PutColumnStats(1, []ColumnStat{{ColumnID: 0}})
++	if cache.Len() != 1 {
++		t.Fatalf("expected 1 length, got %d", cache.Len())
++	}
++
++	cache.PutColumnStats(2, []ColumnStat{{ColumnID: 0}})
++	if cache.Len() != 2 {
++		t.Fatalf("expected 2 length, got %d", cache.Len())
++	}
++}
+diff --git a/pkg/storage/compaction_level_test.go b/pkg/storage/compaction_level_test.go
+index 7a4f26e..8ad1cc3 100644
+--- a/pkg/storage/compaction_level_test.go
++++ b/pkg/storage/compaction_level_test.go
+@@ -268,7 +268,7 @@ func TestCompactToLevelWithDifferentColumnTypes(t *testing.T) {
+ 		colType common.DataType
+ 	}{
+ 		{"float64", common.TypeFloat64},
+-		{"bool", common.TypeBool},
++		{"bool_type", common.TypeBool},
+ 		{"string", common.TypeString},
+ 		{"timestamp", common.TypeTimestamp},
+ 	}
+diff --git a/pkg/storage/engine.go b/pkg/storage/engine.go
+index 8740c3d..163d15a 100644
+--- a/pkg/storage/engine.go
++++ b/pkg/storage/engine.go
+@@ -26,12 +26,16 @@ type Engine struct {
+ 	bloomIndex    *index.BloomIndex
+ 	sparseIndex   *index.SparseIndex
+ 	columnMeta    []ColumnMeta
++	blockCache    *BlockCache
++	indexCache    *IndexCache
+ }
+ 
+ // EngineConfig 是 Engine 的配置参数。
+ type EngineConfig struct {
+ 	DataDir         string
+ 	MaxMemTableSize int64
++	BlockCacheSize  int64 // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
++	IndexCacheSize  int   // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
+ }
+ 
+ // NewEngine 创建一个新的存储引擎实例。
+@@ -45,6 +49,16 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
+ 		maxSize = memTableDefaultSize
+ 	}
+ 
++	blockCacheSize := cfg.BlockCacheSize
++	if blockCacheSize == 0 {
++		blockCacheSize = 256 * 1024 * 1024 // 默认 256MB
++	}
++
++	indexCacheSize := cfg.IndexCacheSize
++	if indexCacheSize == 0 {
++		indexCacheSize = 1000 // 默认 1000 条目
++	}
++
+ 	eng := &Engine{
+ 		activeMem:    NewMemTableWithSize(maxSize),
+ 		flusher:      NewFlusher(cfg.DataDir),
+@@ -54,6 +68,8 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
+ 		primaryIndex: index.NewPrimaryIndex(),
+ 		bloomIndex:   index.NewBloomIndex(),
+ 		sparseIndex:  index.NewSparseIndex(),
++		blockCache:   NewBlockCache(blockCacheSize),
++		indexCache:   NewIndexCache(indexCacheSize),
+ 	}
+ 
+ 	// Load existing segments from disk
+@@ -138,6 +154,7 @@ func (e *Engine) Get(key string) (Row, bool) {
+ 
+ 	return e.getFromSegments(key)
+ }
++
+ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 	segIDs := e.primaryIndex.Lookup(key)
+ 	if len(segIDs) == 0 {
+@@ -171,17 +188,24 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 			delete(columns, k)
+ 		}
+ 		for colIdx, col := range e.columnMeta {
+-			val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
+-			if err != nil {
+-				continue
++			// 优先从 BlockCache 获取已解码的列数据
++			cacheKey := CacheKey{SegmentID: segID, ColumnIdx: uint32(colIdx)}
++			if dc, ok := e.blockCache.get(cacheKey); ok {
++				columns[col.Name] = extractValue(dc, rowIdx)
++			} else {
++				val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
++				if err != nil {
++					continue
++				}
++				columns[col.Name] = val
+ 			}
+-			columns[col.Name] = val
+ 		}
+ 		return Row{Version: seg.ID, Columns: columns}, true
+ 	}
+ 
+ 	return Row{}, false
+ }
++
+ func (e *Engine) findSegmentByID(segID uint64) *Segment {
+ 	return e.segmentMap[segID]
+ }
+@@ -273,61 +297,6 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
+ 
+ 	return nil
+ }
+-func (e *Engine) registerSegmentIndexes(seg *Segment, level int) error {
+-	segMeta := index.SegmentMeta{
+-		ID:     seg.ID,
+-		MinKey: seg.MinKey,
+-		MaxKey: seg.MaxKey,
+-		Level:  level,
+-	}
+-	if err := e.primaryIndex.RegisterSegment(segMeta); err != nil {
+-		return fmt.Errorf("engine: register primary index for segment %d: %w", seg.ID, err)
+-	}
+-
+-	if len(seg.Footer.BloomFilter) > 0 {
+-		if err := e.bloomIndex.RegisterFromBytes(seg.ID, seg.Footer.BloomFilter); err != nil {
+-			return fmt.Errorf("engine: register bloom index for segment %d: %w", seg.ID, err)
+-		}
+-	}
+-
+-	e.sparseIndex.LoadFromSegment(seg, seg.MinKey, seg.MaxKey, level)
+-	return nil
+-}
+-func (e *Engine) unregisterSegmentIndexes(segID uint64) {
+-	_ = e.primaryIndex.UnregisterSegment(segID)
+-	e.bloomIndex.Unregister(segID)
+-	e.sparseIndex.UnregisterSegment(segID)
+-}
+-
+-// Segments 返回所有 Segment 的副本。
+-func (e *Engine) Segments() []*Segment {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-
+-	result := make([]*Segment, len(e.segments))
+-	copy(result, e.segments)
+-	return result
+-}
+-
+-// SegmentCount 返回 Segment 的数量。
+-func (e *Engine) SegmentCount() int {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	return len(e.segments)
+-}
+-
+-// L0SegmentCount 返回 L0 层 Segment 的数量。
+-func (e *Engine) L0SegmentCount() int {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	count := 0
+-	for _, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			count++
+-		}
+-	}
+-	return count
+-}
+ 
+ // Compact 执行 Tiered Compaction，将 L0 合并到 L1。
+ func (e *Engine) Compact(cols []ColumnMeta) error {
+@@ -403,13 +372,6 @@ func (e *Engine) ShouldCompact() bool {
+ 	return e.l0Count() >= defaultL0CompactionThreshold
+ }
+ 
+-// MemTableSize 返回当前活跃 MemTable 的大小。
+-func (e *Engine) MemTableSize() int64 {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	return e.activeMem.Size()
+-}
+-
+ // Close 关闭引擎，同步并关闭 WAL。
+ func (e *Engine) Close() error {
+ 	e.mu.Lock()
+@@ -424,67 +386,3 @@ func (e *Engine) Close() error {
+ 
+ 	return nil
+ }
+-
+-// PrimaryIndex 返回主键索引实例。
+-func (e *Engine) PrimaryIndex() *index.PrimaryIndex {
+-	return e.primaryIndex
+-}
+-
+-// BloomIndex 返回布隆过滤器索引实例。
+-func (e *Engine) BloomIndex() *index.BloomIndex {
+-	return e.bloomIndex
+-}
+-
+-// SparseIndex 返回稀疏索引实例。
+-func (e *Engine) SparseIndex() *index.SparseIndex {
+-	return e.sparseIndex
+-}
+-
+-// ColumnMeta 返回列元数据的副本。
+-func (e *Engine) ColumnMeta() []ColumnMeta {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	result := make([]ColumnMeta, len(e.columnMeta))
+-	copy(result, e.columnMeta)
+-	return result
+-}
+-func (e *Engine) rotateMemTable() error {
+-	if e.activeMem.Len() == 0 {
+-		return nil
+-	}
+-	e.activeMem.Freeze()
+-	e.immutable = append(e.immutable, e.activeMem)
+-	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
+-	return nil
+-}
+-func (e *Engine) l0Count() int {
+-	count := 0
+-	for _, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			count++
+-		}
+-	}
+-	return count
+-}
+-func (e *Engine) collectL0Segments() ([]*Segment, []int) {
+-	var segments []*Segment
+-	var indices []int
+-	for i, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			segments = append(segments, e.segments[i])
+-			indices = append(indices, i)
+-		}
+-	}
+-	return segments, indices
+-}
+-func (e *Engine) collectL1Segments() ([]*Segment, []int) {
+-	var segments []*Segment
+-	var indices []int
+-	for i, lvl := range e.segmentLevels {
+-		if lvl == 1 {
+-			segments = append(segments, e.segments[i])
+-			indices = append(indices, i)
+-		}
+-	}
+-	return segments, indices
+-}
+diff --git a/pkg/storage/engine_batch_test.go b/pkg/storage/engine_batch_test.go
+index ee1ca09..343aa65 100644
+--- a/pkg/storage/engine_batch_test.go
++++ b/pkg/storage/engine_batch_test.go
+@@ -141,11 +141,11 @@ func TestEngineWriteBatchAllTypes(t *testing.T) {
+ 		{
+ 			Key: "all_types_row",
+ 			Values: map[string]common.Value{
+-				"bool":  common.NewBool(true),
+-				"int":   common.NewInt64(-42),
+-				"float": common.NewFloat64(3.14),
+-				"str":   common.NewString("hello"),
+-				"time":  common.NewTimestamp(ts),
++				"bool_col": common.NewBool(true),
++				"int":      common.NewInt64(-42),
++				"float":    common.NewFloat64(3.14),
++				"str":      common.NewString("hello"),
++				"time":     common.NewTimestamp(ts),
+ 			},
+ 		},
+ 	}
+@@ -158,7 +158,7 @@ func TestEngineWriteBatchAllTypes(t *testing.T) {
+ 	if !ok {
+ 		t.Fatal("all_types_row not found")
+ 	}
+-	if v := got.Columns["bool"]; !v.Valid || v.Int64 != 1 {
++	if v := got.Columns["bool_col"]; !v.Valid || v.Int64 != 1 {
+ 		t.Errorf("bool: expected true, got %v", v)
+ 	}
+ 	if v := got.Columns["int"]; v.Int64 != -42 {
+diff --git a/pkg/storage/engine_helpers.go b/pkg/storage/engine_helpers.go
+new file mode 100644
+index 0000000..d039b21
+--- /dev/null
++++ b/pkg/storage/engine_helpers.go
+@@ -0,0 +1,152 @@
++package storage
++
++import (
++	"fmt"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
++)
++
++// registerSegmentIndexes 将 Segment 注册到所有索引（主键、布隆、稀疏），
++// 并将列统计信息缓存到 IndexCache。
++func (e *Engine) registerSegmentIndexes(seg *Segment, level int) error {
++	segMeta := index.SegmentMeta{
++		ID:     seg.ID,
++		MinKey: seg.MinKey,
++		MaxKey: seg.MaxKey,
++		Level:  level,
++	}
++	if err := e.primaryIndex.RegisterSegment(segMeta); err != nil {
++		return fmt.Errorf("engine: register primary index for segment %d: %w", seg.ID, err)
++	}
++
++	if len(seg.Footer.BloomFilter) > 0 {
++		if err := e.bloomIndex.RegisterFromBytes(seg.ID, seg.Footer.BloomFilter); err != nil {
++			return fmt.Errorf("engine: register bloom index for segment %d: %w", seg.ID, err)
++		}
++	}
++
++	e.sparseIndex.LoadFromSegment(seg, seg.MinKey, seg.MaxKey, level)
++
++	// 缓存列统计信息到 IndexCache
++	if len(seg.Footer.ColumnStats) > 0 {
++		stats := make([]ColumnStat, len(seg.Footer.ColumnStats))
++		copy(stats, seg.Footer.ColumnStats)
++		e.indexCache.PutColumnStats(seg.ID, stats)
++	}
++
++	return nil
++}
++
++// unregisterSegmentIndexes 从所有索引中注销 Segment，并清除相关缓存。
++func (e *Engine) unregisterSegmentIndexes(segID uint64) {
++	_ = e.primaryIndex.UnregisterSegment(segID)
++	e.bloomIndex.Unregister(segID)
++	e.sparseIndex.UnregisterSegment(segID)
++	e.blockCache.Invalidate(segID)
++	e.indexCache.Invalidate(segID)
++}
++
++// Segments 返回所有 Segment 的副本。
++func (e *Engine) Segments() []*Segment {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++
++	result := make([]*Segment, len(e.segments))
++	copy(result, e.segments)
++	return result
++}
++
++// SegmentCount 返回 Segment 的数量。
++func (e *Engine) SegmentCount() int {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	return len(e.segments)
++}
++
++// L0SegmentCount 返回 L0 层 Segment 的数量。
++func (e *Engine) L0SegmentCount() int {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	count := 0
++	for _, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			count++
++		}
++	}
++	return count
++}
++
++// MemTableSize 返回当前活跃 MemTable 的大小。
++func (e *Engine) MemTableSize() int64 {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	return e.activeMem.Size()
++}
++
++// PrimaryIndex 返回主键索引实例。
++func (e *Engine) PrimaryIndex() *index.PrimaryIndex {
++	return e.primaryIndex
++}
++
++// BloomIndex 返回布隆过滤器索引实例。
++func (e *Engine) BloomIndex() *index.BloomIndex {
++	return e.bloomIndex
++}
++
++// SparseIndex 返回稀疏索引实例。
++func (e *Engine) SparseIndex() *index.SparseIndex {
++	return e.sparseIndex
++}
++
++// ColumnMeta 返回列元数据的副本。
++func (e *Engine) ColumnMeta() []ColumnMeta {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	result := make([]ColumnMeta, len(e.columnMeta))
++	copy(result, e.columnMeta)
++	return result
++}
++
++func (e *Engine) rotateMemTable() error {
++	if e.activeMem.Len() == 0 {
++		return nil
++	}
++	e.activeMem.Freeze()
++	e.immutable = append(e.immutable, e.activeMem)
++	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
++	return nil
++}
++
++func (e *Engine) l0Count() int {
++	count := 0
++	for _, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			count++
++		}
++	}
++	return count
++}
++
++func (e *Engine) collectL0Segments() ([]*Segment, []int) {
++	var segments []*Segment
++	var indices []int
++	for i, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			segments = append(segments, e.segments[i])
++			indices = append(indices, i)
++		}
++	}
++	return segments, indices
++}
++
++func (e *Engine) collectL1Segments() ([]*Segment, []int) {
++	var segments []*Segment
++	var indices []int
++	for i, lvl := range e.segmentLevels {
++		if lvl == 1 {
++			segments = append(segments, e.segments[i])
++			indices = append(indices, i)
++		}
++	}
++	return segments, indices
++}
+diff --git a/pkg/storage/iterator.go b/pkg/storage/iterator.go
+index c9d47e0..65aa5c9 100644
+--- a/pkg/storage/iterator.go
++++ b/pkg/storage/iterator.go
+@@ -2,6 +2,7 @@ package storage
+ 
+ import (
+ 	"container/heap"
++	"fmt"
+ 	"sync"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+@@ -71,32 +72,84 @@ type segmentIterator struct {
+ 	finished    bool
+ 	decodedCols []decodedColumn
+ 	decodeOnce  sync.Once
++	blockCache  *BlockCache
+ }
+ 
+ // newSegmentIterator creates an iterator over a Segment for the given range.
+ // Column decoding is deferred until the first row is accessed, avoiding
+ // unnecessary work for segments that are skipped by index pruning.
+-func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string) *segmentIterator {
++func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string, blockCache *BlockCache) *segmentIterator {
+ 	return &segmentIterator{
+-		seg:     seg,
+-		colMeta: colMeta,
+-		start:   start,
+-		end:     end,
+-		rowIdx:  -1,
++		seg:        seg,
++		colMeta:    colMeta,
++		start:      start,
++		end:        end,
++		rowIdx:     -1,
++		blockCache: blockCache,
+ 	}
+ }
+ 
+ // ensureDecoded lazily decodes all columns on first access.
+ // Uses sync.Once to guarantee thread-safe, idempotent initialization.
+ // On decode failure, decodedCols is set to an empty (non-nil) slice and err is recorded.
++// 优先从 BlockCache 获取已解码的列数据，未命中时解码并写入缓存。
++// decodeSegmentColumn 从 Segment 中解码单列数据，优先从 BlockCache 获取。
++func (it *segmentIterator) decodeSegmentColumn(i int, decodedCols []decodedColumn) (bool, int) {
++	cacheKey := CacheKey{SegmentID: it.seg.ID, ColumnIdx: uint32(i)}
++	if dc, ok := it.blockCache.get(cacheKey); ok {
++		decodedCols[i] = dc
++		return true, 1
++	}
++
++	src := &it.seg.Columns[i]
++	enc := &EncodedColumn{
++		Encoding: src.Encoding,
++		Type:     src.Type,
++		RowCount: src.RowCount,
++	}
++	if len(src.Data) > 0 {
++		enc.Data = make([]byte, len(src.Data))
++		copy(enc.Data, src.Data)
++	}
++	if len(src.Offsets) > 0 {
++		enc.Offsets = src.Offsets
++	}
++	if len(src.Dict) > 0 {
++		enc.Dict = src.Dict
++	}
++	if len(src.Nulls) > 0 {
++		enc.Nulls = src.Nulls
++	}
++	if err := DecompressColumn(enc); err != nil {
++		it.err = fmt.Errorf("segment: decompress column %d: %w", i, err)
++		it.decodedCols = make([]decodedColumn, 0)
++		return false, 0
++	}
++	decoded, nulls, err := DecodeColumn(enc)
++	if err != nil {
++		it.err = fmt.Errorf("segment: decode column %d: %w", i, err)
++		it.decodedCols = make([]decodedColumn, 0)
++		return false, 0
++	}
++	dc := decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
++	decodedCols[i] = dc
++	it.blockCache.put(cacheKey, dc)
++	return true, 0
++}
++
+ func (it *segmentIterator) ensureDecoded() {
+ 	it.decodeOnce.Do(func() {
+-		decodedCols, err := it.seg.decodeAllColumns()
+-		if err != nil {
+-			it.err = err
+-			it.decodedCols = make([]decodedColumn, 0)
+-			return
++		decodedCols := make([]decodedColumn, len(it.seg.Columns))
++		cacheHitCount := 0
++
++		for i := range it.seg.Columns {
++			ok, hits := it.decodeSegmentColumn(i, decodedCols)
++			if !ok {
++				return
++			}
++			cacheHitCount += hits
+ 		}
++
+ 		it.decodedCols = decodedCols
+ 	})
+ }
+@@ -353,7 +406,7 @@ func (e *Engine) buildScanIterators(start, end string) []ScanIterator {
+ 		if seg.MinKey > end || seg.MaxKey < start {
+ 			continue
+ 		}
+-		iters = append(iters, newSegmentIterator(seg, e.columnMeta, start, end))
++		iters = append(iters, newSegmentIterator(seg, e.columnMeta, start, end, e.blockCache))
+ 	}
+ 
+ 	for i := 0; i < len(e.immutable); i++ {
+diff --git a/pkg/storage/iterator_close_test.go b/pkg/storage/iterator_close_test.go
+index 70a9d78..6d72ec1 100644
+--- a/pkg/storage/iterator_close_test.go
++++ b/pkg/storage/iterator_close_test.go
+@@ -33,7 +33,7 @@ func TestSegmentIteratorEntryBeforeNext(t *testing.T) {
+ 	seg := buildTestSegment(t, []string{"a", "b"}, []int64{1, 2})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+ 
+-	it := newSegmentIterator(seg, colMeta, "a", "b")
++	it := newSegmentIterator(seg, colMeta, "a", "b", nil)
+ 
+ 	// Entry() before Next() should return zero value
+ 	entry := it.Entry()
+@@ -46,7 +46,7 @@ func TestSegmentIteratorClose(t *testing.T) {
+ 	seg := buildTestSegment(t, []string{"a"}, []int64{1})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+ 
+-	it := newSegmentIterator(seg, colMeta, "a", "a")
++	it := newSegmentIterator(seg, colMeta, "a", "a", nil)
+ 	it.Close()
+ }
+ 
+@@ -151,7 +151,7 @@ func TestMemTableIteratorCloseMultipleCalls(_ *testing.T) {
+ func TestSegmentIteratorCloseMultipleCalls(t *testing.T) {
+ 	seg := buildTestSegment(t, []string{"a"}, []int64{1})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+-	it := newSegmentIterator(seg, colMeta, "a", "a")
++	it := newSegmentIterator(seg, colMeta, "a", "a", nil)
+ 	it.Close()
+ 	it.Close() // 不应 panic
+ }
+@@ -164,7 +164,7 @@ func TestMergeIteratorCloseWithMultipleIterators(t *testing.T) {
+ 	it2 := newMemTableIterator(NewMemTable(), "a", "z")
+ 	seg := buildTestSegment(t, []string{"a"}, []int64{1})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+-	it3 := newSegmentIterator(seg, colMeta, "a", "a")
++	it3 := newSegmentIterator(seg, colMeta, "a", "a", nil)
+ 
+ 	mi := NewMergeIterator(it1, it2, it3)
+ 	// Close 应关闭所有子迭代器，不应 panic
+diff --git a/pkg/storage/iterator_test.go b/pkg/storage/iterator_test.go
+index 89381b7..a684dec 100644
+--- a/pkg/storage/iterator_test.go
++++ b/pkg/storage/iterator_test.go
+@@ -65,7 +65,7 @@ func TestSegmentIterator(t *testing.T) {
+ 	seg := buildTestSegment(t, []string{"a", "c", "e", "g", "i"}, []int64{1, 3, 5, 7, 9})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+ 
+-	it := newSegmentIterator(seg, colMeta, "c", "g")
++	it := newSegmentIterator(seg, colMeta, "c", "g", nil)
+ 
+ 	var keys []string
+ 	if !it.Next() {
+@@ -96,7 +96,7 @@ func TestSegmentIteratorFullRange(t *testing.T) {
+ 	seg := buildTestSegment(t, keys, []int64{1, 2, 3})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+ 
+-	it := newSegmentIterator(seg, colMeta, "a", "c")
++	it := newSegmentIterator(seg, colMeta, "a", "c", nil)
+ 
+ 	var result []string
+ 	for it.Next() {
+@@ -112,7 +112,7 @@ func TestSegmentIteratorNoOverlap(t *testing.T) {
+ 	seg := buildTestSegment(t, []string{"m", "n", "o"}, []int64{13, 14, 15})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+ 
+-	it := newSegmentIterator(seg, colMeta, "a", "c")
++	it := newSegmentIterator(seg, colMeta, "a", "c", nil)
+ 	if it.Next() {
+ 		t.Error("expected no entries for non-overlapping range")
+ 	}
+@@ -122,7 +122,7 @@ func TestSegmentIteratorSingleKey(t *testing.T) {
+ 	seg := buildTestSegment(t, []string{"a", "b", "c"}, []int64{1, 2, 3})
+ 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+ 
+-	it := newSegmentIterator(seg, colMeta, "b", "b")
++	it := newSegmentIterator(seg, colMeta, "b", "b", nil)
+ 
+ 	if !it.Next() {
+ 		t.Fatal("expected one entry")

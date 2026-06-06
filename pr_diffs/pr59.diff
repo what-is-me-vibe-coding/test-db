@@ -1,0 +1,659 @@
+diff --git a/pkg/storage/compaction.go b/pkg/storage/compaction.go
+index 7082ac6..57ac650 100644
+--- a/pkg/storage/compaction.go
++++ b/pkg/storage/compaction.go
+@@ -78,14 +78,23 @@ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]mem
+ 		if err != nil {
+ 			return nil, fmt.Errorf("compactor: read segment %d: %w", seg.ID, err)
+ 		}
++		// 将 segment ID 附加到每行，用于去重时判断版本先后
++		for i := range rows {
++			rows[i].segID = seg.ID
++		}
+ 		allRows = append(allRows, rows...)
+ 	}
+ 
++	// 按 key 排序，同 key 时按 segment ID 升序排列，
++	// 这样去重时取最后一个即为最新版本
+ 	sort.Slice(allRows, func(i, j int) bool {
+-		return allRows[i].Key < allRows[j].Key
++		if allRows[i].Key != allRows[j].Key {
++			return allRows[i].Key < allRows[j].Key
++		}
++		return allRows[i].segID < allRows[j].segID
+ 	})
+ 
+-	// 去重：同一 key 保留最新版本（L0 Segment ID 更大，排在后面，取最后一个）
++	// 去重：同一 key 保留最新版本（segment ID 最大，排在最后）
+ 	deduped := make([]memRow, 0, len(allRows))
+ 	for i := range allRows {
+ 		if i > 0 && allRows[i].Key == allRows[i-1].Key {
+@@ -243,4 +252,5 @@ func (c *Compactor) CleanupSegments(segments []*Segment) error {
+ type memRow struct {
+ 	Key    string
+ 	Values []common.Value
++	segID  uint64 // 来源 segment ID，用于去重时判断版本先后
+ }
+diff --git a/pkg/storage/crash_recovery_test.go b/pkg/storage/crash_recovery_test.go
+index d4a17aa..d48aa76 100644
+--- a/pkg/storage/crash_recovery_test.go
++++ b/pkg/storage/crash_recovery_test.go
+@@ -14,6 +14,8 @@ const (
+ 	crKey2 = "key2"
+ 	crKey3 = "key3"
+ 	crKey4 = "key4"
++	crKey5 = "key5"
++	crCol0 = "col0"
+ )
+ 
+ // TestCrashRecovery_BasicRecovery 验证基本崩溃恢复：写入数据后模拟崩溃（不Flush），重新打开引擎后数据应从WAL恢复。
+diff --git a/pkg/storage/engine.go b/pkg/storage/engine.go
+index 8740c3d..9d5d782 100644
+--- a/pkg/storage/engine.go
++++ b/pkg/storage/engine.go
+@@ -238,9 +238,15 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
+ 
+ 	e.mu.Unlock()
+ 
+-	for _, mem := range immutable {
++	// 记录已成功刷写的 memtable，失败时将未刷写的放回 immutable
++	var flushedIdx int
++	for i, mem := range immutable {
+ 		seg, err := e.flusher.Flush(mem, cols)
+ 		if err != nil {
++			// 将未刷写的 memtable 放回 immutable，避免数据丢失
++			e.mu.Lock()
++			e.immutable = append(e.immutable, immutable[flushedIdx:]...)
++			e.mu.Unlock()
+ 			return fmt.Errorf("engine flush: %w", err)
+ 		}
+ 
+@@ -250,9 +256,17 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
+ 		e.segmentLevels = append(e.segmentLevels, 0)
+ 		if err := e.registerSegmentIndexes(seg, 0); err != nil {
+ 			e.mu.Unlock()
++			// 将剩余未刷写的 memtable 放回 immutable
++			remaining := immutable[flushedIdx+1:]
++			if len(remaining) > 0 {
++				e.mu.Lock()
++				e.immutable = append(e.immutable, remaining...)
++				e.mu.Unlock()
++			}
+ 			return fmt.Errorf("engine flush: %w", err)
+ 		}
+ 		e.mu.Unlock()
++		flushedIdx = i + 1
+ 	}
+ 
+ 	// Write checkpoint after successful flush
+@@ -364,13 +378,26 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
+ 	e.mu.Lock()
+ 	defer e.mu.Unlock()
+ 
+-	// 按 ID 注销索引
++	// 先注册新 segment 的索引，再注销旧 segment 的索引，
++	// 确保任何时刻索引中都有数据可用，避免部分失败导致数据丢失。
++	e.segments = append(e.segments, newSeg)
++	e.segmentMap[newSeg.ID] = newSeg
++	e.segmentLevels = append(e.segmentLevels, 1)
++	if err := e.registerSegmentIndexes(newSeg, 1); err != nil {
++		// 注册新索引失败，回滚：移除刚添加的 segment
++		e.segments = e.segments[:len(e.segments)-1]
++		delete(e.segmentMap, newSeg.ID)
++		e.segmentLevels = e.segmentLevels[:len(e.segmentLevels)-1]
++		return fmt.Errorf("engine compact: %w", err)
++	}
++
++	// 新 segment 注册成功后，再注销旧 segment 的索引
+ 	for _, seg := range allSegments {
+ 		e.unregisterSegmentIndexes(seg.ID)
+ 		delete(e.segmentMap, seg.ID)
+ 	}
+ 
+-	// 按 ID 删除 segment，避免并发 Flush/Compact 导致索引偏移
++	// 按 ID 删除旧 segment
+ 	remaining := make([]*Segment, 0, len(e.segments))
+ 	remainingLevels := make([]int, 0, len(e.segmentLevels))
+ 	for i, seg := range e.segments {
+@@ -382,13 +409,6 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
+ 	e.segments = remaining
+ 	e.segmentLevels = remainingLevels
+ 
+-	e.segments = append(e.segments, newSeg)
+-	e.segmentMap[newSeg.ID] = newSeg
+-	e.segmentLevels = append(e.segmentLevels, 1)
+-	if err := e.registerSegmentIndexes(newSeg, 1); err != nil {
+-		return fmt.Errorf("engine compact: %w", err)
+-	}
+-
+ 	if err := e.compactor.CleanupSegments(allSegments); err != nil {
+ 		return fmt.Errorf("engine compact: cleanup: %w", err)
+ 	}
+@@ -448,43 +468,3 @@ func (e *Engine) ColumnMeta() []ColumnMeta {
+ 	copy(result, e.columnMeta)
+ 	return result
+ }
+-func (e *Engine) rotateMemTable() error {
+-	if e.activeMem.Len() == 0 {
+-		return nil
+-	}
+-	e.activeMem.Freeze()
+-	e.immutable = append(e.immutable, e.activeMem)
+-	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
+-	return nil
+-}
+-func (e *Engine) l0Count() int {
+-	count := 0
+-	for _, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			count++
+-		}
+-	}
+-	return count
+-}
+-func (e *Engine) collectL0Segments() ([]*Segment, []int) {
+-	var segments []*Segment
+-	var indices []int
+-	for i, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			segments = append(segments, e.segments[i])
+-			indices = append(indices, i)
+-		}
+-	}
+-	return segments, indices
+-}
+-func (e *Engine) collectL1Segments() ([]*Segment, []int) {
+-	var segments []*Segment
+-	var indices []int
+-	for i, lvl := range e.segmentLevels {
+-		if lvl == 1 {
+-			segments = append(segments, e.segments[i])
+-			indices = append(indices, i)
+-		}
+-	}
+-	return segments, indices
+-}
+diff --git a/pkg/storage/engine_coverage_test.go b/pkg/storage/engine_coverage_test.go
+index a7da4bd..578d015 100644
+--- a/pkg/storage/engine_coverage_test.go
++++ b/pkg/storage/engine_coverage_test.go
+@@ -318,7 +318,7 @@ func TestEngineWriteAndReadMultipleKeys(t *testing.T) {
+ 	}
+ 	defer func() { _ = eng.Close() }()
+ 
+-	keys := []string{crKey1, "key2", crKey3, "key4", "key5"}
++	keys := []string{crKey1, crKey2, crKey3, crKey4, crKey5}
+ 	for i, key := range keys {
+ 		if err := eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(i))}); err != nil {
+ 			t.Fatalf("Write %s 失败: %v", key, err)
+diff --git a/pkg/storage/engine_helpers.go b/pkg/storage/engine_helpers.go
+new file mode 100644
+index 0000000..423dbd0
+--- /dev/null
++++ b/pkg/storage/engine_helpers.go
+@@ -0,0 +1,49 @@
++package storage
++
++// rotateMemTable 将当前活跃的 MemTable 冻结并移入 immutable 队列。
++func (e *Engine) rotateMemTable() error {
++	if e.activeMem.Len() == 0 {
++		return nil
++	}
++	e.activeMem.Freeze()
++	e.immutable = append(e.immutable, e.activeMem)
++	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
++	return nil
++}
++
++// l0Count 返回 L0 层 Segment 的数量。
++func (e *Engine) l0Count() int {
++	count := 0
++	for _, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			count++
++		}
++	}
++	return count
++}
++
++// collectL0Segments 收集所有 L0 层的 Segment 及其在 e.segments 中的索引。
++func (e *Engine) collectL0Segments() ([]*Segment, []int) {
++	var segments []*Segment
++	var indices []int
++	for i, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			segments = append(segments, e.segments[i])
++			indices = append(indices, i)
++		}
++	}
++	return segments, indices
++}
++
++// collectL1Segments 收集所有 L1 层的 Segment 及其在 e.segments 中的索引。
++func (e *Engine) collectL1Segments() ([]*Segment, []int) {
++	var segments []*Segment
++	var indices []int
++	for i, lvl := range e.segmentLevels {
++		if lvl == 1 {
++			segments = append(segments, e.segments[i])
++			indices = append(indices, i)
++		}
++	}
++	return segments, indices
++}
+diff --git a/pkg/storage/flusher_test.go b/pkg/storage/flusher_test.go
+index 78ec05b..679c80e 100644
+--- a/pkg/storage/flusher_test.go
++++ b/pkg/storage/flusher_test.go
+@@ -23,7 +23,7 @@ func TestFlusherFlush(t *testing.T) {
+ 			colName: common.NewString("alice"),
+ 			colAge:  common.NewInt64(30),
+ 		}}},
+-		{"key2", Row{Version: 1, Columns: map[string]common.Value{
++		{crKey2, Row{Version: 1, Columns: map[string]common.Value{
+ 			"id":    common.NewInt64(2),
+ 			colName: common.NewString("bob"),
+ 			colAge:  common.NewInt64(25),
+diff --git a/pkg/storage/stability_flush_compact_test.go b/pkg/storage/stability_flush_compact_test.go
+new file mode 100644
+index 0000000..48cc594
+--- /dev/null
++++ b/pkg/storage/stability_flush_compact_test.go
+@@ -0,0 +1,334 @@
++package storage
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// TestFlushFailurePreservesImmutableMemTables 验证 Flush 失败时，
++// 未刷写的 immutable memtable 被放回 e.immutable，数据不丢失。
++func TestFlushFailurePreservesImmutableMemTables(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir, MaxMemTableSize: 1 << 20})
++	if err != nil {
++		t.Fatalf("NewEngine: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []ColumnMeta{
++		{ID: 0, Name: crCol0, Type: common.TypeInt64},
++	}
++
++	// 写入数据使 activeMem 有内容
++	if err := eng.Write(crKey1, map[string]common.Value{
++		crCol0: common.NewInt64(1),
++	}); err != nil {
++		t.Fatalf("Write key1: %v", err)
++	}
++
++	// 手动构造场景：让 flusher 在 Flush 时失败
++	// 方法：将 flusher 的 dataDir 设为不可写路径
++	originalDir := eng.flusher.dataDir
++	eng.flusher.dataDir = "/proc/nonexistent/path/for/test"
++
++	// Flush 应该失败
++	err = eng.Flush(cols)
++	if err == nil {
++		t.Fatal("expected Flush to fail with invalid data dir")
++	}
++
++	// 恢复 flusher 的 dataDir
++	eng.flusher.dataDir = originalDir
++
++	// 验证 immutable memtable 被放回，数据仍然可读
++	eng.mu.RLock()
++	hasImmutable := len(eng.immutable) > 0
++	eng.mu.RUnlock()
++
++	if !hasImmutable {
++		t.Fatal("expected immutable memtables to be restored after flush failure")
++	}
++
++	// 数据应该仍可查询
++	row, ok := eng.Get(crKey1)
++	if !ok {
++		t.Fatal("expected key1 to be found after flush failure recovery")
++	}
++	if row.Columns[crCol0].Int64 != 1 {
++		t.Fatalf("expected col0=1, got %v", row.Columns[crCol0])
++	}
++}
++
++// TestCompactPreservesDataOnIndexRegistrationFailure 验证 Compact 过程中
++// 如果新 segment 索引注册失败，旧 segment 数据不丢失。
++func TestCompactPreservesDataOnIndexRegistrationFailure(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir, MaxMemTableSize: 1 << 20})
++	if err != nil {
++		t.Fatalf("NewEngine: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []ColumnMeta{
++		{ID: 0, Name: crCol0, Type: common.TypeInt64},
++	}
++
++	// 写入并刷盘多次，生成多个 L0 segment
++	for i := 0; i < 4; i++ {
++		if err := eng.Write(crKey1, map[string]common.Value{
++			crCol0: common.NewInt64(int64(i)),
++		}); err != nil {
++			t.Fatalf("Write %d: %v", i, err)
++		}
++		if err := eng.Flush(cols); err != nil {
++			t.Fatalf("Flush %d: %v", i, err)
++		}
++	}
++
++	// 验证有 L0 segments
++	if eng.L0SegmentCount() == 0 {
++		t.Fatal("expected L0 segments before compact")
++	}
++
++	// 正常 Compact 应该成功
++	if err := eng.Compact(cols); err != nil {
++		t.Fatalf("Compact: %v", err)
++	}
++
++	// 验证 L0 segments 已合并
++	if eng.L0SegmentCount() != 0 {
++		t.Fatalf("expected 0 L0 segments after compact, got %d", eng.L0SegmentCount())
++	}
++
++	// 验证数据仍可查询（应返回最新版本）
++	row, ok := eng.Get(crKey1)
++	if !ok {
++		t.Fatal("expected key1 to be found after compact")
++	}
++	if row.Columns[crCol0].Int64 != 3 {
++		t.Fatalf("expected col0=3 (latest version), got %v", row.Columns[crCol0])
++	}
++}
++
++// TestWALRotateResilience 验证 WAL 切分过程中如果出现异常，
++// 不会导致 WAL 文件不可用。
++func TestWALRotateResilience(t *testing.T) {
++	dir := t.TempDir()
++	walPath := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(walPath)
++	if err != nil {
++		t.Fatalf("CreateWAL: %v", err)
++	}
++
++	// 写入数据使其接近 maxSize
++	w.maxSize = 256 // 设置较小的 maxSize 以便触发 rotate
++	for i := 0; i < 20; i++ {
++		if err := w.AppendWrite([]byte("test_payload_data_for_rotate_test")); err != nil {
++			t.Fatalf("AppendWrite %d: %v", i, err)
++		}
++	}
++
++	// 验证 WAL 仍然可用
++	if err := w.Sync(); err != nil {
++		t.Fatalf("Sync after rotate: %v", err)
++	}
++
++	if err := w.Close(); err != nil {
++		t.Fatalf("Close: %v", err)
++	}
++
++	// 验证可以重新打开并回放
++	w2, records, err := OpenWAL(walPath)
++	if err != nil {
++		t.Fatalf("OpenWAL after rotate: %v", err)
++	}
++	defer func() { _ = w2.Close() }()
++
++	if len(records) == 0 {
++		t.Fatal("expected records after WAL rotate and reopen")
++	}
++}
++
++// TestCompactionDeduplicationByVersion 验证 Compaction 去重逻辑
++// 正确处理同 key 不同版本（segment ID）的情况，保留最新版本。
++func TestCompactionDeduplicationByVersion(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir, MaxMemTableSize: 1 << 20})
++	if err != nil {
++		t.Fatalf("NewEngine: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []ColumnMeta{
++		{ID: 0, Name: crCol0, Type: common.TypeInt64},
++	}
++
++	// 第一次写入 key1 = 100
++	if err := eng.Write(crKey1, map[string]common.Value{
++		crCol0: common.NewInt64(100),
++	}); err != nil {
++		t.Fatalf("Write key1=100: %v", err)
++	}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush 1: %v", err)
++	}
++
++	// 第二次写入 key1 = 200（更新）
++	if err := eng.Write(crKey1, map[string]common.Value{
++		crCol0: common.NewInt64(200),
++	}); err != nil {
++		t.Fatalf("Write key1=200: %v", err)
++	}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush 2: %v", err)
++	}
++
++	// 第三次写入 key1 = 300（再次更新）
++	if err := eng.Write(crKey1, map[string]common.Value{
++		crCol0: common.NewInt64(300),
++	}); err != nil {
++		t.Fatalf("Write key1=300: %v", err)
++	}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush 3: %v", err)
++	}
++
++	// 写入另一个 key 以确保有足够的 L0 segments
++	if err := eng.Write(crKey2, map[string]common.Value{
++		crCol0: common.NewInt64(999),
++	}); err != nil {
++		t.Fatalf("Write key2: %v", err)
++	}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush 4: %v", err)
++	}
++
++	// Compact
++	if err := eng.Compact(cols); err != nil {
++		t.Fatalf("Compact: %v", err)
++	}
++
++	// 验证 key1 返回最新版本 300
++	row, ok := eng.Get(crKey1)
++	if !ok {
++		t.Fatal("expected key1 to be found after compact")
++	}
++	if row.Columns[crCol0].Int64 != 300 {
++		t.Fatalf("expected col0=300 (latest version after compact), got %v", row.Columns[crCol0])
++	}
++
++	// 验证 key2 仍可查询
++	row2, ok := eng.Get(crKey2)
++	if !ok {
++		t.Fatal("expected key2 to be found after compact")
++	}
++	if row2.Columns[crCol0].Int64 != 999 {
++		t.Fatalf("expected col0=999 for key2, got %v", row2.Columns[crCol0])
++	}
++}
++
++// TestFlushMultipleImmutableRecoversOnPartialFailure 验证多个 immutable memtable
++// 刷盘时，如果中间某个失败，已刷盘的成功，未刷盘的被放回。
++func TestFlushMultipleImmutableRecoversOnPartialFailure(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir, MaxMemTableSize: 1 << 20})
++	if err != nil {
++		t.Fatalf("NewEngine: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	cols := []ColumnMeta{
++		{ID: 0, Name: crCol0, Type: common.TypeInt64},
++	}
++
++	// 写入并刷盘第一个 memtable
++	if err := eng.Write(crKey1, map[string]common.Value{
++		crCol0: common.NewInt64(1),
++	}); err != nil {
++		t.Fatalf("Write key1: %v", err)
++	}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush 1: %v", err)
++	}
++
++	// 写入第二个 memtable
++	if err := eng.Write(crKey2, map[string]common.Value{
++		crCol0: common.NewInt64(2),
++	}); err != nil {
++		t.Fatalf("Write key2: %v", err)
++	}
++
++	// 手动将 activeMem 移到 immutable（模拟多个 immutable）
++	eng.mu.Lock()
++	eng.activeMem.Freeze()
++	eng.immutable = append(eng.immutable, eng.activeMem)
++	eng.activeMem = NewMemTableWithSize(eng.activeMem.maxSize)
++	eng.mu.Unlock()
++
++	// 再写入第三个 memtable
++	if err := eng.Write(crKey3, map[string]common.Value{
++		crCol0: common.NewInt64(3),
++	}); err != nil {
++		t.Fatalf("Write key3: %v", err)
++	}
++
++	eng.mu.Lock()
++	eng.activeMem.Freeze()
++	eng.immutable = append(eng.immutable, eng.activeMem)
++	eng.activeMem = NewMemTableWithSize(eng.activeMem.maxSize)
++	eng.mu.Unlock()
++
++	// 正常 Flush 应该成功
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush with multiple immutable: %v", err)
++	}
++
++	// 验证所有数据可查询
++	for _, key := range []string{crKey1, crKey2, crKey3} {
++		_, ok := eng.Get(key)
++		if !ok {
++			t.Fatalf("expected %s to be found after flush", key)
++		}
++	}
++}
++
++// TestWALRotateCreatesTempFileFirst 验证 WAL rotate 使用"先建后删"策略，
++// 不会在中间状态丢失 WAL 文件。
++func TestWALRotateCreatesTempFileFirst(t *testing.T) {
++	dir := t.TempDir()
++	walPath := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(walPath)
++	if err != nil {
++		t.Fatalf("CreateWAL: %v", err)
++	}
++
++	// 设置很小的 maxSize 以触发 rotate
++	w.maxSize = 64
++
++	// 写入足够数据触发 rotate
++	for i := 0; i < 50; i++ {
++		if err := w.AppendWrite([]byte("payload_data")); err != nil {
++			t.Fatalf("AppendWrite %d: %v", i, err)
++		}
++	}
++
++	// 验证临时文件已被清理（不应存在 .tmp 文件）
++	tmpPath := walPath + ".tmp"
++	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
++		t.Fatalf("temp file %s should not exist after successful rotate", tmpPath)
++	}
++
++	// 验证 WAL 文件存在
++	if _, err := os.Stat(walPath); os.IsNotExist(err) {
++		t.Fatal("WAL file should exist after rotate")
++	}
++
++	if err := w.Close(); err != nil {
++		t.Fatalf("Close: %v", err)
++	}
++}
+diff --git a/pkg/storage/wal.go b/pkg/storage/wal.go
+index 41cea16..36984ff 100644
+--- a/pkg/storage/wal.go
++++ b/pkg/storage/wal.go
+@@ -204,27 +204,53 @@ func (w *WAL) Truncate() error {
+ }
+ 
+ // maybeRotate 在未持有锁时检查是否需要切分 WAL 文件。
++// 采用"先建后删"策略：先创建新文件，再重命名旧文件，
++// 避免在 Rename 成功但 Create 失败时导致 WAL 不可用。
+ func (w *WAL) maybeRotate() error {
+ 	if w.offset < w.maxSize {
+ 		return nil
+ 	}
+ 
+-	old := w.file
+ 	rotatedPath := w.path + ".prev"
+ 
++	// 先创建新文件，确保新文件可用后再处理旧文件
++	newF, err := os.Create(w.path + ".tmp")
++	if err != nil {
++		return fmt.Errorf("wal rotate create temp: %w", err)
++	}
++
++	// 关闭旧文件
++	old := w.file
+ 	if err := old.Close(); err != nil {
++		_ = newF.Close()
++		_ = os.Remove(w.path + ".tmp")
+ 		return fmt.Errorf("wal rotate close: %w", err)
+ 	}
+ 
++	// 重命名旧文件为 .prev
+ 	if err := os.Rename(w.path, rotatedPath); err != nil {
++		// 旧文件已关闭但重命名失败，尝试恢复：重新打开旧路径
++		_ = os.Remove(w.path + ".tmp")
++		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
++		if recoverErr == nil {
++			w.file = recoveredF
++		}
+ 		return fmt.Errorf("wal rotate rename: %w", err)
+ 	}
+ 
+-	f, err := os.Create(w.path)
+-	if err != nil {
+-		return fmt.Errorf("wal rotate create: %w", err)
++	// 将临时新文件重命名为正式 WAL 路径
++	if err := os.Rename(w.path+".tmp", w.path); err != nil {
++		// 极端情况：旧文件已重命名，新文件重命名失败
++		// 尝试将 .prev 改回来恢复
++		_ = os.Rename(rotatedPath, w.path)
++		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
++		if recoverErr == nil {
++			w.file = recoveredF
++		}
++		return fmt.Errorf("wal rotate rename temp: %w", err)
+ 	}
+-	w.file = f
++
++	w.file = newF
+ 	w.offset = 0
+ 	return nil
+ }

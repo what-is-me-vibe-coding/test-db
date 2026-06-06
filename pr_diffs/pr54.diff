@@ -1,0 +1,368 @@
+diff --git a/pkg/storage/compaction.go b/pkg/storage/compaction.go
+index 7082ac6..c69f90f 100644
+--- a/pkg/storage/compaction.go
++++ b/pkg/storage/compaction.go
+@@ -1,10 +1,10 @@
+ package storage
+ 
+ import (
++	"container/heap"
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
+-	"sort"
+ 	"sync"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+@@ -71,28 +71,118 @@ func (c *Compactor) CompactToLevel(segments []*Segment, _ int, cols []ColumnMeta
+ 	return seg, nil
+ }
+ 
++// segReader 跟踪单个 Segment 在 k-way merge 中的读取位置。
++type segReader struct {
++	seg    *Segment
++	rows   []memRow
++	pos    int
++	segIdx int // 在 sortedSegs 中的索引，用于去重优先级
++}
++
++// compactionEntry 是 k-way merge 堆中的条目。
++type compactionEntry struct {
++	key    string
++	segIdx int
++	reader *segReader
++}
++
++// compactionHeap 实现堆接口，按 key 升序，key 相同时 segIdx 降序（最新优先）。
++type compactionHeap []*compactionEntry
++
++func (h compactionHeap) Len() int { return len(h) }
++func (h compactionHeap) Less(i, j int) bool {
++	if h[i].key != h[j].key {
++		return h[i].key < h[j].key
++	}
++	// key 相同时，segIdx 大的排在堆顶（优先处理）
++	return h[i].segIdx > h[j].segIdx
++}
++func (h compactionHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
++func (h *compactionHeap) Push(x interface{}) { *h = append(*h, x.(*compactionEntry)) }
++func (h *compactionHeap) Pop() interface{} {
++	old := *h
++	n := len(old)
++	item := old[n-1]
++	*h = old[:n-1]
++	return item
++}
++
++// sortSegsByID 按 Segment ID 升序排序（ID 越小越旧）。
++func sortSegsByID(segs []*Segment) {
++	for i := 1; i < len(segs); i++ {
++		for j := i; j > 0 && segs[j].ID < segs[j-1].ID; j-- {
++			segs[j], segs[j-1] = segs[j-1], segs[j]
++		}
++	}
++}
++
+ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]memRow, error) {
+-	var allRows []memRow
+-	for _, seg := range segments {
++	// 使用 k-way merge 替代全量排序：各 Segment 内行已按 key 有序，
++	// 通过最小堆归并，复杂度 O(n log k) 优于 O(n log n) 的全量排序。
++	// 同时在归并过程中去重，同一 key 保留最高 segment ID（最新版本）。
++
++	// 先按 Segment ID 排序，确保 ID 更大的 segment 在堆中优先级更高
++	sortedSegs := make([]*Segment, len(segments))
++	copy(sortedSegs, segments)
++	sortSegsByID(sortedSegs)
++
++	readers := make([]*segReader, 0, len(sortedSegs))
++	estimatedRows := 0
++	for i, seg := range sortedSegs {
+ 		rows, err := c.readSegmentRows(seg, cols)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("compactor: read segment %d: %w", seg.ID, err)
+ 		}
+-		allRows = append(allRows, rows...)
++		if len(rows) > 0 {
++			readers = append(readers, &segReader{
++				seg:    seg,
++				rows:   rows,
++				pos:    0,
++				segIdx: i,
++			})
++			estimatedRows += len(rows)
++		}
++	}
++
++	if len(readers) == 0 {
++		return nil, nil
++	}
++
++	// 最小堆：按 key 排序，key 相同时 segIdx 大的优先（最新数据）
++	h := &compactionHeap{}
++	heap.Init(h)
++	for _, r := range readers {
++		heap.Push(h, &compactionEntry{
++			key:    r.rows[0].Key,
++			segIdx: r.segIdx,
++			reader: r,
++		})
+ 	}
+ 
+-	sort.Slice(allRows, func(i, j int) bool {
+-		return allRows[i].Key < allRows[j].Key
+-	})
++	deduped := make([]memRow, 0, estimatedRows)
++	var prevKey string
+ 
+-	// 去重：同一 key 保留最新版本（L0 Segment ID 更大，排在后面，取最后一个）
+-	deduped := make([]memRow, 0, len(allRows))
+-	for i := range allRows {
+-		if i > 0 && allRows[i].Key == allRows[i-1].Key {
+-			deduped[len(deduped)-1] = allRows[i]
++	for h.Len() > 0 {
++		entry := (*h)[0]
++		key := entry.key
++		row := entry.reader.rows[entry.reader.pos]
++
++		// 推进该 reader 的位置
++		entry.reader.pos++
++		if entry.reader.pos < len(entry.reader.rows) {
++			entry.key = entry.reader.rows[entry.reader.pos].Key
++			heap.Fix(h, 0)
+ 		} else {
+-			deduped = append(deduped, allRows[i])
++			heap.Pop(h)
++		}
++
++		// 去重：同一 key 只保留第一个遇到的（segIdx 最大，即最新版本）
++		if key == prevKey {
++			// 跳过旧版本
++			continue
+ 		}
++		deduped = append(deduped, row)
++		prevKey = key
+ 	}
+ 
+ 	return deduped, nil
+@@ -136,29 +226,23 @@ func (c *Compactor) readSegmentRows(seg *Segment, _ []ColumnMeta) ([]memRow, err
+ }
+ 
+ // decodeSegmentColumn copies and decodes a single segment column for compaction.
+-// A copy is made to avoid modifying the shared segment data during concurrent reads.
++// Only Data is deep-copied because DecompressColumn replaces enc.Data in place;
++// Offsets, Dict, and Nulls are read-only during decompress/decode and can be shared.
+ func decodeSegmentColumn(src *EncodedColumn, colIdx int) (decodedColumn, error) {
+ 	enc := &EncodedColumn{
+ 		Encoding: src.Encoding,
+ 		Type:     src.Type,
+ 		RowCount: src.RowCount,
+ 	}
++	// Data 必须深拷贝：DecompressColumn 会替换 enc.Data
+ 	if len(src.Data) > 0 {
+ 		enc.Data = make([]byte, len(src.Data))
+ 		copy(enc.Data, src.Data)
+ 	}
+-	if len(src.Offsets) > 0 {
+-		enc.Offsets = make([]uint32, len(src.Offsets))
+-		copy(enc.Offsets, src.Offsets)
+-	}
+-	if len(src.Dict) > 0 {
+-		enc.Dict = make([]string, len(src.Dict))
+-		copy(enc.Dict, src.Dict)
+-	}
+-	if len(src.Nulls) > 0 {
+-		enc.Nulls = make([]byte, len(src.Nulls))
+-		copy(enc.Nulls, src.Nulls)
+-	}
++	// Offsets、Dict、Nulls 在解压和解码过程中只读，无需深拷贝
++	enc.Offsets = src.Offsets
++	enc.Dict = src.Dict
++	enc.Nulls = src.Nulls
+ 	if err := DecompressColumn(enc); err != nil {
+ 		return decodedColumn{}, fmt.Errorf("compactor: decompress column %d: %w", colIdx, err)
+ 	}
+diff --git a/pkg/storage/engine.go b/pkg/storage/engine.go
+index 8740c3d..0e5bc0c 100644
+--- a/pkg/storage/engine.go
++++ b/pkg/storage/engine.go
+@@ -144,9 +144,6 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 		return Row{}, false
+ 	}
+ 
+-	// 预分配 map 并在循环中复用，减少短命对象分配
+-	columns := make(map[string]common.Value, len(e.columnMeta))
+-
+ 	// Iterate in reverse order: since segment IDs are monotonically increasing,
+ 	// higher IDs appear later in the slice, so reverse iteration checks
+ 	// newer segments first without allocating a sorted copy.
+@@ -166,10 +163,8 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 			continue
+ 		}
+ 
+-		// 清空 map 复用，避免每次迭代分配新 map
+-		for k := range columns {
+-			delete(columns, k)
+-		}
++		// 创建新 map 而非清空复用，避免逐键删除的开销
++		columns := make(map[string]common.Value, len(e.columnMeta))
+ 		for colIdx, col := range e.columnMeta {
+ 			val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
+ 			if err != nil {
+diff --git a/pkg/storage/segment.go b/pkg/storage/segment.go
+index f7f1ffa..84fcdc7 100644
+--- a/pkg/storage/segment.go
++++ b/pkg/storage/segment.go
+@@ -4,6 +4,7 @@ import (
+ 	"encoding/binary"
+ 	"fmt"
+ 	"math"
++	"sync"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
+@@ -39,6 +40,10 @@ type Segment struct {
+ 	Footer   SegmentFooter
+ 	FilePath string
+ 	Keys     []string
++
++	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
++	decodedCache []decodedColumn
++	decodeOnce   sync.Once
+ }
+ 
+ // SegmentID 返回 Segment 的唯一标识。
+@@ -309,54 +314,33 @@ func float64ToBytes(v float64) []byte {
+ }
+ 
+ // Build 构建 Segment，返回序列化后的字节流。
++// 优化：先计算统计信息（需要未压缩数据），再原地压缩 b.columns，
++// 避免额外的深拷贝。Build 后 builder 不可复用。
+ func (b *SegmentBuilder) Build() (*Segment, error) {
+ 	if len(b.columns) == 0 {
+ 		return nil, fmt.Errorf("segment builder: no columns added")
+ 	}
+ 
+-	compressedColumns := make([]EncodedColumn, len(b.columns))
++	// 先计算统计信息（需要未压缩的原始数据）
++	stats := make([]ColumnStat, len(b.columns))
+ 	for i := range b.columns {
+-		compressedColumns[i] = EncodedColumn{
+-			Encoding: b.columns[i].Encoding,
+-			Type:     b.columns[i].Type,
+-			RowCount: b.columns[i].RowCount,
+-		}
+-		if len(b.columns[i].Data) > 0 {
+-			compressedColumns[i].Data = make([]byte, len(b.columns[i].Data))
+-			copy(compressedColumns[i].Data, b.columns[i].Data)
+-		}
+-		if len(b.columns[i].Offsets) > 0 {
+-			compressedColumns[i].Offsets = make([]uint32, len(b.columns[i].Offsets))
+-			copy(compressedColumns[i].Offsets, b.columns[i].Offsets)
+-		}
+-		if len(b.columns[i].Dict) > 0 {
+-			compressedColumns[i].Dict = make([]string, len(b.columns[i].Dict))
+-			copy(compressedColumns[i].Dict, b.columns[i].Dict)
+-		}
+-		if len(b.columns[i].Nulls) > 0 {
+-			compressedColumns[i].Nulls = make([]byte, len(b.columns[i].Nulls))
+-			copy(compressedColumns[i].Nulls, b.columns[i].Nulls)
+-		}
++		stats[i] = computeColumnStat(&b.columns[i])
++		stats[i].ColumnID = uint32(i)
+ 	}
+ 
+-	for i := range compressedColumns {
+-		if err := CompressColumn(&compressedColumns[i]); err != nil {
++	// 原地压缩 b.columns，无需额外拷贝
++	for i := range b.columns {
++		if err := CompressColumn(&b.columns[i]); err != nil {
+ 			return nil, fmt.Errorf("segment builder: compress column %d: %w", i, err)
+ 		}
+ 	}
+ 
+-	stats := make([]ColumnStat, len(b.columns))
+-	for i := range b.columns {
+-		stats[i] = computeColumnStat(&b.columns[i])
+-		stats[i].ColumnID = uint32(i)
+-	}
+-
+ 	seg := &Segment{
+ 		ID:       b.id,
+ 		MinKey:   b.minKey,
+ 		MaxKey:   b.maxKey,
+ 		RowCount: b.columns[0].RowCount,
+-		Columns:  compressedColumns,
++		Columns:  b.columns,
+ 		Footer: SegmentFooter{
+ 			ColumnStats: stats,
+ 			IndexOffset: 0,
+diff --git a/pkg/storage/segment_decode.go b/pkg/storage/segment_decode.go
+index 9e1ed73..3c3b369 100644
+--- a/pkg/storage/segment_decode.go
++++ b/pkg/storage/segment_decode.go
+@@ -119,41 +119,35 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
+ 	return extractValue(cols[colIdx], rowIdx)
+ }
+ 
+-// GetColumnValue 从指定列中提取给定行索引的值，使用副本避免修改原始数据。
++// GetColumnValue 从指定列中提取给定行索引的值。
++// 使用 Segment 级解码缓存，首次访问时解码所有列并缓存，后续调用直接从缓存读取，
++// 避免点查时重复解压解码整列数据。
++// 仅 Data 需要深拷贝（DecompressColumn 会替换 enc.Data），
++// Offsets、Dict、Nulls 在解压和解码过程中只读，可直接引用。
+ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
+ 	if int(colIdx) >= len(s.Columns) {
+ 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+ 	}
+-	src := &s.Columns[colIdx]
+-	enc := &EncodedColumn{
+-		Encoding: src.Encoding,
+-		Type:     src.Type,
+-		RowCount: src.RowCount,
+-	}
+-	if len(src.Data) > 0 {
+-		enc.Data = make([]byte, len(src.Data))
+-		copy(enc.Data, src.Data)
+-	}
+-	if len(src.Offsets) > 0 {
+-		enc.Offsets = make([]uint32, len(src.Offsets))
+-		copy(enc.Offsets, src.Offsets)
+-	}
+-	if len(src.Dict) > 0 {
+-		enc.Dict = src.Dict // Dict 是只读的，无需深拷贝
+-	}
+-	if len(src.Nulls) > 0 {
+-		enc.Nulls = make([]byte, len(src.Nulls))
+-		copy(enc.Nulls, src.Nulls)
+-	}
+-	if err := DecompressColumn(enc); err != nil {
+-		return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
++
++	s.decodeOnce.Do(func() {
++		cols, err := s.decodeAllColumns()
++		if err != nil {
++			// 解码失败时设置空缓存，后续调用将返回 Null
++			s.decodedCache = make([]decodedColumn, 0)
++			return
++		}
++		s.decodedCache = cols
++	})
++
++	if len(s.decodedCache) == 0 {
++		return common.NewNull(), fmt.Errorf("segment: decode cache unavailable")
+ 	}
+-	decoded, nulls, err := DecodeColumn(enc)
+-	if err != nil {
+-		return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
++
++	if int(colIdx) >= len(s.decodedCache) {
++		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+ 	}
+-	cd := decodedColumn{data: decoded, nulls: nulls, typ: enc.Type}
+-	return extractValue(cd, rowIdx), nil
++
++	return extractValue(s.decodedCache[colIdx], rowIdx), nil
+ }
+ 
+ // GetAllColumnValues 提取指定行所有列的值。

@@ -1,0 +1,1548 @@
+diff --git a/pkg/index/coverage_low_bloom_test.go b/pkg/index/coverage_low_bloom_test.go
+new file mode 100644
+index 0000000..b284ba7
+--- /dev/null
++++ b/pkg/index/coverage_low_bloom_test.go
+@@ -0,0 +1,165 @@
++package index
++
++import (
++	"testing"
++)
++
++// --- BuildAndRegister: valid keys with custom fpRate ---
++
++func TestBuildAndRegister_CustomFPRate(t *testing.T) {
++	bi := NewBloomIndex()
++
++	keys := []string{"custom1", "custom2", "custom3"}
++	err := bi.BuildAndRegister(1, keys, 0.001)
++	if err != nil {
++		t.Fatalf("BuildAndRegister with custom fpRate: %v", err)
++	}
++
++	if bi.Len() != 1 {
++		t.Errorf("Len: got %d, want 1", bi.Len())
++	}
++
++	for _, k := range keys {
++		if !bi.MayContain(1, []byte(k)) {
++			t.Errorf("MayContain(%q): expected true with custom fpRate", k)
++		}
++	}
++}
++
++// --- BuildAndRegister: valid keys with fpRate=0 (should use default) ---
++
++func TestBuildAndRegister_ZeroFPRate(t *testing.T) {
++	bi := NewBloomIndex()
++
++	keys := []string{"zero1", "zero2"}
++	err := bi.BuildAndRegister(1, keys, 0)
++	if err != nil {
++		t.Fatalf("BuildAndRegister with fpRate=0: %v", err)
++	}
++
++	if bi.Len() != 1 {
++		t.Errorf("Len: got %d, want 1", bi.Len())
++	}
++
++	for _, k := range keys {
++		if !bi.MayContain(1, []byte(k)) {
++			t.Errorf("MayContain(%q): expected true (fpRate=0 should fall back to default)", k)
++		}
++	}
++}
++
++// --- BuildAndRegister: valid keys with negative fpRate (should use default) ---
++
++func TestBuildAndRegister_NegativeFPRate(t *testing.T) {
++	bi := NewBloomIndex()
++
++	keys := []string{"neg1", "neg2"}
++	err := bi.BuildAndRegister(1, keys, -0.5)
++	if err != nil {
++		t.Fatalf("BuildAndRegister with negative fpRate: %v", err)
++	}
++
++	if bi.Len() != 1 {
++		t.Errorf("Len: got %d, want 1", bi.Len())
++	}
++
++	for _, k := range keys {
++		if !bi.MayContain(1, []byte(k)) {
++			t.Errorf("MayContain(%q): expected true (negative fpRate should fall back to default)", k)
++		}
++	}
++}
++
++// --- BuildAndRegister: valid keys with fpRate=1.0 (should use default) ---
++
++func TestBuildAndRegister_FPRateOne(t *testing.T) {
++	bi := NewBloomIndex()
++
++	keys := []string{"one1", "one2"}
++	err := bi.BuildAndRegister(1, keys, 1.0)
++	if err != nil {
++		t.Fatalf("BuildAndRegister with fpRate=1.0: %v", err)
++	}
++
++	if bi.Len() != 1 {
++		t.Errorf("Len: got %d, want 1", bi.Len())
++	}
++
++	for _, k := range keys {
++		if !bi.MayContain(1, []byte(k)) {
++			t.Errorf("MayContain(%q): expected true (fpRate=1.0 should fall back to default)", k)
++		}
++	}
++}
++
++// --- BuildAndRegister: valid keys with fpRate>1 (should use default) ---
++
++func TestBuildAndRegister_FPRateGreaterThanOne(t *testing.T) {
++	bi := NewBloomIndex()
++
++	keys := []string{"gt1_a", "gt1_b"}
++	err := bi.BuildAndRegister(1, keys, 2.0)
++	if err != nil {
++		t.Fatalf("BuildAndRegister with fpRate>1: %v", err)
++	}
++
++	if bi.Len() != 1 {
++		t.Errorf("Len: got %d, want 1", bi.Len())
++	}
++
++	for _, k := range keys {
++		if !bi.MayContain(1, []byte(k)) {
++			t.Errorf("MayContain(%q): expected true (fpRate>1 should fall back to default)", k)
++		}
++	}
++}
++
++// --- BuildAndRegister: empty keys should not register (nil keys variant) ---
++
++func TestBuildAndRegister_NilKeys(t *testing.T) {
++	bi := NewBloomIndex()
++
++	err := bi.BuildAndRegister(1, nil, DefaultBloomFPRate)
++	if err != nil {
++		t.Fatalf("BuildAndRegister with nil keys: %v", err)
++	}
++
++	if bi.Len() != 0 {
++		t.Errorf("Len: got %d, want 0 after nil keys", bi.Len())
++	}
++}
++
++// --- BuildFromKeys: fpRate exactly at boundary (0 and 1) ---
++
++func TestBuildFromKeys_FPRateBoundaryZero(t *testing.T) {
++	keys := []string{"b1", "b2"}
++	data, err := BuildFromKeys(keys, 0)
++	if err != nil {
++		t.Fatalf("BuildFromKeys with fpRate=0: %v", err)
++	}
++	if data == nil {
++		t.Fatal("BuildFromKeys with fpRate=0 should return non-nil data (falls back to default)")
++	}
++}
++
++func TestBuildFromKeys_FPRateBoundaryOne(t *testing.T) {
++	keys := []string{"b1", "b2"}
++	data, err := BuildFromKeys(keys, 1.0)
++	if err != nil {
++		t.Fatalf("BuildFromKeys with fpRate=1.0: %v", err)
++	}
++	if data == nil {
++		t.Fatal("BuildFromKeys with fpRate=1.0 should return non-nil data (falls back to default)")
++	}
++}
++
++func TestBuildFromKeys_NegativeFPRate(t *testing.T) {
++	keys := []string{"b1", "b2"}
++	data, err := BuildFromKeys(keys, -1.0)
++	if err != nil {
++		t.Fatalf("BuildFromKeys with negative fpRate: %v", err)
++	}
++	if data == nil {
++		t.Fatal("BuildFromKeys with negative fpRate should return non-nil data (falls back to default)")
++	}
++}
+diff --git a/pkg/query/coverage_low_parser_v2_test.go b/pkg/query/coverage_low_parser_v2_test.go
+new file mode 100644
+index 0000000..ed5ec51
+--- /dev/null
++++ b/pkg/query/coverage_low_parser_v2_test.go
+@@ -0,0 +1,378 @@
++package query
++
++import (
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// --- convertTableExprs: subquery in FROM clause (unsupported table source type) ---
++
++func TestConvertTableExprs_SubqueryInFrom(t *testing.T) {
++	p := NewParser()
++	// Subquery in FROM produces a non-TableName source in AliasedTableExpr
++	_, err := p.Parse("SELECT * FROM (SELECT id FROM users) AS sub")
++	if err == nil {
++		t.Error("expected error for subquery in FROM, got nil")
++	}
++}
++
++// --- convertTableExprs: JOIN in FROM clause (unsupported table expr type) ---
++
++func TestConvertTableExprs_JoinInFrom(t *testing.T) {
++	p := NewParser()
++	// JOIN produces a JoinTableExpr, not an AliasedTableExpr
++	_, err := p.Parse("SELECT id FROM users JOIN orders ON users.id = orders.user_id")
++	if err == nil {
++		t.Error("expected error for JOIN in FROM, got nil")
++	}
++}
++
++// --- convertExpr: IS NULL expression (unsupported expr type) ---
++
++func TestConvertExpr_IsNull(t *testing.T) {
++	p := NewParser()
++	// IS NULL produces an IsNullExpr, not handled by convertExpr
++	_, err := p.Parse("SELECT id FROM t WHERE name IS NULL")
++	if err == nil {
++		t.Error("expected error for IS NULL expression, got nil")
++	}
++}
++
++// --- convertExpr: IN expression (unsupported comparison operator via convertExpr path) ---
++
++func TestConvertExpr_InOperator(t *testing.T) {
++	p := NewParser()
++	// IN produces a ComparisonExpr with operator "in", not handled by convertComparisonOp
++	_, err := p.Parse("SELECT id FROM t WHERE id IN (1, 2, 3)")
++	if err == nil {
++		t.Error("expected error for IN expression, got nil")
++	}
++}
++
++// --- convertFuncExpr: function with column argument (AliasedExpr path) ---
++
++func TestConvertFuncExpr_ColumnArgument(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT MAX(id) FROM t")
++	if err != nil {
++		t.Fatalf("Parse MAX(id): %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	fn, ok := sel.Columns[0].Expr.(*FuncExpr)
++	if !ok {
++		t.Fatalf("expected FuncExpr, got %T", sel.Columns[0].Expr)
++	}
++	if fn.Name != testFuncMax {
++		t.Errorf("expected func name 'max', got %q", fn.Name)
++	}
++	if len(fn.Args) != 1 {
++		t.Fatalf("expected 1 arg, got %d", len(fn.Args))
++	}
++	col, ok := fn.Args[0].(*ColumnExpr)
++	if !ok {
++		t.Errorf("expected ColumnExpr arg, got %T", fn.Args[0])
++	}
++	if col.Name != testColID {
++		t.Errorf("expected column 'id', got %q", col.Name)
++	}
++}
++
++// --- convertFuncExpr: function with multiple column arguments ---
++
++func TestConvertFuncExpr_MultipleColumnArgs(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT COALESCE(id, name) FROM t")
++	if err != nil {
++		t.Fatalf("Parse COALESCE: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	fn, ok := sel.Columns[0].Expr.(*FuncExpr)
++	if !ok {
++		t.Fatalf("expected FuncExpr, got %T", sel.Columns[0].Expr)
++	}
++	if fn.Name != "coalesce" { //nolint:goconst
++		t.Errorf("expected func name 'coalesce', got %q", fn.Name)
++	}
++	if len(fn.Args) != 2 {
++		t.Fatalf("expected 2 args, got %d", len(fn.Args))
++	}
++}
++
++// --- convertSelectExprs: function with alias ---
++
++func TestConvertSelectExprs_FuncWithAlias(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT COUNT(*) AS total FROM t")
++	if err != nil {
++		t.Fatalf("Parse COUNT(*) AS total: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	if len(sel.Columns) != 1 {
++		t.Fatalf("expected 1 column, got %d", len(sel.Columns))
++	}
++	if sel.Columns[0].Alias != "total" {
++		t.Errorf("expected alias 'total', got %q", sel.Columns[0].Alias)
++	}
++	fn, ok := sel.Columns[0].Expr.(*FuncExpr)
++	if !ok {
++		t.Fatalf("expected FuncExpr, got %T", sel.Columns[0].Expr)
++	}
++	if fn.Name != testFuncCount {
++		t.Errorf("expected func name 'count', got %q", fn.Name)
++	}
++}
++
++// --- convertGroupBy: GROUP BY with function expression ---
++
++func TestConvertGroupBy_FunctionExpression(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT COUNT(*) FROM t GROUP BY id")
++	if err != nil {
++		t.Fatalf("Parse GROUP BY id: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	if len(sel.GroupBy) != 1 {
++		t.Fatalf("expected 1 GROUP BY expr, got %d", len(sel.GroupBy))
++	}
++	col, ok := sel.GroupBy[0].(*ColumnExpr)
++	if !ok {
++		t.Errorf("expected ColumnExpr in GROUP BY, got %T", sel.GroupBy[0])
++	}
++	if col.Name != testColID {
++		t.Errorf("expected GROUP BY id, got %q", col.Name)
++	}
++}
++
++// --- convertGroupBy: GROUP BY with unsupported expression (BETWEEN) ---
++
++func TestConvertGroupBy_UnsupportedExpr(t *testing.T) {
++	p := NewParser()
++	// BETWEEN in GROUP BY triggers unsupported expr type error through convertGroupBy
++	_, err := p.Parse("SELECT id FROM t GROUP BY id BETWEEN 1 AND 10")
++	if err == nil {
++		t.Error("expected error for BETWEEN in GROUP BY, got nil")
++	}
++}
++
++// --- convertSelect: SELECT FROM dual (exercises dual table check) ---
++
++func TestConvertSelect_FromDual(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT 1 FROM dual")
++	if err != nil {
++		t.Fatalf("Parse SELECT 1 FROM dual: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	// FROM dual should set From to nil
++	if sel.From != nil {
++		t.Errorf("expected nil From for dual table, got %v", sel.From)
++	}
++}
++
++// --- convertSelect: error in convertSelectExprs via unsupported expression ---
++
++func TestConvertSelect_SelectExprError(t *testing.T) {
++	p := NewParser()
++	// Subquery in SELECT list produces an unsupported expression type
++	_, err := p.Parse("SELECT (SELECT 1) FROM t")
++	if err == nil {
++		t.Error("expected error for subquery in SELECT list, got nil")
++	}
++}
++
++// --- convertInsert: error in convertValues via unsupported expression ---
++
++func TestConvertInsert_ValuesWithUnsupportedExpr(t *testing.T) {
++	p := NewParser()
++	// CASE expression in VALUES is not handled by convertExpr
++	_, err := p.Parse("INSERT INTO t (id) VALUES (CASE WHEN 1=1 THEN 1 END)")
++	if err == nil {
++		t.Error("expected error for CASE expression in INSERT VALUES, got nil")
++	}
++}
++
++// --- convertSelect: WHERE with IS NOT NULL (unsupported expr type) ---
++
++func TestConvertSelect_IsNotNull(t *testing.T) {
++	p := NewParser()
++	// IS NOT NULL produces an IsNullExpr with Negated=true, still not handled
++	_, err := p.Parse("SELECT id FROM t WHERE name IS NOT NULL")
++	if err == nil {
++		t.Error("expected error for IS NOT NULL expression, got nil")
++	}
++}
++
++// --- convertExpr: ParenExpr wrapping a comparison ---
++
++func TestConvertExpr_ParenExprWithComparison(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT id FROM t WHERE (age = 30)")
++	if err != nil {
++		t.Fatalf("Parse parenthesized comparison: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	binExpr, ok := sel.Where.(*BinaryExpr)
++	if !ok {
++		t.Fatalf("expected *BinaryExpr, got %T", sel.Where)
++	}
++	if binExpr.Op != OpEq {
++		t.Errorf("expected OpEq, got %v", binExpr.Op)
++	}
++}
++
++// --- convertExpr: nested NOT expression ---
++
++func TestConvertExpr_NestedNot(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT id FROM t WHERE NOT NOT active = 1")
++	if err != nil {
++		t.Fatalf("Parse nested NOT: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	notExpr, ok := sel.Where.(*UnaryExpr)
++	if !ok || notExpr.Op != OpNot {
++		t.Fatalf("expected outer NOT, got %v", sel.Where)
++	}
++	innerNot, ok := notExpr.Expr.(*UnaryExpr)
++	if !ok || innerNot.Op != OpNot {
++		t.Fatalf("expected inner NOT, got %v", notExpr.Expr)
++	}
++}
++
++// --- convertSelect: SELECT with WHERE, GROUP BY, and LIMIT combined ---
++
++func TestConvertSelect_WhereGroupByLimit(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT age, COUNT(*) FROM t WHERE age > 10 GROUP BY age LIMIT 5")
++	if err != nil {
++		t.Fatalf("Parse SELECT with WHERE+GROUP BY+LIMIT: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	if sel.Where == nil {
++		t.Error("expected WHERE clause")
++	}
++	if len(sel.GroupBy) != 1 {
++		t.Errorf("expected 1 GROUP BY expr, got %d", len(sel.GroupBy))
++	}
++	if sel.Limit == nil || sel.Limit.Count != 5 {
++		t.Errorf("expected LIMIT 5, got %v", sel.Limit)
++	}
++}
++
++// --- convertInsert: INSERT with multiple rows and mixed types ---
++
++func TestConvertInsert_MultipleRowsMixedTypes(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("INSERT INTO t (id, name) VALUES (1, 'alice'), (2, 'bob')")
++	if err != nil {
++		t.Fatalf("Parse INSERT with multiple rows: %v", err)
++	}
++	ins := stmt.(*InsertStatement)
++	if len(ins.Rows) != 2 {
++		t.Fatalf("expected 2 rows, got %d", len(ins.Rows))
++	}
++	// Verify first row
++	lit0, ok := ins.Rows[0][0].(*LiteralExpr)
++	if !ok || lit0.Value.Int64 != 1 {
++		t.Errorf("row 0 col 0: expected int64 1, got %v", ins.Rows[0][0])
++	}
++	lit1, ok := ins.Rows[0][1].(*LiteralExpr)
++	if !ok || lit1.Value.Str != testNameAlice {
++		t.Errorf("row 0 col 1: expected string 'alice', got %v", ins.Rows[0][1])
++	}
++	// Verify second row
++	lit2, ok := ins.Rows[1][0].(*LiteralExpr)
++	if !ok || lit2.Value.Int64 != 2 {
++		t.Errorf("row 1 col 0: expected int64 2, got %v", ins.Rows[1][0])
++	}
++}
++
++// --- convertSelectExprs: column with alias ---
++
++func TestConvertSelectExprs_ColumnWithAlias(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT id AS user_id, name AS user_name FROM t")
++	if err != nil {
++		t.Fatalf("Parse SELECT with column aliases: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	if len(sel.Columns) != 2 {
++		t.Fatalf("expected 2 columns, got %d", len(sel.Columns))
++	}
++	if sel.Columns[0].Alias != testColUserID {
++		t.Errorf("col 0 alias = %q, want %q", sel.Columns[0].Alias, testColUserID)
++	}
++	if sel.Columns[1].Alias != "user_name" {
++		t.Errorf("col 1 alias = %q, want 'user_name'", sel.Columns[1].Alias)
++	}
++}
++
++// --- convertExpr: NOT with comparison expression ---
++
++func TestConvertExpr_NotWithComparison(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT id FROM t WHERE NOT age = 30")
++	if err != nil {
++		t.Fatalf("Parse NOT with comparison: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	notExpr, ok := sel.Where.(*UnaryExpr)
++	if !ok || notExpr.Op != OpNot {
++		t.Fatalf("expected NOT UnaryExpr, got %v", sel.Where)
++	}
++	inner, ok := notExpr.Expr.(*BinaryExpr)
++	if !ok {
++		t.Fatalf("expected BinaryExpr inside NOT, got %T", notExpr.Expr)
++	}
++	if inner.Op != OpEq {
++		t.Errorf("expected OpEq inside NOT, got %v", inner.Op)
++	}
++}
++
++// --- convertSelect: SELECT with float literal in WHERE ---
++
++func TestConvertSelect_FloatInWhere(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT id FROM t WHERE score > 3.14")
++	if err != nil {
++		t.Fatalf("Parse float in WHERE: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	binExpr, ok := sel.Where.(*BinaryExpr)
++	if !ok {
++		t.Fatalf("expected BinaryExpr, got %T", sel.Where)
++	}
++	lit, ok := binExpr.Right.(*LiteralExpr)
++	if !ok {
++		t.Fatalf("expected LiteralExpr, got %T", binExpr.Right)
++	}
++	if lit.Value.Typ != common.TypeFloat64 {
++		t.Errorf("expected float64 type, got %v", lit.Value.Typ)
++	}
++}
++
++// --- convertSelect: SELECT with string literal in WHERE ---
++
++func TestConvertSelect_StringInWhere(t *testing.T) {
++	p := NewParser()
++	stmt, err := p.Parse("SELECT id FROM t WHERE name = 'bob'")
++	if err != nil {
++		t.Fatalf("Parse string in WHERE: %v", err)
++	}
++	sel := stmt.(*SelectStatement)
++	binExpr, ok := sel.Where.(*BinaryExpr)
++	if !ok {
++		t.Fatalf("expected BinaryExpr, got %T", sel.Where)
++	}
++	lit, ok := binExpr.Right.(*LiteralExpr)
++	if !ok {
++		t.Fatalf("expected LiteralExpr, got %T", binExpr.Right)
++	}
++	if lit.Value.Typ != common.TypeString {
++		t.Errorf("expected string type, got %v", lit.Value.Typ)
++	}
++	if lit.Value.Str != testNameBob {
++		t.Errorf("expected 'bob', got %q", lit.Value.Str)
++	}
++}
+diff --git a/pkg/query/coverage_test.go b/pkg/query/coverage_test.go
+index cf30cd4..1dce537 100644
+--- a/pkg/query/coverage_test.go
++++ b/pkg/query/coverage_test.go
+@@ -211,7 +211,7 @@ func makeCollectAggTests() []collectAggTestCase {
+ 			&FuncExpr{Name: testFuncAbs, Args: []Expression{&ColumnExpr{Name: testColAge}}},
+ 			0, nil},
+ 		{"嵌套函数中的聚合",
+-			&FuncExpr{Name: "coalesce",
++			&FuncExpr{Name: "coalesce", //nolint:goconst
+ 				Args: []Expression{&FuncExpr{Name: testFuncMin, Args: []Expression{&ColumnExpr{Name: testColAge}}}}},
+ 			1, []AggregateFunc{AggMin}},
+ 		{"无聚合的列表达式",
+diff --git a/pkg/query/parser_extra_test.go b/pkg/query/parser_extra_test.go
+index 3560f50..6645fe5 100644
+--- a/pkg/query/parser_extra_test.go
++++ b/pkg/query/parser_extra_test.go
+@@ -67,7 +67,7 @@ func TestParseSelectWithMultipleFuncArgs(t *testing.T) {
+ 	}
+ 	sel := stmt.(*SelectStatement)
+ 	fn, ok := sel.Columns[0].Expr.(*FuncExpr)
+-	if !ok || fn.Name != "coalesce" || len(fn.Args) != 2 {
++	if !ok || fn.Name != "coalesce" || len(fn.Args) != 2 { //nolint:goconst
+ 		t.Errorf("expected coalesce with 2 args, got %v", sel.Columns[0].Expr)
+ 	}
+ }
+diff --git a/pkg/server/coverage_low_server_test.go b/pkg/server/coverage_low_server_test.go
+new file mode 100644
+index 0000000..d92aefd
+--- /dev/null
++++ b/pkg/server/coverage_low_server_test.go
+@@ -0,0 +1,359 @@
++package server
++
++import (
++	"bufio"
++	"encoding/json"
++	"net"
++	"testing"
++	"time"
++)
++
++// --- handleQueryPacket: JSON unmarshal error via TCP with empty payload ---
++
++func TestHandleQueryPacket_EmptyPayloadViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送空 payload 的 Query 包，触发 json.Unmarshal 错误
++	pkt := NewPacket(PacketQuery, []byte{})
++	if _, err := conn.Write(pkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1", response.Code)
++	}
++}
++
++// --- handleWritePacket: JSON unmarshal error via TCP with empty payload ---
++
++func TestHandleWritePacket_EmptyPayloadViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送空 payload 的 Write 包，触发 json.Unmarshal 错误
++	pkt := NewPacket(PacketWrite, []byte{})
++	if _, err := conn.Write(pkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1", response.Code)
++	}
++}
++
++// --- handleQueryPacket: valid JSON but empty SQL via TCP ---
++
++func TestHandleQueryPacket_EmptySQLViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送合法 JSON 但 SQL 为空的 Query 包
++	// json.Unmarshal 成功，但 handleQuery 在解析 SQL 时失败
++	queryPayload, _ := json.Marshal(QueryRequest{SQL: ""})
++	queryPkt := NewPacket(PacketQuery, queryPayload)
++	if _, err := conn.Write(queryPkt.Encode()); err != nil {
++		t.Fatalf("写入查询包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1 (空 SQL 应解析失败)", response.Code)
++	}
++}
++
++// --- handleWritePacket: valid JSON but nonexistent table via TCP ---
++
++func TestHandleWritePacket_NonexistentTableViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送合法 JSON 但表不存在的 Write 包
++	// json.Unmarshal 成功，但 handleWrite 在查找表时失败
++	writePayload, _ := json.Marshal(WriteRequest{
++		Table: "nonexistent", //nolint:goconst
++		Rows:  []map[string]interface{}{{"id": float64(1)}},
++	})
++	writePkt := NewPacket(PacketWrite, writePayload)
++	if _, err := conn.Write(writePkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1 (不存在的表应返回错误)", response.Code)
++	}
++}
++
++// --- handlePing: thorough normal path test via TCP ---
++
++func TestHandlePing_ThoroughViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	pingPkt := NewPacket(PacketPing, nil)
++	if _, err := conn.Write(pingPkt.Encode()); err != nil {
++		t.Fatalf("写入 Ping 包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	// 验证响应包类型
++	if resp.Type != PacketResponse {
++		t.Errorf("响应类型 = %d, 期望 %d", resp.Type, PacketResponse)
++	}
++
++	// 验证响应包的 Magic 和 Version
++	if resp.Magic != Magic {
++		t.Errorf("响应 Magic = 0x%08x, 期望 0x%08x", resp.Magic, Magic)
++	}
++	if resp.Version != ProtocolVersion {
++		t.Errorf("响应 Version = %d, 期望 %d", resp.Version, ProtocolVersion)
++	}
++
++	// 验证响应 payload 内容
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != 0 {
++		t.Errorf("响应 Code = %d, 期望 0", response.Code)
++	}
++	if response.Message != msgPong {
++		t.Errorf("响应 Message = %q, 期望 %q", response.Message, msgPong)
++	}
++	if response.Rows != 0 {
++		t.Errorf("响应 Rows = %d, 期望 0", response.Rows)
++	}
++}
++
++// --- handlePacket: unknown packet type 0 via TCP ---
++
++func TestHandlePacket_UnknownTypeZeroViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送类型为 0 的未知包
++	pkt := NewPacket(0, nil)
++	if _, err := conn.Write(pkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1", response.Code)
++	}
++}
++
++// --- handlePacket: unknown packet type 255 via TCP ---
++
++func TestHandlePacket_UnknownTypeMaxViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送类型为 255 的未知包
++	pkt := NewPacket(255, nil)
++	if _, err := conn.Write(pkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1", response.Code)
++	}
++}
++
++// --- handleQueryPacket: incomplete JSON via TCP ---
++
++func TestHandleQueryPacket_IncompleteJSONViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送不完整 JSON 的 Query 包
++	pkt := NewPacket(PacketQuery, []byte("{"))
++	if _, err := conn.Write(pkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1", response.Code)
++	}
++}
++
++// --- handleWritePacket: incomplete JSON via TCP ---
++
++func TestHandleWritePacket_IncompleteJSONViaTCP(t *testing.T) {
++	srv := newTestServer(t)
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	defer func() { _ = srv.Stop() }()
++	time.Sleep(50 * time.Millisecond)
++
++	conn, err := net.DialTimeout("tcp", srv.tcpListener.Addr().String(), 2*time.Second)
++	if err != nil {
++		t.Fatalf("连接 TCP 失败: %v", err)
++	}
++	defer func() { _ = conn.Close() }()
++
++	// 发送不完整 JSON 的 Write 包
++	pkt := NewPacket(PacketWrite, []byte("["))
++	if _, err := conn.Write(pkt.Encode()); err != nil {
++		t.Fatalf("写入包失败: %v", err)
++	}
++
++	resp, err := DecodePacket(bufio.NewReader(conn))
++	if err != nil {
++		t.Fatalf("读取响应失败: %v", err)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("解析响应失败: %v", err)
++	}
++	if response.Code != -1 {
++		t.Errorf("响应 Code = %d, 期望 -1", response.Code)
++	}
++}
+diff --git a/pkg/server/handler_test.go b/pkg/server/handler_test.go
+index 617b754..394ac4d 100644
+--- a/pkg/server/handler_test.go
++++ b/pkg/server/handler_test.go
+@@ -81,7 +81,7 @@ func TestHandleWriteSuccess(t *testing.T) {
+ func TestHandleWriteTableNotExist(t *testing.T) {
+ 	srv := newTestServer(t)
+ 	resp, err := srv.handleWrite(&WriteRequest{
+-		Table: "nonexistent",
++		Table: "nonexistent", //nolint:goconst
+ 		Rows:  []map[string]interface{}{{"id": 1}},
+ 	})
+ 	if err != nil {
+diff --git a/pkg/server/server_tcp_coverage_test.go b/pkg/server/server_tcp_coverage_test.go
+index f99d34a..be236b7 100644
+--- a/pkg/server/server_tcp_coverage_test.go
++++ b/pkg/server/server_tcp_coverage_test.go
+@@ -187,7 +187,7 @@ func TestHandleTCPConn_WriteToNonExistentTable(t *testing.T) {
+ 	// handleWrite will return an error (table not found), which triggers
+ 	// the error response path in handleTCPConn.
+ 	writePayload, _ := json.Marshal(WriteRequest{
+-		Table: "nonexistent",
++		Table: "nonexistent", //nolint:goconst
+ 		Rows: []map[string]interface{}{
+ 			{"id": float64(1), "name": "test"},
+ 		},
+diff --git a/pkg/storage/coverage_engine_v5_test.go b/pkg/storage/coverage_engine_v5_test.go
+new file mode 100644
+index 0000000..f5b7e15
+--- /dev/null
++++ b/pkg/storage/coverage_engine_v5_test.go
+@@ -0,0 +1,232 @@
++package storage
++
++import (
++	"path/filepath"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// ---------------------------------------------------------------------------
++// Engine.Write error paths (84.2% → higher)
++// ---------------------------------------------------------------------------
++
++// TestWriteWALAppendFailureV5 tests Write when WAL AppendWrite fails
++// by closing the WAL file descriptor before writing.
++func TestWriteWALAppendFailureV5(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++
++	if err := eng.wal.file.Close(); err != nil {
++		t.Fatalf("file Close failed: %v", err)
++	}
++
++	err = eng.Write("key", map[string]common.Value{colVal: common.NewInt64(1)})
++	if err == nil {
++		t.Error("expected error when WAL AppendWrite fails, got nil")
++	}
++}
++
++// TestWriteWALSyncFailureV5 tests Write when WAL Sync fails
++// by closing the WAL file descriptor before syncing.
++func TestWriteWALSyncFailureV5(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++
++	_ = eng.wal.file.Close()
++
++	err = eng.Write("key", map[string]common.Value{colVal: common.NewInt64(1)})
++	if err == nil {
++		t.Error("expected error when WAL Sync fails, got nil")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// Engine.NewEngine paths (84.2% → higher)
++// ---------------------------------------------------------------------------
++
++// TestNewEngineInvalidDataDirV5 tests NewEngine with a data directory
++// that cannot be created (path under /dev/null).
++func TestNewEngineInvalidDataDirV5(t *testing.T) {
++	_, err := NewEngine(EngineConfig{DataDir: "/dev/null/cannot/create/here"})
++	if err == nil {
++		t.Error("expected error for invalid data directory, got nil")
++	}
++}
++
++// TestNewEngineReplayWALRecordsV5 tests NewEngine with an existing WAL
++// that contains write records to be replayed into the memtable.
++func TestNewEngineReplayWALRecordsV5(t *testing.T) {
++	dir := t.TempDir()
++
++	eng, err := NewEngine(EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatalf("first NewEngine: %v", err)
++	}
++	if err := eng.Write("replay_key", map[string]common.Value{colVal: common.NewInt64(42)}); err != nil {
++		t.Fatalf("Write failed: %v", err)
++	}
++	if err := eng.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++
++	eng2, err := NewEngine(EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatalf("second NewEngine: %v", err)
++	}
++	defer func() { _ = eng2.Close() }()
++
++	row, ok := eng2.Get("replay_key")
++	if !ok {
++		t.Fatal("expected replay_key to be recovered from WAL replay")
++	}
++	if row.Columns[colVal].Int64 != 42 {
++		t.Errorf("expected val=42, got %d", row.Columns[colVal].Int64)
++	}
++}
++
++// ---------------------------------------------------------------------------
++// Compress/CompressColumn/DecompressColumn edge cases
++// ---------------------------------------------------------------------------
++
++// TestCompressEmptyDataV5 verifies Compress returns nil for empty input.
++func TestCompressEmptyDataV5(t *testing.T) {
++	result, err := Compress([]byte{})
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++	if result != nil {
++		t.Errorf("expected nil for empty data, got %d bytes", len(result))
++	}
++}
++
++// TestDecompressEmptyDataV5 verifies Decompress returns nil for empty input.
++func TestDecompressEmptyDataV5(t *testing.T) {
++	result, err := Decompress([]byte{})
++	if err != nil {
++		t.Fatalf("unexpected error: %v", err)
++	}
++	if result != nil {
++		t.Errorf("expected nil for empty data, got %d bytes", len(result))
++	}
++}
++
++// TestCompressColumnNilV5 verifies CompressColumn returns error for nil EncodedColumn.
++func TestCompressColumnNilV5(t *testing.T) {
++	err := CompressColumn(nil)
++	if err == nil {
++		t.Fatal("expected error for nil EncodedColumn, got nil")
++	}
++}
++
++// TestDecompressColumnNilV5 verifies DecompressColumn returns error for nil EncodedColumn.
++func TestDecompressColumnNilV5(t *testing.T) {
++	err := DecompressColumn(nil)
++	if err == nil {
++		t.Fatal("expected error for nil EncodedColumn, got nil")
++	}
++}
++
++// TestDecompressInvalidDataV5 verifies Decompress returns error for invalid data.
++func TestDecompressInvalidDataV5(t *testing.T) {
++	_, err := Decompress([]byte{0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE})
++	if err == nil {
++		t.Fatal("expected error for invalid compressed data, got nil")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// EncodeColumn edge cases (85.7% → higher)
++// ---------------------------------------------------------------------------
++
++// TestEncodeColumnUnsupportedTypePlainV5 tests EncodeColumn with a type
++// that is not supported for plain encoding (TypeNull).
++func TestEncodeColumnUnsupportedTypePlainV5(t *testing.T) {
++	_, err := EncodeColumn(common.TypeNull, nil, 1, nil)
++	if err == nil {
++		t.Error("expected error for unsupported type in EncodeColumn, got nil")
++	}
++}
++
++// TestEncodeColumnUnknownEncodingTypeV5 tests DecodeColumn with an unknown
++// encoding type to cover the default branch.
++func TestEncodeColumnUnknownEncodingTypeV5(t *testing.T) {
++	enc := &EncodedColumn{
++		Encoding: EncodingType(99),
++		Type:     common.TypeInt64,
++		RowCount: 1,
++		Data:     make([]byte, 8),
++	}
++	_, _, err := DecodeColumn(enc)
++	if err == nil {
++		t.Error("expected error for unknown encoding type in DecodeColumn, got nil")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// Engine.Close (85.7% → higher)
++// ---------------------------------------------------------------------------
++
++// TestEngineCloseSuccessV5 tests that Close succeeds on a working engine.
++func TestEngineCloseSuccessV5(t *testing.T) {
++	dir := t.TempDir()
++	eng, err := NewEngine(EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++
++	if err := eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)}); err != nil {
++		t.Fatalf("Write failed: %v", err)
++	}
++
++	if err := eng.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++}
++
++// TestNewEngineReplayWithWALPath tests that NewEngine correctly opens
++// an existing WAL file and replays its records.
++func TestNewEngineReplayWithWALPath(t *testing.T) {
++	dir := t.TempDir()
++	walPath := filepath.Join(dir, "wal.log")
++
++	// Create a WAL with a write record
++	w, err := CreateWAL(walPath)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++	payload, err := serializeWriteRecord("k1", 1, map[string]common.Value{colVal: common.NewInt64(10)})
++	if err != nil {
++		t.Fatalf("serializeWriteRecord failed: %v", err)
++	}
++	if err := w.AppendWrite(payload); err != nil {
++		t.Fatalf("AppendWrite failed: %v", err)
++	}
++	if err := w.Sync(); err != nil {
++		t.Fatalf("Sync failed: %v", err)
++	}
++	if err := w.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++
++	// NewEngine should open the existing WAL and replay the record
++	eng, err := NewEngine(EngineConfig{DataDir: dir})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	row, ok := eng.Get("k1")
++	if !ok {
++		t.Fatal("expected k1 to be recovered from WAL replay")
++	}
++	if row.Columns[colVal].Int64 != 10 {
++		t.Errorf("expected val=10, got %d", row.Columns[colVal].Int64)
++	}
++}
+diff --git a/pkg/storage/coverage_improvement_v5_test.go b/pkg/storage/coverage_improvement_v5_test.go
+new file mode 100644
+index 0000000..ecc873a
+--- /dev/null
++++ b/pkg/storage/coverage_improvement_v5_test.go
+@@ -0,0 +1,332 @@
++package storage
++
++import (
++	"encoding/binary"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
++)
++
++// ---------------------------------------------------------------------------
++// OpenWAL error paths (76.5% → higher)
++// ---------------------------------------------------------------------------
++
++// TestOpenWALNonExistentFilePath verifies OpenWAL returns error for a path
++// in a non-existent directory.
++func TestOpenWALNonExistentFilePath(t *testing.T) {
++	_, _, err := OpenWAL("/no/such/directory/wal.log")
++	if err == nil {
++		t.Fatal("expected error for non-existent file path, got nil")
++	}
++}
++
++// TestOpenWALReplayRecordsCorrectly verifies that OpenWAL correctly replays
++// multiple records of different types (write, commit, checkpoint).
++func TestOpenWALReplayRecordsCorrectly(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(path)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++
++	if err := w.AppendWrite([]byte("write_record")); err != nil {
++		t.Fatalf("AppendWrite failed: %v", err)
++	}
++	if err := w.AppendCommit([]byte("commit_record")); err != nil {
++		t.Fatalf("AppendCommit failed: %v", err)
++	}
++	if err := w.AppendCheckpoint([]byte("checkpoint_record")); err != nil {
++		t.Fatalf("AppendCheckpoint failed: %v", err)
++	}
++	if err := w.Sync(); err != nil {
++		t.Fatalf("Sync failed: %v", err)
++	}
++	if err := w.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++
++	opened, recs, err := OpenWAL(path)
++	if err != nil {
++		t.Fatalf("OpenWAL failed: %v", err)
++	}
++	defer func() { _ = opened.Close() }()
++
++	if len(recs) != 3 {
++		t.Fatalf("expected 3 records, got %d", len(recs))
++	}
++	if recs[0].Type != walTypeWrite || string(recs[0].Payload) != "write_record" {
++		t.Errorf("record 0: expected write/write_record, got type=%d payload=%q", recs[0].Type, string(recs[0].Payload))
++	}
++	if recs[1].Type != walTypeCommit || string(recs[1].Payload) != "commit_record" {
++		t.Errorf("record 1: expected commit/commit_record, got type=%d payload=%q", recs[1].Type, string(recs[1].Payload))
++	}
++	if recs[2].Type != walTypeCheckpoint || string(recs[2].Payload) != "checkpoint_record" {
++		t.Errorf("record 2: expected checkpoint/checkpoint_record, got type=%d payload=%q", recs[2].Type, string(recs[2].Payload))
++	}
++}
++
++// TestOpenWALCorruptedBadCRC verifies OpenWAL stops replay when a record
++// has a bad CRC and truncates the file to the last valid record.
++func TestOpenWALCorruptedBadCRC(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(path)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++	if err := w.AppendWrite([]byte("valid_data")); err != nil {
++		t.Fatalf("AppendWrite failed: %v", err)
++	}
++	if err := w.Sync(); err != nil {
++		t.Fatalf("Sync failed: %v", err)
++	}
++	if err := w.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile failed: %v", err)
++	}
++
++	totalLen := uint32(walTypeSize + 4 + walCRCSize)
++	fakeRecord := make([]byte, walHeaderSize+totalLen)
++	binary.LittleEndian.PutUint32(fakeRecord[0:], totalLen)
++	fakeRecord[4] = walTypeWrite
++	copy(fakeRecord[5:], []byte("bad!"))
++	binary.LittleEndian.PutUint32(fakeRecord[5+4:], 0xDEADBEEF)
++
++	modified := make([]byte, len(data)+len(fakeRecord))
++	copy(modified, data)
++	copy(modified[len(data):], fakeRecord)
++	if err := os.WriteFile(path, modified, 0644); err != nil {
++		t.Fatalf("WriteFile failed: %v", err)
++	}
++
++	opened, recs, err := OpenWAL(path)
++	if err != nil {
++		t.Fatalf("OpenWAL failed: %v", err)
++	}
++	defer func() { _ = opened.Close() }()
++
++	if len(recs) != 1 {
++		t.Fatalf("expected 1 valid record before bad CRC, got %d", len(recs))
++	}
++	if string(recs[0].Payload) != "valid_data" {
++		t.Errorf("record 0: expected 'valid_data', got %q", string(recs[0].Payload))
++	}
++}
++
++// TestOpenWALPartialHeaderTruncation verifies OpenWAL truncates the file
++// when there is a partial header at the end (simulating a crash mid-write).
++func TestOpenWALPartialHeaderTruncation(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(path)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++	if err := w.AppendWrite([]byte("good")); err != nil {
++		t.Fatalf("AppendWrite failed: %v", err)
++	}
++	if err := w.Sync(); err != nil {
++		t.Fatalf("Sync failed: %v", err)
++	}
++	if err := w.Close(); err != nil {
++		t.Fatalf("Close failed: %v", err)
++	}
++
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatalf("ReadFile failed: %v", err)
++	}
++	validSize := len(data)
++	modified := make([]byte, validSize+2)
++	copy(modified, data)
++	modified[validSize] = 0x0A
++	modified[validSize+1] = 0x00
++
++	if err := os.WriteFile(path, modified, 0644); err != nil {
++		t.Fatalf("WriteFile failed: %v", err)
++	}
++
++	opened, recs, err := OpenWAL(path)
++	if err != nil {
++		t.Fatalf("OpenWAL failed: %v", err)
++	}
++	defer func() { _ = opened.Close() }()
++
++	if len(recs) != 1 {
++		t.Fatalf("expected 1 valid record, got %d", len(recs))
++	}
++
++	fi, err := os.Stat(path)
++	if err != nil {
++		t.Fatalf("Stat failed: %v", err)
++	}
++	if fi.Size() != int64(validSize) {
++		t.Errorf("expected file size %d after truncation, got %d", validSize, fi.Size())
++	}
++}
++
++// ---------------------------------------------------------------------------
++// Engine.getFromSegments paths (82.6% → higher)
++// ---------------------------------------------------------------------------
++
++// TestGetFromSegmentsKeyNotInPrimaryIndex tests that getFromSegments returns
++// empty when the key is not found in the primary index.
++func TestGetFromSegmentsKeyNotInPrimaryIndex(t *testing.T) {
++	eng := &Engine{
++		activeMem:    NewMemTable(),
++		primaryIndex: index.NewPrimaryIndex(),
++		bloomIndex:   index.NewBloomIndex(),
++		sparseIndex:  index.NewSparseIndex(),
++		segmentMap:   make(map[uint64]*Segment),
++	}
++
++	row, ok := eng.getFromSegments("nonexistent_key")
++	if ok {
++		t.Error("expected false for key not in primary index")
++	}
++	if len(row.Columns) != 0 {
++		t.Error("expected empty columns for key not in primary index")
++	}
++}
++
++// TestGetFromSegmentsBloomFilterSaysNo tests that getFromSegments skips a
++// segment when the bloom filter says the key is not present.
++func TestGetFromSegmentsBloomFilterSaysNo(t *testing.T) {
++	pi := index.NewPrimaryIndex()
++	_ = pi.RegisterSegment(index.SegmentMeta{ID: 1, MinKey: "a", MaxKey: "z"})
++
++	bi := index.NewBloomIndex()
++	_ = bi.BuildAndRegister(1, []string{"present_key"}, 0.01)
++
++	eng := &Engine{
++		activeMem:    NewMemTable(),
++		primaryIndex: pi,
++		bloomIndex:   bi,
++		sparseIndex:  index.NewSparseIndex(),
++		segmentMap:   make(map[uint64]*Segment),
++		columnMeta:   []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}},
++	}
++
++	row, ok := eng.getFromSegments("missing_key")
++	if ok {
++		t.Error("expected false when bloom filter says key is not present")
++	}
++	if len(row.Columns) != 0 {
++		t.Error("expected empty columns when bloom filter says no")
++	}
++}
++
++// TestGetFromSegmentsSegmentNotInMap tests that getFromSegments skips a
++// segment when the bloom filter says yes but the segment is not in segmentMap.
++func TestGetFromSegmentsSegmentNotInMap(t *testing.T) {
++	pi := index.NewPrimaryIndex()
++	_ = pi.RegisterSegment(index.SegmentMeta{ID: 1, MinKey: "a", MaxKey: "z"})
++
++	bi := index.NewBloomIndex()
++	_ = bi.BuildAndRegister(1, []string{"some_key"}, 0.01)
++
++	eng := &Engine{
++		activeMem:    NewMemTable(),
++		primaryIndex: pi,
++		bloomIndex:   bi,
++		sparseIndex:  index.NewSparseIndex(),
++		segmentMap:   make(map[uint64]*Segment),
++		columnMeta:   []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}},
++	}
++
++	row, ok := eng.getFromSegments("some_key")
++	if ok {
++		t.Error("expected false when segment not found in segmentMap")
++	}
++	if len(row.Columns) != 0 {
++		t.Error("expected empty columns when segment not in map")
++	}
++}
++
++// TestGetFromSegmentsFindRowByKeyReturnsFalse tests that getFromSegments
++// returns false when the segment is found but FindRowByKey returns false.
++func TestGetFromSegmentsFindRowByKeyReturnsFalse(t *testing.T) {
++	pi := index.NewPrimaryIndex()
++	_ = pi.RegisterSegment(index.SegmentMeta{ID: 1, MinKey: "a", MaxKey: "z"})
++
++	bi := index.NewBloomIndex()
++	_ = bi.BuildAndRegister(1, []string{"some_key"}, 0.01)
++
++	seg := &Segment{
++		ID:       1,
++		MinKey:   "a",
++		MaxKey:   "z",
++		RowCount: 1,
++		Keys:     []string{"other_key"},
++		Columns: []EncodedColumn{
++			{Encoding: EncodingPlain, Type: common.TypeInt64, RowCount: 1, Data: make([]byte, 8)},
++		},
++	}
++
++	eng := &Engine{
++		activeMem:    NewMemTable(),
++		primaryIndex: pi,
++		bloomIndex:   bi,
++		sparseIndex:  index.NewSparseIndex(),
++		segmentMap:   map[uint64]*Segment{1: seg},
++		columnMeta:   []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}},
++	}
++
++	row, ok := eng.getFromSegments("some_key")
++	if ok {
++		t.Error("expected false when FindRowByKey returns false")
++	}
++	if len(row.Columns) != 0 {
++		t.Error("expected empty columns when FindRowByKey returns false")
++	}
++}
++
++// TestGetFromSegmentsGetColumnValueError tests that getFromSegments skips
++// a column when GetColumnValue returns an error, but still returns the row
++// with remaining columns.
++func TestGetFromSegmentsGetColumnValueError(t *testing.T) {
++	pi := index.NewPrimaryIndex()
++	_ = pi.RegisterSegment(index.SegmentMeta{ID: 1, MinKey: "a", MaxKey: "z"})
++
++	bi := index.NewBloomIndex()
++	_ = bi.BuildAndRegister(1, []string{"target_key"}, 0.01)
++
++	seg := &Segment{
++		ID:       1,
++		MinKey:   "a",
++		MaxKey:   "z",
++		RowCount: 1,
++		Keys:     []string{"target_key"},
++		Columns: []EncodedColumn{
++			{Encoding: EncodingType(99), Type: common.TypeInt64, RowCount: 1, Data: make([]byte, 8)},
++		},
++	}
++
++	eng := &Engine{
++		activeMem:    NewMemTable(),
++		primaryIndex: pi,
++		bloomIndex:   bi,
++		sparseIndex:  index.NewSparseIndex(),
++		segmentMap:   map[uint64]*Segment{1: seg},
++		columnMeta:   []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}},
++	}
++
++	row, ok := eng.getFromSegments("target_key")
++	if !ok {
++		t.Fatal("expected true when key is found in segment")
++	}
++	if len(row.Columns) != 0 {
++		t.Errorf("expected 0 columns (all errored), got %d", len(row.Columns))
++	}
++}

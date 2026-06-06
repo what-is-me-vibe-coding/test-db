@@ -1,0 +1,115 @@
+diff --git a/pkg/storage/memtable.go b/pkg/storage/memtable.go
+index 1cd59f9..0f3d077 100644
+--- a/pkg/storage/memtable.go
++++ b/pkg/storage/memtable.go
+@@ -198,9 +198,9 @@ func (m *MemTable) Put(key string, value Row) (Row, bool, error) {
+ 	estimatedSize := int64(len(key)) + estimateRowSize(value)
+ 	if exists {
+ 		oldSize := int64(len(key)) + estimateRowSize(old)
+-		atomic.AddInt64(&m.size, estimatedSize-oldSize)
++		atomic.StoreInt64(&m.size, m.size+estimatedSize-oldSize)
+ 	} else {
+-		atomic.AddInt64(&m.size, estimatedSize)
++		atomic.StoreInt64(&m.size, m.size+estimatedSize)
+ 	}
+ 
+ 	return old, exists, nil
+@@ -226,7 +226,7 @@ func (m *MemTable) Delete(key string) (Row, bool, error) {
+ 	old, exists := m.tree.delete(key)
+ 	if exists {
+ 		estimatedSize := int64(len(key)) + estimateRowSize(old)
+-		atomic.AddInt64(&m.size, -estimatedSize)
++		atomic.StoreInt64(&m.size, m.size-estimatedSize)
+ 	}
+ 
+ 	return old, exists, nil
+diff --git a/pkg/storage/segment.go b/pkg/storage/segment.go
+index f7f1ffa..ff22593 100644
+--- a/pkg/storage/segment.go
++++ b/pkg/storage/segment.go
+@@ -4,6 +4,7 @@ import (
+ 	"encoding/binary"
+ 	"fmt"
+ 	"math"
++	"sync"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
+@@ -39,6 +40,10 @@ type Segment struct {
+ 	Footer   SegmentFooter
+ 	FilePath string
+ 	Keys     []string
++
++	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
++	decodedCache []decodedColumn
++	decodeOnce   sync.Once
+ }
+ 
+ // SegmentID 返回 Segment 的唯一标识。
+diff --git a/pkg/storage/segment_decode.go b/pkg/storage/segment_decode.go
+index 9e1ed73..5688b04 100644
+--- a/pkg/storage/segment_decode.go
++++ b/pkg/storage/segment_decode.go
+@@ -119,41 +119,33 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
+ 	return extractValue(cols[colIdx], rowIdx)
+ }
+ 
+-// GetColumnValue 从指定列中提取给定行索引的值，使用副本避免修改原始数据。
++// GetColumnValue 从指定列中提取给定行索引的值。
++// 使用 Segment 级解码缓存，首次访问时解码所有列并缓存，后续调用直接从缓存读取，
++// 避免点查时重复解压解码整列数据。
+ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
+ 	if int(colIdx) >= len(s.Columns) {
+ 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+ 	}
+-	src := &s.Columns[colIdx]
+-	enc := &EncodedColumn{
+-		Encoding: src.Encoding,
+-		Type:     src.Type,
+-		RowCount: src.RowCount,
+-	}
+-	if len(src.Data) > 0 {
+-		enc.Data = make([]byte, len(src.Data))
+-		copy(enc.Data, src.Data)
+-	}
+-	if len(src.Offsets) > 0 {
+-		enc.Offsets = make([]uint32, len(src.Offsets))
+-		copy(enc.Offsets, src.Offsets)
+-	}
+-	if len(src.Dict) > 0 {
+-		enc.Dict = src.Dict // Dict 是只读的，无需深拷贝
+-	}
+-	if len(src.Nulls) > 0 {
+-		enc.Nulls = make([]byte, len(src.Nulls))
+-		copy(enc.Nulls, src.Nulls)
+-	}
+-	if err := DecompressColumn(enc); err != nil {
+-		return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
++
++	s.decodeOnce.Do(func() {
++		cols, err := s.decodeAllColumns()
++		if err != nil {
++			// 解码失败时设置空缓存，后续调用将返回 Null
++			s.decodedCache = make([]decodedColumn, 0)
++			return
++		}
++		s.decodedCache = cols
++	})
++
++	if len(s.decodedCache) == 0 {
++		return common.NewNull(), fmt.Errorf("segment: decode cache unavailable")
+ 	}
+-	decoded, nulls, err := DecodeColumn(enc)
+-	if err != nil {
+-		return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
++
++	if int(colIdx) >= len(s.decodedCache) {
++		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+ 	}
+-	cd := decodedColumn{data: decoded, nulls: nulls, typ: enc.Type}
+-	return extractValue(cd, rowIdx), nil
++
++	return extractValue(s.decodedCache[colIdx], rowIdx), nil
+ }
+ 
+ // GetAllColumnValues 提取指定行所有列的值。
