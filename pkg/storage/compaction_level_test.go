@@ -90,7 +90,7 @@ func TestCompactorWithStringColumn(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	cols := []ColumnMeta{{ID: 0, Name: "name", Type: common.TypeString}}
+	cols := []ColumnMeta{{ID: 0, Name: colName, Type: common.TypeString}}
 	eng := setupEngine(t, dir, 64<<20)
 	writeRows(t, eng, cols, 20, 0)
 	if err := eng.Flush(cols); err != nil {
