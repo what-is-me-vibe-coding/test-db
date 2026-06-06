@@ -10,10 +10,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+const testNetTCP = "tcp"
+
 // --- isTransientAcceptErr tests ---
 
 func TestIsTransientAcceptErr_TemporaryOpError(t *testing.T) {
-	opErr := &net.OpError{Op: "accept", Net: "tcp", Err: temporaryError{}}
+	opErr := &net.OpError{Op: "accept", Net: testNetTCP, Err: temporaryError{}}
 	if !isTransientAcceptErr(opErr) {
 		t.Error("isTransientAcceptErr(temporary OpError) = false, want true")
 	}
@@ -45,7 +47,7 @@ func TestIsTransientAcceptErr_TimeoutOpError(t *testing.T) {
 }
 
 func TestIsTransientAcceptErr_NonTransientError(t *testing.T) {
-	opErr := &net.OpError{Op: "accept", Net: "tcp", Err: errors.New("fatal error")}
+	opErr := &net.OpError{Op: "accept", Net: testNetTCP, Err: errors.New("fatal error")}
 	if isTransientAcceptErr(opErr) {
 		t.Error("isTransientAcceptErr(non-temporary OpError) = true, want false")
 	}
