@@ -65,7 +65,7 @@ func TestSegmentIterator(t *testing.T) {
 	seg := buildTestSegment(t, []string{"a", "c", "e", "g", "i"}, []int64{1, 3, 5, 7, 9})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
-	it := newSegmentIterator(seg, colMeta, "c", "g")
+	it := newSegmentIterator(seg, colMeta, "c", "g", nil)
 
 	var keys []string
 	if !it.Next() {
@@ -96,7 +96,7 @@ func TestSegmentIteratorFullRange(t *testing.T) {
 	seg := buildTestSegment(t, keys, []int64{1, 2, 3})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
-	it := newSegmentIterator(seg, colMeta, "a", "c")
+	it := newSegmentIterator(seg, colMeta, "a", "c", nil)
 
 	var result []string
 	for it.Next() {
@@ -112,7 +112,7 @@ func TestSegmentIteratorNoOverlap(t *testing.T) {
 	seg := buildTestSegment(t, []string{"m", "n", "o"}, []int64{13, 14, 15})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
-	it := newSegmentIterator(seg, colMeta, "a", "c")
+	it := newSegmentIterator(seg, colMeta, "a", "c", nil)
 	if it.Next() {
 		t.Error("expected no entries for non-overlapping range")
 	}
@@ -122,7 +122,7 @@ func TestSegmentIteratorSingleKey(t *testing.T) {
 	seg := buildTestSegment(t, []string{"a", "b", "c"}, []int64{1, 2, 3})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
-	it := newSegmentIterator(seg, colMeta, "b", "b")
+	it := newSegmentIterator(seg, colMeta, "b", "b", nil)
 
 	if !it.Next() {
 		t.Fatal("expected one entry")

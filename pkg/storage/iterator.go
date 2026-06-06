@@ -2,6 +2,7 @@ package storage
 
 import (
 	"container/heap"
+	"fmt"
 	"sync"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
@@ -71,32 +72,76 @@ type segmentIterator struct {
 	finished    bool
 	decodedCols []decodedColumn
 	decodeOnce  sync.Once
+	blockCache  *BlockCache
 }
 
 // newSegmentIterator creates an iterator over a Segment for the given range.
 // Column decoding is deferred until the first row is accessed, avoiding
 // unnecessary work for segments that are skipped by index pruning.
-func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string) *segmentIterator {
+func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string, blockCache *BlockCache) *segmentIterator {
 	return &segmentIterator{
-		seg:     seg,
-		colMeta: colMeta,
-		start:   start,
-		end:     end,
-		rowIdx:  -1,
+		seg:        seg,
+		colMeta:    colMeta,
+		start:      start,
+		end:        end,
+		rowIdx:     -1,
+		blockCache: blockCache,
 	}
 }
 
 // ensureDecoded lazily decodes all columns on first access.
 // Uses sync.Once to guarantee thread-safe, idempotent initialization.
 // On decode failure, decodedCols is set to an empty (non-nil) slice and err is recorded.
+// 优先从 BlockCache 获取已解码的列数据，未命中时解码并写入缓存。
 func (it *segmentIterator) ensureDecoded() {
 	it.decodeOnce.Do(func() {
-		decodedCols, err := it.seg.decodeAllColumns()
-		if err != nil {
-			it.err = err
-			it.decodedCols = make([]decodedColumn, 0)
-			return
+		decodedCols := make([]decodedColumn, len(it.seg.Columns))
+		cacheHitCount := 0
+
+		for i := range it.seg.Columns {
+			cacheKey := CacheKey{SegmentID: it.seg.ID, ColumnIdx: uint32(i)}
+			if dc, ok := it.blockCache.Get(cacheKey); ok {
+				decodedCols[i] = dc
+				cacheHitCount++
+			} else {
+				// 缓存未命中，解码单列
+				src := &it.seg.Columns[i]
+				enc := &EncodedColumn{
+					Encoding: src.Encoding,
+					Type:     src.Type,
+					RowCount: src.RowCount,
+				}
+				if len(src.Data) > 0 {
+					enc.Data = make([]byte, len(src.Data))
+					copy(enc.Data, src.Data)
+				}
+				if len(src.Offsets) > 0 {
+					enc.Offsets = src.Offsets
+				}
+				if len(src.Dict) > 0 {
+					enc.Dict = src.Dict
+				}
+				if len(src.Nulls) > 0 {
+					enc.Nulls = src.Nulls
+				}
+				if err := DecompressColumn(enc); err != nil {
+					it.err = fmt.Errorf("segment: decompress column %d: %w", i, err)
+					it.decodedCols = make([]decodedColumn, 0)
+					return
+				}
+				decoded, nulls, err := DecodeColumn(enc)
+				if err != nil {
+					it.err = fmt.Errorf("segment: decode column %d: %w", i, err)
+					it.decodedCols = make([]decodedColumn, 0)
+					return
+				}
+				dc := decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
+				decodedCols[i] = dc
+				// 写入缓存供后续查询使用
+				it.blockCache.Put(cacheKey, dc)
+			}
 		}
+
 		it.decodedCols = decodedCols
 	})
 }
@@ -353,7 +398,7 @@ func (e *Engine) buildScanIterators(start, end string) []ScanIterator {
 		if seg.MinKey > end || seg.MaxKey < start {
 			continue
 		}
-		iters = append(iters, newSegmentIterator(seg, e.columnMeta, start, end))
+		iters = append(iters, newSegmentIterator(seg, e.columnMeta, start, end, e.blockCache))
 	}
 
 	for i := 0; i < len(e.immutable); i++ {

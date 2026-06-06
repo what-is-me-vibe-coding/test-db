@@ -225,7 +225,7 @@ func TestSegmentIteratorDecodeError(t *testing.T) {
 	}
 
 	colMeta := []ColumnMeta{{ID: 0, Name: "col_0", Type: common.TypeInt64}}
-	it := newSegmentIterator(seg, colMeta, "a", "z")
+	it := newSegmentIterator(seg, colMeta, "a", "z", nil)
 
 	// 迭代器应该报告错误
 	if it.Next() {

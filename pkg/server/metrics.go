@@ -21,6 +21,10 @@ type Metrics struct {
 	FlushTotal     prometheus.Counter
 	CompactTotal   prometheus.Counter
 	WALCleanTotal  prometheus.Counter
+	CacheHits      *prometheus.CounterVec
+	CacheMisses    *prometheus.CounterVec
+	CacheSizeBytes *prometheus.GaugeVec
+	CacheEntries   *prometheus.GaugeVec
 }
 
 // NewMetrics 创建并注册所有 Prometheus 指标。
@@ -43,6 +47,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		FlushTotal:     newCounter(factory, "flush_total", "MemTable 刷盘总次数"),
 		CompactTotal:   newCounter(factory, "compact_total", "Compaction 总次数"),
 		WALCleanTotal:  newCounter(factory, "wal_clean_total", "WAL 清理总次数"),
+		CacheHits:      newCacheCounter(factory, "cache_hits_total", "缓存命中次数"),
+		CacheMisses:    newCacheCounter(factory, "cache_misses_total", "缓存未命中次数"),
+		CacheSizeBytes: newCacheGauge(factory, "cache_size_bytes", "缓存占用字节数"),
+		CacheEntries:   newCacheGauge(factory, "cache_entries", "缓存条目数"),
 	}
 
 	m.initLabels()
@@ -63,6 +71,14 @@ func (m *Metrics) initLabels() {
 	m.WriteDuration.WithLabelValues("success").Observe(0)
 	m.SegmentCount.WithLabelValues("l0").Set(0)
 	m.SegmentCount.WithLabelValues("l1").Set(0)
+	m.CacheHits.WithLabelValues("block").Add(0)
+	m.CacheHits.WithLabelValues("index").Add(0)
+	m.CacheMisses.WithLabelValues("block").Add(0)
+	m.CacheMisses.WithLabelValues("index").Add(0)
+	m.CacheSizeBytes.WithLabelValues("block").Set(0)
+	m.CacheSizeBytes.WithLabelValues("index").Set(0)
+	m.CacheEntries.WithLabelValues("block").Set(0)
+	m.CacheEntries.WithLabelValues("index").Set(0)
 }
 
 func newQueriesTotal(f promauto.Factory) *prometheus.CounterVec {
@@ -107,4 +123,16 @@ func newCounter(f promauto.Factory, name, help string) prometheus.Counter {
 	return f.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace, Name: name, Help: help,
 	})
+}
+
+func newCacheCounter(f promauto.Factory, name, help string) *prometheus.CounterVec {
+	return f.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace, Name: name, Help: help,
+	}, []string{"cache"})
+}
+
+func newCacheGauge(f promauto.Factory, name, help string) *prometheus.GaugeVec {
+	return f.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace, Name: name, Help: help,
+	}, []string{"cache"})
 }
