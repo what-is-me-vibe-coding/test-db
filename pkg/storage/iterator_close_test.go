@@ -33,7 +33,7 @@ func TestSegmentIteratorEntryBeforeNext(t *testing.T) {
 	seg := buildTestSegment(t, []string{"a", "b"}, []int64{1, 2})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
-	it := newSegmentIterator(seg, colMeta, "a", "b")
+	it := newSegmentIterator(seg, colMeta, "a", "b", nil)
 
 	// Entry() before Next() should return zero value
 	entry := it.Entry()
@@ -46,7 +46,7 @@ func TestSegmentIteratorClose(t *testing.T) {
 	seg := buildTestSegment(t, []string{"a"}, []int64{1})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
-	it := newSegmentIterator(seg, colMeta, "a", "a")
+	it := newSegmentIterator(seg, colMeta, "a", "a", nil)
 	it.Close()
 }
 
@@ -151,7 +151,7 @@ func TestMemTableIteratorCloseMultipleCalls(_ *testing.T) {
 func TestSegmentIteratorCloseMultipleCalls(t *testing.T) {
 	seg := buildTestSegment(t, []string{"a"}, []int64{1})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
-	it := newSegmentIterator(seg, colMeta, "a", "a")
+	it := newSegmentIterator(seg, colMeta, "a", "a", nil)
 	it.Close()
 	it.Close() // 不应 panic
 }
@@ -164,7 +164,7 @@ func TestMergeIteratorCloseWithMultipleIterators(t *testing.T) {
 	it2 := newMemTableIterator(NewMemTable(), "a", "z")
 	seg := buildTestSegment(t, []string{"a"}, []int64{1})
 	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
-	it3 := newSegmentIterator(seg, colMeta, "a", "a")
+	it3 := newSegmentIterator(seg, colMeta, "a", "a", nil)
 
 	mi := NewMergeIterator(it1, it2, it3)
 	// Close 应关闭所有子迭代器，不应 panic
