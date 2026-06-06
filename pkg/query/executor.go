@@ -178,7 +178,10 @@ func buildChunksFromEntries(entries []storage.ScanEntry, schema []ColumnDef, chu
 				}
 				if err := col.Append(val); err != nil {
 					val = coerceValue(val, colDef.Type)
-					_ = col.Append(val)
+					if err2 := col.Append(val); err2 != nil {
+						// 类型转换后仍无法追加，用 NULL 填充以保证行对齐
+						_ = col.Append(common.NewNull())
+					}
 				}
 			}
 			_ = chunk.AddColumn(col)
