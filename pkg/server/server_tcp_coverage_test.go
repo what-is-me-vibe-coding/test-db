@@ -187,7 +187,7 @@ func TestHandleTCPConn_WriteToNonExistentTable(t *testing.T) {
 	// handleWrite will return an error (table not found), which triggers
 	// the error response path in handleTCPConn.
 	writePayload, _ := json.Marshal(WriteRequest{
-		Table: "nonexistent",
+		Table: "nonexistent", //nolint:goconst
 		Rows: []map[string]interface{}{
 			{"id": float64(1), "name": "test"},
 		},
