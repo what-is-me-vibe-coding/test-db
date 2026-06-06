@@ -243,7 +243,7 @@ func TestEngineWriteBatchWithNull(t *testing.T) {
 		{
 			Key: "null_row",
 			Values: map[string]common.Value{
-				"val":  common.NewInt64(1),
+				colVal: common.NewInt64(1),
 				"null": common.NewNull(),
 			},
 		},
