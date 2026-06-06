@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
@@ -39,6 +40,10 @@ type Segment struct {
 	Footer   SegmentFooter
 	FilePath string
 	Keys     []string
+
+	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
+	decodedCache []decodedColumn
+	decodeOnce   sync.Once
 }
 
 // SegmentID 返回 Segment 的唯一标识。

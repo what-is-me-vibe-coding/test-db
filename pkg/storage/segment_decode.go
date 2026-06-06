@@ -119,37 +119,35 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
 	return extractValue(cols[colIdx], rowIdx)
 }
 
-// GetColumnValue 从指定列中提取给定行索引的值，使用副本避免修改原始数据。
+// GetColumnValue 从指定列中提取给定行索引的值。
+// 使用 Segment 级解码缓存，首次访问时解码所有列并缓存，后续调用直接从缓存读取，
+// 避免点查时重复解压解码整列数据。
 // 仅 Data 需要深拷贝（DecompressColumn 会替换 enc.Data），
 // Offsets、Dict、Nulls 在解压和解码过程中只读，可直接引用。
 func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
 	if int(colIdx) >= len(s.Columns) {
 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
 	}
-	src := &s.Columns[colIdx]
-	enc := &EncodedColumn{
-		Encoding: src.Encoding,
-		Type:     src.Type,
-		RowCount: src.RowCount,
+
+	s.decodeOnce.Do(func() {
+		cols, err := s.decodeAllColumns()
+		if err != nil {
+			// 解码失败时设置空缓存，后续调用将返回 Null
+			s.decodedCache = make([]decodedColumn, 0)
+			return
+		}
+		s.decodedCache = cols
+	})
+
+	if len(s.decodedCache) == 0 {
+		return common.NewNull(), fmt.Errorf("segment: decode cache unavailable")
 	}
-	// Data 必须深拷贝：DecompressColumn 会替换 enc.Data
-	if len(src.Data) > 0 {
-		enc.Data = make([]byte, len(src.Data))
-		copy(enc.Data, src.Data)
+
+	if int(colIdx) >= len(s.decodedCache) {
+		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
 	}
-	// Offsets、Dict、Nulls 在解压和解码过程中只读，无需深拷贝
-	enc.Offsets = src.Offsets
-	enc.Dict = src.Dict
-	enc.Nulls = src.Nulls
-	if err := DecompressColumn(enc); err != nil {
-		return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
-	}
-	decoded, nulls, err := DecodeColumn(enc)
-	if err != nil {
-		return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
-	}
-	cd := decodedColumn{data: decoded, nulls: nulls, typ: enc.Type}
-	return extractValue(cd, rowIdx), nil
+
+	return extractValue(s.decodedCache[colIdx], rowIdx), nil
 }
 
 // GetAllColumnValues 提取指定行所有列的值。
