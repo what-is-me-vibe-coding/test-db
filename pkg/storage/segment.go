@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
@@ -39,6 +40,10 @@ type Segment struct {
 	Footer   SegmentFooter
 	FilePath string
 	Keys     []string
+
+	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
+	decodedCache []decodedColumn
+	decodeOnce   sync.Once
 }
 
 // SegmentID 返回 Segment 的唯一标识。
@@ -309,46 +314,25 @@ func float64ToBytes(v float64) []byte {
 }
 
 // Build 构建 Segment，返回序列化后的字节流。
+// 优化：先计算统计信息（需要未压缩数据），再原地压缩 b.columns，
+// 避免额外的深拷贝。Build 后 builder 不可复用。
 func (b *SegmentBuilder) Build() (*Segment, error) {
 	if len(b.columns) == 0 {
 		return nil, fmt.Errorf("segment builder: no columns added")
 	}
 
-	compressedColumns := make([]EncodedColumn, len(b.columns))
-	for i := range b.columns {
-		compressedColumns[i] = EncodedColumn{
-			Encoding: b.columns[i].Encoding,
-			Type:     b.columns[i].Type,
-			RowCount: b.columns[i].RowCount,
-		}
-		if len(b.columns[i].Data) > 0 {
-			compressedColumns[i].Data = make([]byte, len(b.columns[i].Data))
-			copy(compressedColumns[i].Data, b.columns[i].Data)
-		}
-		if len(b.columns[i].Offsets) > 0 {
-			compressedColumns[i].Offsets = make([]uint32, len(b.columns[i].Offsets))
-			copy(compressedColumns[i].Offsets, b.columns[i].Offsets)
-		}
-		if len(b.columns[i].Dict) > 0 {
-			compressedColumns[i].Dict = make([]string, len(b.columns[i].Dict))
-			copy(compressedColumns[i].Dict, b.columns[i].Dict)
-		}
-		if len(b.columns[i].Nulls) > 0 {
-			compressedColumns[i].Nulls = make([]byte, len(b.columns[i].Nulls))
-			copy(compressedColumns[i].Nulls, b.columns[i].Nulls)
-		}
-	}
-
-	for i := range compressedColumns {
-		if err := CompressColumn(&compressedColumns[i]); err != nil {
-			return nil, fmt.Errorf("segment builder: compress column %d: %w", i, err)
-		}
-	}
-
+	// 先计算统计信息（需要未压缩的原始数据）
 	stats := make([]ColumnStat, len(b.columns))
 	for i := range b.columns {
 		stats[i] = computeColumnStat(&b.columns[i])
 		stats[i].ColumnID = uint32(i)
+	}
+
+	// 原地压缩 b.columns，无需额外拷贝
+	for i := range b.columns {
+		if err := CompressColumn(&b.columns[i]); err != nil {
+			return nil, fmt.Errorf("segment builder: compress column %d: %w", i, err)
+		}
 	}
 
 	seg := &Segment{
@@ -356,7 +340,7 @@ func (b *SegmentBuilder) Build() (*Segment, error) {
 		MinKey:   b.minKey,
 		MaxKey:   b.maxKey,
 		RowCount: b.columns[0].RowCount,
-		Columns:  compressedColumns,
+		Columns:  b.columns,
 		Footer: SegmentFooter{
 			ColumnStats: stats,
 			IndexOffset: 0,

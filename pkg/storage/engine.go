@@ -144,9 +144,6 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 		return Row{}, false
 	}
 
-	// 预分配 map 并在循环中复用，减少短命对象分配
-	columns := make(map[string]common.Value, len(e.columnMeta))
-
 	// Iterate in reverse order: since segment IDs are monotonically increasing,
 	// higher IDs appear later in the slice, so reverse iteration checks
 	// newer segments first without allocating a sorted copy.
@@ -166,10 +163,8 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 			continue
 		}
 
-		// 清空 map 复用，避免每次迭代分配新 map
-		for k := range columns {
-			delete(columns, k)
-		}
+		// 创建新 map 而非清空复用，避免逐键删除的开销
+		columns := make(map[string]common.Value, len(e.columnMeta))
 		for colIdx, col := range e.columnMeta {
 			val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
 			if err != nil {
