@@ -96,3 +96,35 @@ func TestTableHasColumn(t *testing.T) {
 		t.Error("HasColumn(notexist) = true, want false")
 	}
 }
+
+func TestTableColTypeMap(t *testing.T) {
+	tbl := &Table{
+		Name: tableUsers,
+		Columns: []ColumnDef{
+			{Name: "id", Type: common.TypeInt64},
+			{Name: colName, Type: common.TypeString},
+			{Name: "score", Type: common.TypeFloat64},
+		},
+	}
+
+	// 首次调用应创建映射
+	m := tbl.ColTypeMap()
+	if len(m) != 3 {
+		t.Errorf("ColTypeMap length = %d, want 3", len(m))
+	}
+	if m["id"] != common.TypeInt64 {
+		t.Errorf("ColTypeMap[id] = %v, want TypeInt64", m["id"])
+	}
+	if m[colName] != common.TypeString {
+		t.Errorf("ColTypeMap[name] = %v, want TypeString", m[colName])
+	}
+	if m["score"] != common.TypeFloat64 {
+		t.Errorf("ColTypeMap[score] = %v, want TypeFloat64", m["score"])
+	}
+
+	// 再次调用应返回缓存的同一映射
+	m2 := tbl.ColTypeMap()
+	if len(m2) != 3 {
+		t.Errorf("ColTypeMap second call length = %d, want 3", len(m2))
+	}
+}

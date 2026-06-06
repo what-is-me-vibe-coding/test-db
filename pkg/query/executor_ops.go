@@ -31,6 +31,18 @@ func (e *Executor) executeFilter(filter *FilterNode) (*execResult, error) {
 	return &execResult{chunks: chunks, schema: schema}, nil
 }
 
+// fillRowVals 将 chunk 中指定行的列值填入 rowVals map（复用已有 map）。
+func fillRowVals(rowVals map[string]common.Value, cols []*storage.ColumnVector, schema []ColumnDef, row uint32) {
+	for k := range rowVals {
+		delete(rowVals, k)
+	}
+	for i, col := range cols {
+		if i < len(schema) {
+			rowVals[schema[i].Name] = col.GetValue(row)
+		}
+	}
+}
+
 // filterChunk 对单个 Chunk 执行向量化过滤。
 func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colIdxMap map[string]int) (*storage.Chunk, error) {
 	rowCount := input.RowCount()
@@ -38,9 +50,12 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
 		return storage.NewChunk(defaultChunkSize), nil
 	}
 
+	rowVals := make(map[string]common.Value, len(schema))
+	cols := input.Columns()
+
 	selection := make([]uint32, 0, rowCount)
 	for row := uint32(0); row < rowCount; row++ {
-		rowVals := buildRowValues(input, schema, row)
+		fillRowVals(rowVals, cols, schema, row)
 		val, err := evalExpr(cond, rowVals, colIdxMap)
 		if err != nil {
 			continue
@@ -55,7 +70,7 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
 	}
 
 	output := storage.NewChunk(defaultChunkSize)
-	for _, col := range input.Columns() {
+	for _, col := range cols {
 		newCol := storage.NewColumnVector(col.ColumnID, col.Typ, uint32(len(selection)))
 		for _, rowIdx := range selection {
 			v := col.GetValue(rowIdx)
@@ -96,27 +111,37 @@ func (e *Executor) executeProject(proj *ProjectNode) (*execResult, error) {
 	return &execResult{chunks: chunks, schema: outputSchema}, nil
 }
 
+// appendProjectValue 尝试将值追加到列向量，必要时进行类型强制转换。
+func appendProjectValue(col *storage.ColumnVector, val common.Value, colDef ColumnDef, row uint32) error {
+	if err := col.Append(val); err != nil {
+		typedVal := coerceValue(val, colDef.Type)
+		if err2 := col.Append(typedVal); err2 != nil {
+			return fmt.Errorf("executor project: row %d: %w", row, err)
+		}
+	}
+	return nil
+}
+
 // projectChunk 对单个 Chunk 执行投影。
 func projectChunk(input *storage.Chunk, exprs []Expression, inputSchema, outputSchema []ColumnDef, colIdxMap map[string]int) (*storage.Chunk, error) {
 	rowCount := input.RowCount()
 	output := storage.NewChunk(defaultChunkSize)
+
+	rowVals := make(map[string]common.Value, len(inputSchema))
+	cols := input.Columns()
 
 	for exprIdx, expr := range exprs {
 		colDef := outputSchema[exprIdx]
 		newCol := storage.NewColumnVector(uint32(exprIdx), colDef.Type, rowCount)
 
 		for row := uint32(0); row < rowCount; row++ {
-			rowVals := buildRowValues(input, inputSchema, row)
-
+			fillRowVals(rowVals, cols, inputSchema, row)
 			val, err := evalExpr(expr, rowVals, colIdxMap)
 			if err != nil {
 				return nil, fmt.Errorf("executor project: row %d: %w", row, err)
 			}
-			if err := newCol.Append(val); err != nil {
-				typedVal := coerceValue(val, colDef.Type)
-				if err2 := newCol.Append(typedVal); err2 != nil {
-					return nil, fmt.Errorf("executor project: row %d: %w", row, err)
-				}
+			if err := appendProjectValue(newCol, val, colDef, row); err != nil {
+				return nil, err
 			}
 		}
 

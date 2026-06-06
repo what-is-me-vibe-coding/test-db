@@ -433,11 +433,7 @@ func (s *Server) convertWriteRow(
 	tbl *catalog.Table, row map[string]interface{},
 ) (string, map[string]common.Value, error) {
 	values := make(map[string]common.Value, len(row))
-
-	colTypes := make(map[string]common.DataType, len(tbl.Columns))
-	for _, col := range tbl.Columns {
-		colTypes[col.Name] = col.Type
-	}
+	colTypes := tbl.ColTypeMap()
 
 	for colName, rawVal := range row {
 		colType, ok := colTypes[colName]

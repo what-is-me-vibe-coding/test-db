@@ -443,11 +443,7 @@ func (e *Engine) ScanRange(start, end string) []ScanEntry {
 
 	results := make([]ScanEntry, 0, estimatedSize)
 	for mi.Next() {
-		entry := mi.Entry()
-		results = append(results, ScanEntry{
-			Key:   entry.Key,
-			Value: entry.Value,
-		})
+		results = append(results, mi.Entry())
 	}
 
 	if mi.Err() != nil {

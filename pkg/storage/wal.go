@@ -113,6 +113,7 @@ func (w *WAL) Append(tp byte, payload []byte) error {
 	}
 
 	buf := encodeRecord(tp, payload)
+	defer putRecordBuf(buf)
 	n, err := w.file.Write(buf)
 	if err != nil {
 		return fmt.Errorf("wal write: %w", err)
@@ -136,6 +137,7 @@ func (w *WAL) AppendBatch(records []BatchRecord) error {
 		}
 		buf := encodeRecord(rec.Type, rec.Payload)
 		n, err := w.file.Write(buf)
+		putRecordBuf(buf)
 		if err != nil {
 			return fmt.Errorf("wal write batch: %w", err)
 		}
@@ -229,10 +231,27 @@ func (w *WAL) maybeRotate() error {
 	return nil
 }
 
+// recordBufPool 复用 WAL 记录编码缓冲区，减少写路径上的堆分配。
+var recordBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 0, 256)
+		return &buf
+	},
+}
+
 // encodeRecord 将一条记录编码为字节流。
+// 使用 sync.Pool 复用缓冲区，调用者用完后应调用 putRecordBuf 归还。
 func encodeRecord(tp byte, payload []byte) []byte {
 	totalLen := walTypeSize + len(payload) + walCRCSize
-	buf := make([]byte, walHeaderSize+totalLen)
+	need := walHeaderSize + totalLen
+
+	bufPtr := recordBufPool.Get().(*[]byte)
+	buf := *bufPtr
+	if cap(buf) < need {
+		buf = make([]byte, need)
+	} else {
+		buf = buf[:need]
+	}
 
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(totalLen))
 	buf[4] = tp
@@ -242,6 +261,13 @@ func encodeRecord(tp byte, payload []byte) []byte {
 	binary.LittleEndian.PutUint32(buf[5+len(payload):], crc)
 
 	return buf
+}
+
+// putRecordBuf 将 encodeRecord 分配的缓冲区归还到池中。
+func putRecordBuf(buf []byte) {
+	if cap(buf) > 0 {
+		recordBufPool.Put(&buf)
+	}
 }
 
 // replayWAL 从文件中回放所有有效记录，返回记录列表和最后一条有效记录的偏移量。
