@@ -120,6 +120,8 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
 }
 
 // GetColumnValue 从指定列中提取给定行索引的值，使用副本避免修改原始数据。
+// 仅 Data 需要深拷贝（DecompressColumn 会替换 enc.Data），
+// Offsets、Dict、Nulls 在解压和解码过程中只读，可直接引用。
 func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
 	if int(colIdx) >= len(s.Columns) {
 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
@@ -130,21 +132,15 @@ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, er
 		Type:     src.Type,
 		RowCount: src.RowCount,
 	}
+	// Data 必须深拷贝：DecompressColumn 会替换 enc.Data
 	if len(src.Data) > 0 {
 		enc.Data = make([]byte, len(src.Data))
 		copy(enc.Data, src.Data)
 	}
-	if len(src.Offsets) > 0 {
-		enc.Offsets = make([]uint32, len(src.Offsets))
-		copy(enc.Offsets, src.Offsets)
-	}
-	if len(src.Dict) > 0 {
-		enc.Dict = src.Dict // Dict 是只读的，无需深拷贝
-	}
-	if len(src.Nulls) > 0 {
-		enc.Nulls = make([]byte, len(src.Nulls))
-		copy(enc.Nulls, src.Nulls)
-	}
+	// Offsets、Dict、Nulls 在解压和解码过程中只读，无需深拷贝
+	enc.Offsets = src.Offsets
+	enc.Dict = src.Dict
+	enc.Nulls = src.Nulls
 	if err := DecompressColumn(enc); err != nil {
 		return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
 	}

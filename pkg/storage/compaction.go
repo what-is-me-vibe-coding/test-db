@@ -1,10 +1,10 @@
 package storage
 
 import (
+	"container/heap"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"sync"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
@@ -71,28 +71,118 @@ func (c *Compactor) CompactToLevel(segments []*Segment, _ int, cols []ColumnMeta
 	return seg, nil
 }
 
+// segReader 跟踪单个 Segment 在 k-way merge 中的读取位置。
+type segReader struct {
+	seg    *Segment
+	rows   []memRow
+	pos    int
+	segIdx int // 在 sortedSegs 中的索引，用于去重优先级
+}
+
+// compactionEntry 是 k-way merge 堆中的条目。
+type compactionEntry struct {
+	key    string
+	segIdx int
+	reader *segReader
+}
+
+// compactionHeap 实现堆接口，按 key 升序，key 相同时 segIdx 降序（最新优先）。
+type compactionHeap []*compactionEntry
+
+func (h compactionHeap) Len() int { return len(h) }
+func (h compactionHeap) Less(i, j int) bool {
+	if h[i].key != h[j].key {
+		return h[i].key < h[j].key
+	}
+	// key 相同时，segIdx 大的排在堆顶（优先处理）
+	return h[i].segIdx > h[j].segIdx
+}
+func (h compactionHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *compactionHeap) Push(x interface{}) { *h = append(*h, x.(*compactionEntry)) }
+func (h *compactionHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+// sortSegsByID 按 Segment ID 升序排序（ID 越小越旧）。
+func sortSegsByID(segs []*Segment) {
+	for i := 1; i < len(segs); i++ {
+		for j := i; j > 0 && segs[j].ID < segs[j-1].ID; j-- {
+			segs[j], segs[j-1] = segs[j-1], segs[j]
+		}
+	}
+}
+
 func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]memRow, error) {
-	var allRows []memRow
-	for _, seg := range segments {
+	// 使用 k-way merge 替代全量排序：各 Segment 内行已按 key 有序，
+	// 通过最小堆归并，复杂度 O(n log k) 优于 O(n log n) 的全量排序。
+	// 同时在归并过程中去重，同一 key 保留最高 segment ID（最新版本）。
+
+	// 先按 Segment ID 排序，确保 ID 更大的 segment 在堆中优先级更高
+	sortedSegs := make([]*Segment, len(segments))
+	copy(sortedSegs, segments)
+	sortSegsByID(sortedSegs)
+
+	readers := make([]*segReader, 0, len(sortedSegs))
+	estimatedRows := 0
+	for i, seg := range sortedSegs {
 		rows, err := c.readSegmentRows(seg, cols)
 		if err != nil {
 			return nil, fmt.Errorf("compactor: read segment %d: %w", seg.ID, err)
 		}
-		allRows = append(allRows, rows...)
+		if len(rows) > 0 {
+			readers = append(readers, &segReader{
+				seg:    seg,
+				rows:   rows,
+				pos:    0,
+				segIdx: i,
+			})
+			estimatedRows += len(rows)
+		}
 	}
 
-	sort.Slice(allRows, func(i, j int) bool {
-		return allRows[i].Key < allRows[j].Key
-	})
+	if len(readers) == 0 {
+		return nil, nil
+	}
 
-	// 去重：同一 key 保留最新版本（L0 Segment ID 更大，排在后面，取最后一个）
-	deduped := make([]memRow, 0, len(allRows))
-	for i := range allRows {
-		if i > 0 && allRows[i].Key == allRows[i-1].Key {
-			deduped[len(deduped)-1] = allRows[i]
+	// 最小堆：按 key 排序，key 相同时 segIdx 大的优先（最新数据）
+	h := &compactionHeap{}
+	heap.Init(h)
+	for _, r := range readers {
+		heap.Push(h, &compactionEntry{
+			key:    r.rows[0].Key,
+			segIdx: r.segIdx,
+			reader: r,
+		})
+	}
+
+	deduped := make([]memRow, 0, estimatedRows)
+	var prevKey string
+
+	for h.Len() > 0 {
+		entry := (*h)[0]
+		key := entry.key
+		row := entry.reader.rows[entry.reader.pos]
+
+		// 推进该 reader 的位置
+		entry.reader.pos++
+		if entry.reader.pos < len(entry.reader.rows) {
+			entry.key = entry.reader.rows[entry.reader.pos].Key
+			heap.Fix(h, 0)
 		} else {
-			deduped = append(deduped, allRows[i])
+			heap.Pop(h)
 		}
+
+		// 去重：同一 key 只保留第一个遇到的（segIdx 最大，即最新版本）
+		if key == prevKey {
+			// 跳过旧版本
+			continue
+		}
+		deduped = append(deduped, row)
+		prevKey = key
 	}
 
 	return deduped, nil
@@ -136,29 +226,23 @@ func (c *Compactor) readSegmentRows(seg *Segment, _ []ColumnMeta) ([]memRow, err
 }
 
 // decodeSegmentColumn copies and decodes a single segment column for compaction.
-// A copy is made to avoid modifying the shared segment data during concurrent reads.
+// Only Data is deep-copied because DecompressColumn replaces enc.Data in place;
+// Offsets, Dict, and Nulls are read-only during decompress/decode and can be shared.
 func decodeSegmentColumn(src *EncodedColumn, colIdx int) (decodedColumn, error) {
 	enc := &EncodedColumn{
 		Encoding: src.Encoding,
 		Type:     src.Type,
 		RowCount: src.RowCount,
 	}
+	// Data 必须深拷贝：DecompressColumn 会替换 enc.Data
 	if len(src.Data) > 0 {
 		enc.Data = make([]byte, len(src.Data))
 		copy(enc.Data, src.Data)
 	}
-	if len(src.Offsets) > 0 {
-		enc.Offsets = make([]uint32, len(src.Offsets))
-		copy(enc.Offsets, src.Offsets)
-	}
-	if len(src.Dict) > 0 {
-		enc.Dict = make([]string, len(src.Dict))
-		copy(enc.Dict, src.Dict)
-	}
-	if len(src.Nulls) > 0 {
-		enc.Nulls = make([]byte, len(src.Nulls))
-		copy(enc.Nulls, src.Nulls)
-	}
+	// Offsets、Dict、Nulls 在解压和解码过程中只读，无需深拷贝
+	enc.Offsets = src.Offsets
+	enc.Dict = src.Dict
+	enc.Nulls = src.Nulls
 	if err := DecompressColumn(enc); err != nil {
 		return decodedColumn{}, fmt.Errorf("compactor: decompress column %d: %w", colIdx, err)
 	}
