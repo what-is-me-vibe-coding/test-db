@@ -21,7 +21,6 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
-// msgPong is the message returned by the ping handler.
 const msgPong = "pong"
 
 // Config 是服务器配置参数。
@@ -483,22 +482,17 @@ func isClosedConnErr(err error) bool {
 	if err == io.EOF {
 		return true
 	}
-	if opErr, ok := err.(*net.OpError); ok {
-		return opErr.Timeout()
-	}
-	return false
+	opErr, ok := err.(*net.OpError)
+	return ok && opErr.Timeout()
 }
 
-// isTransientAcceptErr 判断 TCP Accept 错误是否为可恢复的瞬态错误（如临时资源耗尽）。
+// isTransientAcceptErr 判断 TCP Accept 错误是否为可恢复的瞬态错误。
 func isTransientAcceptErr(err error) bool {
-	if opErr, ok := err.(*net.OpError); ok {
-		if opErr.Timeout() {
-			return true
-		}
-		// 检查常见的瞬态错误（替代已废弃的 Temporary()）
-		msg := opErr.Error()
-		return strings.Contains(msg, "resource temporarily unavailable") ||
-			strings.Contains(msg, "too many open files")
+	opErr, ok := err.(*net.OpError)
+	if !ok || opErr.Timeout() {
+		return ok
 	}
-	return false
+	msg := opErr.Error()
+	return strings.Contains(msg, "resource temporarily unavailable") ||
+		strings.Contains(msg, "too many open files")
 }

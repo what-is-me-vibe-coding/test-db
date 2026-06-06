@@ -117,7 +117,11 @@ func (c *BlockCache) removeFromSegIndex(key CacheKey) {
 	keys := c.segIndex[key.SegmentID]
 	for i, k := range keys {
 		if k == key {
-			c.segIndex[key.SegmentID] = append(keys[:i], keys[i+1:]...)
+			// 零化被移除的位置以防底层数组保留引用
+			keys[i] = CacheKey{}
+			copy(keys[i:], keys[i+1:])
+			keys[len(keys)-1] = CacheKey{}
+			c.segIndex[key.SegmentID] = keys[:len(keys)-1]
 			break
 		}
 	}
