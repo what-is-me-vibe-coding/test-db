@@ -39,6 +39,22 @@ type Table struct {
 	Options     TableOptions
 	Version     uint64 // 表结构版本号
 	CreatedAt   time.Time
+
+	// colTypeMap 是列名到数据类型的缓存映射，延迟初始化。
+	// 避免每次写入请求都重建 map，减少热点路径上的内存分配。
+	colTypeMap map[string]common.DataType
+}
+
+// ColTypeMap 返回列名到数据类型的映射，延迟初始化并缓存。
+func (t *Table) ColTypeMap() map[string]common.DataType {
+	if t.colTypeMap == nil {
+		m := make(map[string]common.DataType, len(t.Columns))
+		for _, col := range t.Columns {
+			m[col.Name] = col.Type
+		}
+		t.colTypeMap = m
+	}
+	return t.colTypeMap
 }
 
 // Database 是 Catalog 的顶层结构，包含所有表定义。

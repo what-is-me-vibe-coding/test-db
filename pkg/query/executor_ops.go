@@ -38,9 +38,21 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
 		return storage.NewChunk(defaultChunkSize), nil
 	}
 
+	// 预分配 rowVals map 并在行间复用，避免每行分配新 map
+	rowVals := make(map[string]common.Value, len(schema))
+	cols := input.Columns()
+
 	selection := make([]uint32, 0, rowCount)
 	for row := uint32(0); row < rowCount; row++ {
-		rowVals := buildRowValues(input, schema, row)
+		// 清空 map 复用
+		for k := range rowVals {
+			delete(rowVals, k)
+		}
+		for i, col := range cols {
+			if i < len(schema) {
+				rowVals[schema[i].Name] = col.GetValue(row)
+			}
+		}
 		val, err := evalExpr(cond, rowVals, colIdxMap)
 		if err != nil {
 			continue
@@ -55,7 +67,7 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
 	}
 
 	output := storage.NewChunk(defaultChunkSize)
-	for _, col := range input.Columns() {
+	for _, col := range cols {
 		newCol := storage.NewColumnVector(col.ColumnID, col.Typ, uint32(len(selection)))
 		for _, rowIdx := range selection {
 			v := col.GetValue(rowIdx)
@@ -101,12 +113,24 @@ func projectChunk(input *storage.Chunk, exprs []Expression, inputSchema, outputS
 	rowCount := input.RowCount()
 	output := storage.NewChunk(defaultChunkSize)
 
+	// 预分配 rowVals map 并在行间复用，避免每行分配新 map
+	rowVals := make(map[string]common.Value, len(inputSchema))
+	cols := input.Columns()
+
 	for exprIdx, expr := range exprs {
 		colDef := outputSchema[exprIdx]
 		newCol := storage.NewColumnVector(uint32(exprIdx), colDef.Type, rowCount)
 
 		for row := uint32(0); row < rowCount; row++ {
-			rowVals := buildRowValues(input, inputSchema, row)
+			// 清空 map 复用
+			for k := range rowVals {
+				delete(rowVals, k)
+			}
+			for i, col := range cols {
+				if i < len(inputSchema) {
+					rowVals[inputSchema[i].Name] = col.GetValue(row)
+				}
+			}
 
 			val, err := evalExpr(expr, rowVals, colIdxMap)
 			if err != nil {
