@@ -8,10 +8,13 @@ import (
 	"github.com/bits-and-blooms/bloom/v3"
 )
 
+const testBloomKey1 = "key1"
+const testBloomKey2 = "key2"
+
 func TestBloomIndexRegisterAndMayContain(t *testing.T) {
 	bi := NewBloomIndex()
 
-	keys := []string{"key1", "key2", "key3", "key4", "key5"}
+	keys := []string{testBloomKey1, testBloomKey2, "key3", "key4", "key5"}
 	data, err := BuildFromKeys(keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildFromKeys: %v", err)
@@ -405,7 +408,7 @@ func TestBuildAndRegisterWithKeys(t *testing.T) {
 func TestBloomBuildAndRegister(t *testing.T) {
 	bi := NewBloomIndex()
 
-	keys := []string{"key1", "key2", "key3"}
+	keys := []string{testBloomKey1, testBloomKey2, "key3"}
 	if err := bi.BuildAndRegister(1, keys, DefaultBloomFPRate); err != nil {
 		t.Fatalf("BuildAndRegister: %v", err)
 	}
@@ -430,7 +433,7 @@ func TestBloomBuildAndRegisterEmpty(t *testing.T) {
 }
 
 func TestBloomBuildFromKeysInvalidFPRate(t *testing.T) {
-	keys := []string{"key1", "key2"}
+	keys := []string{testBloomKey1, testBloomKey2}
 
 	tests := []struct {
 		name   string
