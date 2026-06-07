@@ -111,6 +111,7 @@ func TestParseSelectWithFloatLiteralNoFrom(t *testing.T) {
 }
 
 func TestParseSelectWithStringLiteralColumn(t *testing.T) {
+	const testStrHello = "hello"
 	p := NewParser()
 	stmt, err := p.Parse("SELECT 'hello' FROM t")
 	if err != nil {
@@ -118,7 +119,7 @@ func TestParseSelectWithStringLiteralColumn(t *testing.T) {
 	}
 	sel := stmt.(*SelectStatement)
 	lit, ok := sel.Columns[0].Expr.(*LiteralExpr)
-	if !ok || lit.Value.Str != "hello" {
+	if !ok || lit.Value.Str != testStrHello {
 		t.Errorf("expected 'hello', got %v", sel.Columns[0].Expr)
 	}
 }
