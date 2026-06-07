@@ -295,3 +295,115 @@ func TestEngineRotateMemTableEmpty(t *testing.T) {
 		t.Errorf("expected 0 immutable memtables, got %d", len(eng.immutable))
 	}
 }
+
+func TestEngineWriteBatchWithClosedWAL(t *testing.T) {
+	eng, err := NewEngine(EngineConfig{
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+
+	_ = eng.wal.Close()
+
+	rows := []WriteRow{
+		{Key: "key1", Values: map[string]common.Value{colVal: common.NewInt64(1)}},
+	}
+	err = eng.WriteBatch(rows)
+	if err == nil {
+		t.Error("expected error when WriteBatch with closed WAL")
+	}
+}
+
+func TestEngineFlushEmptyMemTable(t *testing.T) {
+	eng, err := NewEngine(EngineConfig{
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("Flush on empty memtable: %v", err)
+	}
+}
+
+func TestEngineNewEngineWithCustomConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	eng, err := NewEngine(EngineConfig{
+		DataDir:         dir,
+		MaxMemTableSize: 1024,
+		BlockCacheSize:  1024,
+		IndexCacheSize:  10,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine with custom config: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	_ = eng.Write("k1", map[string]common.Value{colVal: common.NewInt64(1)})
+	row, ok := eng.Get("k1")
+	if !ok {
+		t.Fatal("k1 not found")
+	}
+	if v, exists := row.Columns[colVal]; !exists || v.Int64 != 1 {
+		t.Errorf("expected val=1, got %v", v)
+	}
+}
+
+func TestEngineNewEngineWithNegativeConfig(t *testing.T) {
+	dir := t.TempDir()
+
+	eng, err := NewEngine(EngineConfig{
+		DataDir:         dir,
+		MaxMemTableSize: -1,
+		BlockCacheSize:  -1,
+		IndexCacheSize:  -1,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine with negative config: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	_ = eng.Write("k1", map[string]common.Value{colVal: common.NewInt64(1)})
+	row, ok := eng.Get("k1")
+	if !ok {
+		t.Fatal("k1 not found")
+	}
+	if v, exists := row.Columns[colVal]; !exists || v.Int64 != 1 {
+		t.Errorf("expected val=1, got %v", v)
+	}
+}
+
+func TestEngineCompactNoSegments(t *testing.T) {
+	eng, err := NewEngine(EngineConfig{
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
+	if err := eng.Compact(cols); err != nil {
+		t.Fatalf("Compact with no segments: %v", err)
+	}
+}
+
+func TestEngineScanEmpty(t *testing.T) {
+	eng, err := NewEngine(EngineConfig{
+		DataDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("new engine: %v", err)
+	}
+	defer func() { _ = eng.Close() }()
+
+	results := eng.Scan("a", "z")
+	if len(results) != 0 {
+		t.Errorf("expected 0 results for empty engine, got %d", len(results))
+	}
+}

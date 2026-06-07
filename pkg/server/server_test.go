@@ -339,3 +339,99 @@ func TestHTTPIntegration(t *testing.T) {
 		t.Errorf("/metrics 状态码 = %d, 期望 %d", resp2.StatusCode, http.StatusOK)
 	}
 }
+
+// TestHandlePacketUnknownType 测试未知包类型的错误处理。
+func TestHandlePacketUnknownType(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	pkt := NewPacket(99, nil)
+	_, err := srv.handlePacket(pkt)
+	if err == nil {
+		t.Error("expected error for unknown packet type")
+	}
+}
+
+// TestHandleQueryPacketInvalidJSON 测试查询包无效 JSON 的错误处理。
+func TestHandleQueryPacketInvalidJSON(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	pkt := NewPacket(PacketQuery, []byte("not json"))
+	_, err := srv.handleQueryPacket(pkt)
+	if err == nil {
+		t.Error("expected error for invalid JSON in query packet")
+	}
+}
+
+// TestHandleWritePacketInvalidJSON 测试写入包无效 JSON 的错误处理。
+func TestHandleWritePacketInvalidJSON(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	pkt := NewPacket(PacketWrite, []byte("not json"))
+	_, err := srv.handleWritePacket(pkt)
+	if err == nil {
+		t.Error("expected error for invalid JSON in write packet")
+	}
+}
+
+// TestHandlePingPacket 测试 Ping 包的正常处理。
+func TestHandlePingPacket(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	resp, err := srv.handlePing()
+	if err != nil {
+		t.Fatalf("handlePing failed: %v", err)
+	}
+	if resp.Type != PacketResponse {
+		t.Errorf("response type = %d, want %d", resp.Type, PacketResponse)
+	}
+
+	var response Response
+	if err := json.Unmarshal(resp.Payload, &response); err != nil {
+		t.Fatalf("unmarshal ping response: %v", err)
+	}
+	if response.Code != 0 {
+		t.Errorf("response code = %d, want 0", response.Code)
+	}
+	if response.Message != msgPong {
+		t.Errorf("response message = %q, want %q", response.Message, msgPong)
+	}
+}
+
+// TestHandleQueryPacketValid 测试查询包的正常处理。
+func TestHandleQueryPacketValid(t *testing.T) {
+	srv := newTestServerWithTable(t)
+	defer func() { _ = srv.Stop() }()
+
+	payload, _ := json.Marshal(QueryRequest{SQL: testSelectAll})
+	pkt := NewPacket(PacketQuery, payload)
+	resp, err := srv.handleQueryPacket(pkt)
+	if err != nil {
+		t.Fatalf("handleQueryPacket failed: %v", err)
+	}
+	if resp.Type != PacketResponse {
+		t.Errorf("response type = %d, want %d", resp.Type, PacketResponse)
+	}
+}
+
+// TestHandleWritePacketValid 测试写入包的正常处理。
+func TestHandleWritePacketValid(t *testing.T) {
+	srv := newTestServerWithTable(t)
+	defer func() { _ = srv.Stop() }()
+
+	writePayload, _ := json.Marshal(WriteRequest{
+		Table: testTable,
+		Rows:  []map[string]interface{}{{"id": float64(1), testColName: testTableName}},
+	})
+	pkt := NewPacket(PacketWrite, writePayload)
+	resp, err := srv.handleWritePacket(pkt)
+	if err != nil {
+		t.Fatalf("handleWritePacket failed: %v", err)
+	}
+	if resp.Type != PacketResponse {
+		t.Errorf("response type = %d, want %d", resp.Type, PacketResponse)
+	}
+}

@@ -401,3 +401,56 @@ func TestBuildAndRegisterWithKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestBloomBuildAndRegister(t *testing.T) {
+	bi := NewBloomIndex()
+
+	keys := []string{"key1", "key2", "key3"}
+	if err := bi.BuildAndRegister(1, keys, DefaultBloomFPRate); err != nil {
+		t.Fatalf("BuildAndRegister: %v", err)
+	}
+
+	for _, k := range keys {
+		if !bi.MayContainString(1, k) {
+			t.Errorf("MayContainString(%q): expected true after BuildAndRegister", k)
+		}
+	}
+}
+
+func TestBloomBuildAndRegisterEmpty(t *testing.T) {
+	bi := NewBloomIndex()
+
+	if err := bi.BuildAndRegister(1, nil, DefaultBloomFPRate); err != nil {
+		t.Fatalf("BuildAndRegister with nil keys: %v", err)
+	}
+
+	if err := bi.BuildAndRegister(2, []string{}, DefaultBloomFPRate); err != nil {
+		t.Fatalf("BuildAndRegister with empty keys: %v", err)
+	}
+}
+
+func TestBloomBuildFromKeysInvalidFPRate(t *testing.T) {
+	keys := []string{"key1", "key2"}
+
+	tests := []struct {
+		name   string
+		fpRate float64
+	}{
+		{"zero", 0},
+		{"negative", -0.1},
+		{"one", 1.0},
+		{"above_one", 1.5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := BuildFromKeys(keys, tt.fpRate)
+			if err != nil {
+				t.Fatalf("BuildFromKeys with fpRate=%v: %v", tt.fpRate, err)
+			}
+			if data == nil {
+				t.Error("expected non-nil data for non-empty keys")
+			}
+		})
+	}
+}

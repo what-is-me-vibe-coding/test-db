@@ -469,3 +469,282 @@ func TestExecutorFilterWithNullLiteral(t *testing.T) {
 		t.Errorf("expected 0 rows (comparison with NULL), got %d", totalRows)
 	}
 }
+
+func TestExecutorAggregateWithGroupBy(t *testing.T) {
+	ms := newMockStorage()
+	ms.columnMeta = []storage.ColumnMeta{
+		{ID: 0, Name: testColID, Type: common.TypeInt64},
+		{ID: 1, Name: testColName, Type: common.TypeString},
+		{ID: 2, Name: testColAge, Type: common.TypeInt64},
+		{ID: 3, Name: testColScore, Type: common.TypeFloat64},
+	}
+	ms.addEntry("a", map[string]common.Value{
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
+	})
+	ms.addEntry("b", map[string]common.Value{
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(88.0),
+	})
+	ms.addEntry("c", map[string]common.Value{
+		testColID: common.NewInt64(3), testColName: common.NewString(testNameCharlie),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(72.0),
+	})
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	agg := &AggregateNode{
+		Child: scan,
+		GroupBy: []Expression{
+			&ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64},
+		},
+		Aggregates: []AggregateExpr{
+			{Func: AggCount, Arg: &ResolvedColumnExpr{Name: testColID, Idx: 0, typ: common.TypeInt64}},
+		},
+		schema: []ColumnDef{
+			{Name: testColAge, Type: common.TypeInt64},
+			{Name: testAggCountStar, Type: common.TypeInt64},
+		},
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(agg)
+	if err != nil {
+		t.Fatalf("execute aggregate with group by: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 2 {
+		t.Errorf("expected 2 groups, got %d", totalRows)
+	}
+}
+
+func TestExecutorAggregateWithoutGroupBy(t *testing.T) {
+	ms := newMockStorage()
+	ms.columnMeta = []storage.ColumnMeta{
+		{ID: 0, Name: testColID, Type: common.TypeInt64},
+		{ID: 1, Name: testColName, Type: common.TypeString},
+		{ID: 2, Name: testColAge, Type: common.TypeInt64},
+		{ID: 3, Name: testColScore, Type: common.TypeFloat64},
+	}
+	ms.addEntry("a", map[string]common.Value{
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
+	})
+	ms.addEntry("b", map[string]common.Value{
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
+	})
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	agg := &AggregateNode{
+		Child: scan,
+		Aggregates: []AggregateExpr{
+			{Func: AggCount, Arg: &ResolvedColumnExpr{Name: testColID, Idx: 0, typ: common.TypeInt64}},
+		},
+		schema: []ColumnDef{
+			{Name: testAggCountStar, Type: common.TypeInt64},
+		},
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(agg)
+	if err != nil {
+		t.Fatalf("execute aggregate without group by: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 1 {
+		t.Errorf("expected 1 group (no group by), got %d", totalRows)
+	}
+}
+
+func TestExecutorAggregateEmptyInputCount(t *testing.T) {
+	ms := newMockStorage()
+	ms.columnMeta = []storage.ColumnMeta{
+		{ID: 0, Name: testColID, Type: common.TypeInt64},
+		{ID: 1, Name: testColName, Type: common.TypeString},
+		{ID: 2, Name: testColAge, Type: common.TypeInt64},
+		{ID: 3, Name: testColScore, Type: common.TypeFloat64},
+	}
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	agg := &AggregateNode{
+		Child: scan,
+		Aggregates: []AggregateExpr{
+			{Func: AggCount, Arg: &ResolvedColumnExpr{Name: testColID, Idx: 0, typ: common.TypeInt64}},
+		},
+		schema: []ColumnDef{
+			{Name: testAggCountStar, Type: common.TypeInt64},
+		},
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(agg)
+	if err != nil {
+		t.Fatalf("execute aggregate empty input: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 1 {
+		t.Errorf("expected 1 row for empty aggregate (count=0), got %d", totalRows)
+	}
+}
+
+func TestExecutorProject(t *testing.T) {
+	ms := newMockStorage()
+	ms.addEntry("a", map[string]common.Value{
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
+	})
+	ms.addEntry("b", map[string]common.Value{
+		testColID: common.NewInt64(2), testColName: common.NewString(testNameBob),
+		testColAge: common.NewInt64(25), testColScore: common.NewFloat64(88.0),
+	})
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	proj := &ProjectNode{
+		Child: scan,
+		Expressions: []Expression{
+			&ResolvedColumnExpr{Name: testColID, Idx: 0, typ: common.TypeInt64},
+			&ResolvedColumnExpr{Name: testColName, Idx: 1, typ: common.TypeString},
+		},
+		Aliases: []string{testColID, testColName},
+		schema: []ColumnDef{
+			{Name: testColID, Type: common.TypeInt64},
+			{Name: testColName, Type: common.TypeString},
+		},
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(proj)
+	if err != nil {
+		t.Fatalf("execute project: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 2 {
+		t.Errorf("expected 2 rows, got %d", totalRows)
+	}
+}
+
+func TestExecutorFilterAllFiltered(t *testing.T) {
+	ms := newMockStorage()
+	ms.addEntry("a", map[string]common.Value{
+		testColID: common.NewInt64(1), testColName: common.NewString(testNameAlice),
+		testColAge: common.NewInt64(30), testColScore: common.NewFloat64(95.5),
+	})
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	filter := &FilterNode{
+		Child:     scan,
+		Condition: &BinaryExpr{Op: OpLt, Left: &ResolvedColumnExpr{Name: testColAge, Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(0)}},
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(filter)
+	if err != nil {
+		t.Fatalf("execute filter all filtered: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 0 {
+		t.Errorf("expected 0 rows (all filtered), got %d", totalRows)
+	}
+}
+
+func TestExecutorLimit(t *testing.T) {
+	ms := newMockStorage()
+	for i := 0; i < 10; i++ {
+		key := fmtKey(i)
+		ms.addEntry(key, map[string]common.Value{
+			testColID:    common.NewInt64(int64(i)),
+			testColName:  common.NewString(key),
+			testColAge:   common.NewInt64(int64(20 + i%50)),
+			testColScore: common.NewFloat64(float64(50 + i%50)),
+		})
+	}
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	limit := &LimitNode{
+		Child:  scan,
+		Count:  3,
+		Offset: 0,
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(limit)
+	if err != nil {
+		t.Fatalf("execute limit: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 3 {
+		t.Errorf("expected 3 rows, got %d", totalRows)
+	}
+}
+
+func TestExecutorLimitWithOffsetScan(t *testing.T) {
+	ms := newMockStorage()
+	for i := 0; i < 10; i++ {
+		key := fmtKey(i)
+		ms.addEntry(key, map[string]common.Value{
+			testColID:    common.NewInt64(int64(i)),
+			testColName:  common.NewString(key),
+			testColAge:   common.NewInt64(int64(20 + i%50)),
+			testColScore: common.NewFloat64(float64(50 + i%50)),
+		})
+	}
+
+	scan := &ScanNode{
+		Table:   testTableUsers,
+		Columns: []string{testColID, testColName, testColAge, testColScore},
+		schema:  buildTestSchema(),
+	}
+
+	limit := &LimitNode{
+		Child:  scan,
+		Count:  3,
+		Offset: 5,
+	}
+
+	exec := NewExecutor(ms)
+	chunks, err := exec.Execute(limit)
+	if err != nil {
+		t.Fatalf("execute limit with offset: %v", err)
+	}
+
+	totalRows := countRows(chunks)
+	if totalRows != 3 {
+		t.Errorf("expected 3 rows after offset, got %d", totalRows)
+	}
+}
