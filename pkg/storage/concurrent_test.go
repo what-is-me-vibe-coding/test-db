@@ -177,14 +177,22 @@ func TestConcurrent_WriteWithFlush(t *testing.T) {
 		t.Fatalf("final flush: %v", err)
 	}
 
-	// Verify all data is accessible
+	verifyKeys(t, eng, writers, writesPerWriter, "g", func(g, j int) int64 {
+		return int64(g*10000 + j)
+	})
+}
+
+// verifyKeys verifies that all keys in the pattern "prefix{g}_key_{j}" exist
+// with the expected int64 value computed by valFn(g, j).
+func verifyKeys(t *testing.T, eng *Engine, writers, writesPerWriter int, prefix string, valFn func(g, j int) int64) {
+	t.Helper()
 	for g := 0; g < writers; g++ {
 		for j := 0; j < writesPerWriter; j++ {
-			key := fmt.Sprintf("g%d_key_%04d", g, j)
-			expected := int64(g*10000 + j)
+			key := fmt.Sprintf("%s%d_key_%04d", prefix, g, j)
+			expected := valFn(g, j)
 			row, ok := eng.Get(key)
 			if !ok {
-				t.Errorf("key %s not found after flush", key)
+				t.Errorf("key %s not found", key)
 				continue
 			}
 			if row.Columns[colVal].Int64 != expected {
@@ -258,21 +266,9 @@ func TestConcurrent_WriteFlushCompact(t *testing.T) {
 		t.Fatalf("final flush: %v", err)
 	}
 
-	// Verify all concurrent write data is accessible
-	for g := 0; g < writers; g++ {
-		for j := 0; j < writesPerWriter; j++ {
-			key := fmt.Sprintf("cw%d_key_%04d", g, j)
-			expected := int64(g*10000 + j)
-			row, ok := eng.Get(key)
-			if !ok {
-				t.Errorf("key %s not found", key)
-				continue
-			}
-			if row.Columns[colVal].Int64 != expected {
-				t.Errorf("key %s: expected %d, got %d", key, expected, row.Columns[colVal].Int64)
-			}
-		}
-	}
+	verifyKeys(t, eng, writers, writesPerWriter, "cw", func(g, j int) int64 {
+		return int64(g*10000 + j)
+	})
 }
 
 // TestConcurrent_OverwriteConsistency 验证并发覆盖写入后，最终读取到的是最后一次写入的值之一。
