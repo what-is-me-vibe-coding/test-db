@@ -7,17 +7,21 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 // run 启动服务器并等待终止信号，用于支持测试。
-func run(tcpAddr, httpAddr, dataDir string, maxMemTableSize int64, opts ...server.Option) error {
+func run(tcpAddr, httpAddr, dataDir string, maxMemTableSize int64, enableScheduler bool, schedulerCfg storage.SchedulerConfig, opts ...server.Option) error {
 	cfg := server.Config{
 		TCPAddr:         tcpAddr,
 		HTTPAddr:        httpAddr,
 		DataDir:         dataDir,
 		MaxMemTableSize: maxMemTableSize,
+		EnableScheduler: enableScheduler,
+		SchedulerConfig: schedulerCfg,
 	}
 
 	srv, err := server.NewServer(cfg, opts...)
@@ -46,12 +50,24 @@ func runMainWithArgs(args []string) int {
 	httpAddr := fs.String("http", "0.0.0.0:8080", "HTTP 监听地址")
 	dataDir := fs.String("data", "./data", "数据目录")
 	maxMemTableSize := fs.Int64("max-memtable", 64*1024*1024, "MemTable 最大字节数")
+	enableScheduler := fs.Bool("scheduler", true, "启用后台调度器（自动刷盘、Compaction、WAL 清理）")
+	flushInterval := fs.Duration("scheduler.flush-interval", 5*time.Second, "自动刷盘检查间隔")
+	compactInterval := fs.Duration("scheduler.compact-interval", 10*time.Second, "自动 Compaction 检查间隔")
+	walCleanInterval := fs.Duration("scheduler.wal-clean-interval", 30*time.Second, "WAL 清理检查间隔")
+	walCleanThreshold := fs.Int64("scheduler.wal-clean-threshold", 64<<20, "WAL 文件大小超过此阈值时清理旧文件（字节）")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	if err := run(*tcpAddr, *httpAddr, *dataDir, *maxMemTableSize); err != nil {
+	schedulerCfg := storage.SchedulerConfig{
+		FlushInterval:     *flushInterval,
+		CompactInterval:   *compactInterval,
+		WALCleanInterval:  *walCleanInterval,
+		WALCleanThreshold: *walCleanThreshold,
+	}
+
+	if err := run(*tcpAddr, *httpAddr, *dataDir, *maxMemTableSize, *enableScheduler, schedulerCfg); err != nil {
 		log.Printf("服务器错误: %v", err)
 		return 1
 	}

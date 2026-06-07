@@ -28,6 +28,7 @@ type Engine struct {
 	columnMeta    []ColumnMeta
 	blockCache    *BlockCache
 	indexCache    *IndexCache
+	scheduler     *Scheduler
 }
 
 // EngineConfig 是 Engine 的配置参数。
@@ -387,8 +388,14 @@ func (e *Engine) ShouldCompact() bool {
 	return e.l0Count() >= defaultL0CompactionThreshold
 }
 
-// Close 关闭引擎，同步并关闭 WAL。
+// Close 关闭引擎，停止后台调度器，同步并关闭 WAL。
 func (e *Engine) Close() error {
+	// 先停止后台调度器，避免调度器在关闭过程中触发操作
+	if e.scheduler != nil {
+		e.scheduler.Stop()
+		e.scheduler = nil
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -400,4 +407,35 @@ func (e *Engine) Close() error {
 	}
 
 	return nil
+}
+
+// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
+// 如果调度器已在运行，则不做任何操作。
+func (e *Engine) StartScheduler(cfg SchedulerConfig) {
+	e.mu.Lock()
+	if e.scheduler != nil {
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
+
+	sched := NewScheduler(e, cfg)
+	sched.Start()
+
+	e.mu.Lock()
+	e.scheduler = sched
+	e.mu.Unlock()
+}
+
+// SchedulerStats 返回后台调度器的运行统计信息。
+// 如果调度器未启动，ok 为 false。
+func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
+	e.mu.RLock()
+	sched := e.scheduler
+	e.mu.RUnlock()
+
+	if sched == nil {
+		return SchedulerStats{}, false
+	}
+	return sched.Stats(), true
 }

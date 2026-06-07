@@ -29,7 +29,9 @@ type Config struct {
 	HTTPAddr        string
 	DataDir         string
 	MaxMemTableSize int64
-	MaxConnections  int // 最大并发 TCP 连接数，0 表示不限制
+	MaxConnections  int                     // 最大并发 TCP 连接数，0 表示不限制
+	EnableScheduler bool                    // 是否启用后台调度器
+	SchedulerConfig storage.SchedulerConfig // 调度器配置
 }
 
 // Server 是数据库服务器，同时提供 TCP 和 HTTP 接入。
@@ -156,6 +158,13 @@ func (s *Server) Start() error {
 	go s.serveHTTP()
 
 	log.Printf("HTTP 监听 %s", s.cfg.HTTPAddr)
+
+	// 启动后台调度器
+	if s.cfg.EnableScheduler {
+		s.storage.StartScheduler(s.cfg.SchedulerConfig)
+		log.Println("后台调度器已启动")
+	}
+
 	return nil
 }
 

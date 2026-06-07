@@ -94,6 +94,17 @@ func (s *Server) httpHealth(w http.ResponseWriter, r *http.Request) {
 		"status":    "ok",
 		"timestamp": time.Now().Format(time.RFC3339Nano),
 	}
+
+	// 附加调度器统计信息
+	if stats, ok := s.storage.SchedulerStats(); ok {
+		health["scheduler"] = map[string]interface{}{
+			"flush_count":     stats.FlushCount,
+			"compact_count":   stats.CompactCount,
+			"wal_clean_count": stats.WALCleanCount,
+			"last_error":      stats.LastError,
+		}
+	}
+
 	writeJSON(w, http.StatusOK, health)
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 const testListenAddr = "127.0.0.1:0"
@@ -63,7 +64,7 @@ func TestRunSignalShutdown(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run(testListenAddr, testListenAddr, dir, 1024*1024, server.WithMetricsRegistry(prometheus.NewRegistry()))
+		errCh <- run(testListenAddr, testListenAddr, dir, 1024*1024, false, storage.SchedulerConfig{}, server.WithMetricsRegistry(prometheus.NewRegistry()))
 	}()
 
 	// 等待服务器启动
@@ -103,7 +104,7 @@ func TestRunServerStartFailure(t *testing.T) {
 	dir := t.TempDir()
 
 	// run() 使用已被占用的 TCP 地址，Start() 应失败
-	err = run(occupiedAddr, "127.0.0.1:0", dir, 1024*1024, server.WithMetricsRegistry(prometheus.NewRegistry()))
+	err = run(occupiedAddr, "127.0.0.1:0", dir, 1024*1024, false, storage.SchedulerConfig{}, server.WithMetricsRegistry(prometheus.NewRegistry()))
 	if err == nil {
 		t.Fatal("预期 run() 因端口冲突返回错误，但返回了 nil")
 	}
@@ -181,7 +182,7 @@ func TestRunServerStopFailure(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- run(testListenAddr, testListenAddr, dir, 1024*1024, server.WithMetricsRegistry(prometheus.NewRegistry()))
+		errCh <- run(testListenAddr, testListenAddr, dir, 1024*1024, false, storage.SchedulerConfig{}, server.WithMetricsRegistry(prometheus.NewRegistry()))
 	}()
 
 	// 等待服务器启动
@@ -224,7 +225,7 @@ func TestRunServerStopFailure(t *testing.T) {
 
 // TestRunInvalidDataDir 测试 run() 函数在数据目录无效时返回错误。
 func TestRunInvalidDataDir(t *testing.T) {
-	err := run(testListenAddr, testListenAddr, "/proc/invalid/no-permission/data", 1024*1024, server.WithMetricsRegistry(prometheus.NewRegistry()))
+	err := run(testListenAddr, testListenAddr, "/proc/invalid/no-permission/data", 1024*1024, false, storage.SchedulerConfig{}, server.WithMetricsRegistry(prometheus.NewRegistry()))
 	if err == nil {
 		t.Fatal("预期 run() 因无效数据目录返回错误，但返回了 nil")
 	}

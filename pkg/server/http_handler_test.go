@@ -6,6 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 // --- HTTP 处理器测试 ---
@@ -260,5 +264,86 @@ func TestMetricsRecordedOnWrite(t *testing.T) {
 	metricsBody := metricsW.Body.String()
 	if !strings.Contains(metricsBody, "widb_writes_total") {
 		t.Error("metrics 应记录 widb_writes_total")
+	}
+}
+
+func TestHTTPHealthWithScheduler(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := Config{
+		TCPAddr:         testListenAddr,
+		HTTPAddr:        testListenAddr,
+		DataDir:         dir,
+		MaxMemTableSize: 1024 * 1024,
+		EnableScheduler: true,
+		SchedulerConfig: storage.SchedulerConfig{
+			FlushInterval:    50 * time.Millisecond,
+			CompactInterval:  50 * time.Millisecond,
+			WALCleanInterval: 50 * time.Millisecond,
+		},
+	}
+
+	srv, err := NewServer(cfg, WithMetricsRegistry(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer func() { _ = srv.Stop() }()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// 请求 /health，验证 scheduler 字段存在
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.httpHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, 期望 %d", w.Code, http.StatusOK)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result["status"] != "ok" {
+		t.Errorf("status = %v, 期望 'ok'", result["status"])
+	}
+	schedulerInfo, ok := result["scheduler"]
+	if !ok {
+		t.Error("期望 /health 包含 scheduler 信息")
+	}
+	schedulerMap, ok := schedulerInfo.(map[string]interface{})
+	if !ok {
+		t.Fatalf("scheduler 类型错误: %T", schedulerInfo)
+	}
+	if _, ok := schedulerMap["flush_count"]; !ok {
+		t.Error("scheduler 信息应包含 flush_count")
+	}
+}
+
+func TestHTTPHealthWithoutScheduler(t *testing.T) {
+	srv := newTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	srv.httpHealth(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d, 期望 %d", w.Code, http.StatusOK)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("解析响应失败: %v", err)
+	}
+	if result["status"] != "ok" {
+		t.Errorf("status = %v, 期望 'ok'", result["status"])
+	}
+	// 未启用调度器时，不应包含 scheduler 字段
+	if _, ok := result["scheduler"]; ok {
+		t.Error("未启用调度器时 /health 不应包含 scheduler 信息")
 	}
 }
