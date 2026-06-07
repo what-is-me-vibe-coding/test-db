@@ -74,15 +74,13 @@ func (pi *PrimaryIndex) Lookup(key string) []uint64 {
 		return pi.segments[i].MinKey > key
 	})
 
-	// 从 idx-1 开始向前扫描，L0 层允许重叠，需检查所有可能包含 key 的 segment
+	// 从 idx-1 开始向前扫描，L0 层允许重叠，需检查所有可能包含 key 的 segment。
+	// 注意：不能在 MaxKey < key 时提前 break，因为 L0 段的 MaxKey 不保证随 MinKey 单调递增，
+	// 更早的段可能拥有更大的 MaxKey 从而仍包含该 key。
 	for i := idx - 1; i >= 0; i-- {
 		seg := pi.segments[i]
 		if keyInRange(key, seg.MinKey, seg.MaxKey) {
 			result = append(result, seg.ID)
-		}
-		// 如果当前 segment 的 MaxKey < key，更早的 segment 也不可能包含 key
-		if seg.MaxKey < key {
-			break
 		}
 	}
 

@@ -347,6 +347,8 @@ func TestStress_MemoryStability(t *testing.T) {
 		_ = eng.Write(fmt.Sprintf("mem_%04d", i), map[string]common.Value{colVal: common.NewInt64(int64(i))})
 	}
 	_ = eng.Flush(cols)
+	// Two GC cycles to fully clear sync.Pool victim caches
+	runtime.GC()
 	runtime.GC()
 
 	var baseline runtime.MemStats
@@ -371,6 +373,7 @@ func TestStress_MemoryStability(t *testing.T) {
 		}
 	}
 
+	runtime.GC()
 	runtime.GC()
 	var final runtime.MemStats
 	runtime.ReadMemStats(&final)

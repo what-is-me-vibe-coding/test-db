@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,7 +21,6 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
-// msgPong is the message returned by the ping handler.
 const msgPong = "pong"
 
 // Config 是服务器配置参数。
@@ -287,7 +287,11 @@ func (s *Server) handleTCPConn(conn net.Conn) {
 		resp, err := s.handlePacket(pkt)
 		if err != nil {
 			errResp := &Response{Code: -1, Message: err.Error()}
-			payload, _ := json.Marshal(errResp)
+			payload, marshalErr := json.Marshal(errResp)
+			if marshalErr != nil {
+				log.Printf("TCP: JSON marshal error response failed: %v", marshalErr)
+				payload = []byte(`{"code":-1,"message":"internal error"}`)
+			}
 			resp = NewPacket(PacketResponse, payload)
 		}
 
@@ -459,18 +463,18 @@ func (s *Server) convertWriteRow(
 func (s *Server) buildPrimaryKey(
 	tbl *catalog.Table, row map[string]interface{},
 ) (string, error) {
-	key := ""
+	var builder strings.Builder
 	for i, pk := range tbl.PrimaryKey {
 		rawVal, ok := row[pk]
 		if !ok {
 			return "", fmt.Errorf("主键列 %s 缺失", pk)
 		}
 		if i > 0 {
-			key += "|"
+			builder.WriteString("|")
 		}
-		key += fmt.Sprintf("%v", rawVal)
+		fmt.Fprintf(&builder, "%v", rawVal)
 	}
-	return key, nil
+	return builder.String(), nil
 }
 
 // isClosedConnErr 判断是否为连接关闭相关的错误。
@@ -478,16 +482,17 @@ func isClosedConnErr(err error) bool {
 	if err == io.EOF {
 		return true
 	}
-	if opErr, ok := err.(*net.OpError); ok {
-		return opErr.Timeout()
-	}
-	return false
+	opErr, ok := err.(*net.OpError)
+	return ok && opErr.Timeout()
 }
 
-// isTransientAcceptErr 判断 TCP Accept 错误是否为可恢复的瞬态错误（如临时资源耗尽）。
+// isTransientAcceptErr 判断 TCP Accept 错误是否为可恢复的瞬态错误。
 func isTransientAcceptErr(err error) bool {
-	if opErr, ok := err.(*net.OpError); ok {
-		return opErr.Temporary() || opErr.Timeout()
+	opErr, ok := err.(*net.OpError)
+	if !ok || opErr.Timeout() {
+		return ok
 	}
-	return false
+	msg := opErr.Error()
+	return strings.Contains(msg, "resource temporarily unavailable") ||
+		strings.Contains(msg, "too many open files")
 }
