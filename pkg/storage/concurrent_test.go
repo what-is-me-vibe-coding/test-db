@@ -172,6 +172,11 @@ func TestConcurrent_WriteWithFlush(t *testing.T) {
 	wg.Wait()
 	flushWg.Wait()
 
+	// Final flush to ensure all data written by concurrent writers is persisted
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("final flush: %v", err)
+	}
+
 	// Verify all data is accessible
 	for g := 0; g < writers; g++ {
 		for j := 0; j < writesPerWriter; j++ {
@@ -247,6 +252,11 @@ func TestConcurrent_WriteFlushCompact(t *testing.T) {
 
 	wg.Wait()
 	bgWg.Wait()
+
+	// Final flush to ensure all data written by concurrent writers is persisted
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("final flush: %v", err)
+	}
 
 	// Verify all concurrent write data is accessible
 	for g := 0; g < writers; g++ {

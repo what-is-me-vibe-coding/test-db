@@ -279,16 +279,21 @@ func TestConvertWriteRow_UnknownColumnType(t *testing.T) {
 
 // --- buildPrimaryKey: multiple primary key columns ---
 
+const (
+	colPK1 = "pk1"
+	colPK2 = "pk2"
+)
+
 func TestBuildPrimaryKey_MultiplePKColumns(t *testing.T) {
 	srv := newTestServer(t)
 	defer func() { _ = srv.Stop() }()
 
 	// Create a table with composite primary key
 	err := srv.catalog.CreateTable("composite_pk", []catalog.ColumnDef{
-		{Name: "pk1", Type: common.TypeInt64, Nullable: false},
-		{Name: "pk2", Type: common.TypeString, Nullable: false},
+		{Name: colPK1, Type: common.TypeInt64, Nullable: false},
+		{Name: colPK2, Type: common.TypeString, Nullable: false},
 		{Name: "val", Type: common.TypeFloat64, Nullable: true},
-	}, []string{"pk1", "pk2"}, catalog.TableOptions{})
+	}, []string{colPK1, colPK2}, catalog.TableOptions{})
 	if err != nil {
 		t.Fatalf("CreateTable failed: %v", err)
 	}
@@ -299,9 +304,9 @@ func TestBuildPrimaryKey_MultiplePKColumns(t *testing.T) {
 	}
 
 	row := map[string]interface{}{
-		"pk1": float64(42),
-		"pk2": "hello",
-		"val": float64(3.14),
+		colPK1: float64(42),
+		colPK2: "hello",
+		"val":  float64(3.14),
 	}
 
 	key, err := srv.buildPrimaryKey(tbl, row)

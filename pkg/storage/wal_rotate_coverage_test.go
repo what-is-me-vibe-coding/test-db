@@ -260,7 +260,9 @@ func TestApplySingleWriteRecord_OldVersion(t *testing.T) {
 	mem := NewMemTable()
 
 	// Write a record with version 10
-	mem.Put("key1", Row{Version: 10, Columns: map[string]common.Value{"col1": common.NewInt64(100)}})
+	if _, _, err := mem.Put("key1", Row{Version: 10, Columns: map[string]common.Value{"col1": common.NewInt64(100)}}); err != nil {
+		t.Fatalf("mem.Put failed: %v", err)
+	}
 
 	// Apply a record with version 5 (which is <= lastFlushedVersion=10)
 	// This should be skipped
