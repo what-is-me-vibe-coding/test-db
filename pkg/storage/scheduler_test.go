@@ -322,3 +322,127 @@ func TestSchedulerNoActionWhenNotNeeded(t *testing.T) {
 		t.Errorf("expected 0 compactions with no data, got %d", stats.CompactCount)
 	}
 }
+
+func TestEngineStartScheduler(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewEngine(EngineConfig{DataDir: dir})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	// 未启动调度器时，SchedulerStats 应返回 ok=false
+	_, ok := eng.SchedulerStats()
+	if ok {
+		t.Error("expected ok=false before starting scheduler")
+	}
+
+	// 启动调度器
+	eng.StartScheduler(SchedulerConfig{
+		FlushInterval:    50 * time.Millisecond,
+		CompactInterval:  50 * time.Millisecond,
+		WALCleanInterval: 50 * time.Millisecond,
+	})
+
+	// 启动后应返回 ok=true
+	_, ok = eng.SchedulerStats()
+	if !ok {
+		t.Error("expected ok=true after starting scheduler")
+	}
+
+	// 重复调用 StartScheduler 不应 panic 或创建多个调度器
+	eng.StartScheduler(SchedulerConfig{
+		FlushInterval:    50 * time.Millisecond,
+		CompactInterval:  50 * time.Millisecond,
+		WALCleanInterval: 50 * time.Millisecond,
+	})
+
+	if err := eng.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestEngineSchedulerAutoFlush(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewEngine(EngineConfig{
+		DataDir:         dir,
+		MaxMemTableSize: 1024,
+	})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	cols := []ColumnMeta{
+		{ID: 0, Name: "id", Type: common.TypeInt64},
+	}
+
+	eng.StartScheduler(SchedulerConfig{
+		FlushInterval:    50 * time.Millisecond,
+		CompactInterval:  1 * time.Hour,
+		WALCleanInterval: 1 * time.Hour,
+	})
+
+	// 写入数据并手动 Flush 一次以设置 columnMeta
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("key_%04d", i)
+		values := map[string]common.Value{
+			"id": common.NewInt64(int64(i)),
+		}
+		if err := eng.Write(key, values); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+	}
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("Initial Flush: %v", err)
+	}
+
+	// 继续写入数据让 MemTable 再次达到阈值
+	for i := 100; i < 200; i++ {
+		key := fmt.Sprintf("key_%04d", i)
+		values := map[string]common.Value{
+			"id": common.NewInt64(int64(i)),
+		}
+		if err := eng.Write(key, values); err != nil {
+			t.Fatalf("Write %d: %v", i, err)
+		}
+	}
+
+	// 等待调度器触发刷盘
+	time.Sleep(300 * time.Millisecond)
+
+	stats, ok := eng.SchedulerStats()
+	if !ok {
+		t.Fatal("expected scheduler to be running")
+	}
+	if stats.FlushCount == 0 {
+		t.Error("expected at least one auto flush via engine scheduler")
+	}
+
+	if err := eng.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestEngineCloseStopsScheduler(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := NewEngine(EngineConfig{DataDir: dir})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	eng.StartScheduler(SchedulerConfig{
+		FlushInterval:    50 * time.Millisecond,
+		CompactInterval:  50 * time.Millisecond,
+		WALCleanInterval: 50 * time.Millisecond,
+	})
+
+	// Close 应该停止调度器
+	if err := eng.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Close 后 SchedulerStats 应返回 ok=false
+	_, ok := eng.SchedulerStats()
+	if ok {
+		t.Error("expected ok=false after engine close")
+	}
+}
