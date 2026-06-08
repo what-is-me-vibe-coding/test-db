@@ -44,7 +44,9 @@ func TestOpenWALPermissionDeniedCov_V4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("创建文件失败: %v", err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		t.Fatalf("关闭文件失败: %v", err)
+	}
 	if err := os.Chmod(path, 0444); err != nil {
 		t.Fatalf("chmod 失败: %v", err)
 	}
