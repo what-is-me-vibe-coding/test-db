@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 // ==================== executeAggregate 覆盖率测试 ====================
@@ -202,38 +203,37 @@ func TestAggregateWithNullArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aggregate with null args: %v", err)
 	}
-
 	if len(chunks) == 0 || chunks[0].RowCount() == 0 {
 		t.Fatal("expected at least 1 row")
 	}
+	verifyAggregateWithNullArgs(t, chunks)
+}
 
+// verifyAggregateWithNullArgs 验证包含 NULL 值的聚合结果。
+func verifyAggregateWithNullArgs(t *testing.T, chunks []*storage.Chunk) {
 	// COUNT(*) = 3（包含 NULL 行）
 	countCol, _ := chunks[0].GetColumn(0)
 	if countCol.GetValue(0).Int64 != 3 {
 		t.Errorf("expected COUNT(*)=3, got %d", countCol.GetValue(0).Int64)
 	}
-
 	// SUM(age) = 20+40=60（跳过 NULL）
 	sumCol, _ := chunks[0].GetColumn(1)
 	sumVal := sumCol.GetValue(0)
 	if sumVal.Float64 != 60.0 {
 		t.Errorf("expected SUM(age)=60.0 (skip NULL), got %g", sumVal.Float64)
 	}
-
 	// AVG(score) = (90+70)/2=80.0（跳过 NULL）
 	avgCol, _ := chunks[0].GetColumn(2)
 	avgVal := avgCol.GetValue(0)
 	if avgVal.Float64 != 80.0 {
 		t.Errorf("expected AVG(score)=80.0 (skip NULL), got %g", avgVal.Float64)
 	}
-
 	// MIN(age) = 20（跳过 NULL）
 	minCol, _ := chunks[0].GetColumn(3)
 	minVal := minCol.GetValue(0)
 	if minVal.Int64 != 20 {
 		t.Errorf("expected MIN(age)=20 (skip NULL), got %d", minVal.Int64)
 	}
-
 	// MAX(score) = 90.0（跳过 NULL）
 	maxCol, _ := chunks[0].GetColumn(4)
 	maxVal := maxCol.GetValue(0)
