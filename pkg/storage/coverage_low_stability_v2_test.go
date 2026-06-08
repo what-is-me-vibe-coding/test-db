@@ -25,8 +25,8 @@ func TestBuildSegment列AppendNull失败(t *testing.T) {
 
 	// 使用比行数更多的列来触发 colIdx >= len(row.Values) 的 null append 路径
 	cols := []ColumnMeta{
-		{ID: 0, Name: "col0", Type: common.TypeInt64},
-		{ID: 1, Name: "col1", Type: common.TypeString}, // 行中没有此列，会 append null
+		{ID: 0, Name: crCol0, Type: common.TypeInt64},
+		{ID: 1, Name: crCol1, Type: common.TypeString}, // 行中没有此列，会 append null
 	}
 
 	seg, err := compactor.buildSegment(rows, cols)

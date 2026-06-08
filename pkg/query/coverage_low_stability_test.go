@@ -77,7 +77,7 @@ func TestPushFilterDownAggregate部分下推(t *testing.T) {
 		},
 		schema: []ColumnDef{
 			{Name: testColName, Type: common.TypeString},
-			{Name: "COUNT(*)", Type: common.TypeInt64},
+			{Name: testAggCountStar, Type: common.TypeInt64},
 		},
 	}
 
@@ -86,7 +86,7 @@ func TestPushFilterDownAggregate部分下推(t *testing.T) {
 	// 2. COUNT(*) > 5 - 引用聚合列，不可下推
 	// 使用 AND 连接
 	pushable := &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColAge}, Right: &LiteralExpr{Value: common.NewInt64(20)}}
-	remaining := &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: "COUNT(*)"}, Right: &LiteralExpr{Value: common.NewInt64(5)}}
+	remaining := &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testAggCountStar}, Right: &LiteralExpr{Value: common.NewInt64(5)}}
 	combined := &BinaryExpr{Op: OpAnd, Left: pushable, Right: remaining}
 
 	filter := &FilterNode{
@@ -135,7 +135,7 @@ func TestPushFilterDownAggregate全部可下推(t *testing.T) {
 		},
 		schema: []ColumnDef{
 			{Name: testColName, Type: common.TypeString},
-			{Name: "COUNT(*)", Type: common.TypeInt64},
+			{Name: testAggCountStar, Type: common.TypeInt64},
 		},
 	}
 
@@ -180,14 +180,14 @@ func TestPushFilterDownAggregate全部不可下推(t *testing.T) {
 		},
 		schema: []ColumnDef{
 			{Name: testColName, Type: common.TypeString},
-			{Name: "COUNT(*)", Type: common.TypeInt64},
+			{Name: testAggCountStar, Type: common.TypeInt64},
 		},
 	}
 
 	// Filter 条件只引用聚合列 COUNT(*)，不可下推
 	filter := &FilterNode{
 		Child:     agg,
-		Condition: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: "COUNT(*)"}, Right: &LiteralExpr{Value: common.NewInt64(5)}},
+		Condition: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testAggCountStar}, Right: &LiteralExpr{Value: common.NewInt64(5)}},
 	}
 
 	result := rule.Apply(filter)
@@ -377,7 +377,7 @@ func TestPushDownAggregateNode递归(t *testing.T) {
 		Aggregates: []AggregateExpr{
 			{Func: AggCount, Arg: &StarExpr{}},
 		},
-		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: "COUNT(*)", Type: common.TypeInt64}},
+		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: testAggCountStar, Type: common.TypeInt64}},
 	}
 
 	result := rule.pushDown(agg)

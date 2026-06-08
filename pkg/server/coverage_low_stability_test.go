@@ -110,7 +110,7 @@ func TestHandleWritePacket正常路径(t *testing.T) {
 		},
 		{
 			name:    "表不存在",
-			table:   "nonexistent",
+			table:   v14Nonexistent,
 			rows:    []map[string]interface{}{{"id": float64(1)}},
 			wantErr: false, // handleWrite 不返回 Go error，而是返回 Response{Code:-1}
 		},
@@ -231,7 +231,7 @@ func TestHandleQueryPacketMarshal不可序列化数据(t *testing.T) {
 	// 直接测试 json.Marshal 对包含 channel 的 Response 序列化失败
 	resp := &Response{
 		Code:    0,
-		Message: "test",
+		Message: testTableName,
 		Data:    unmarshallableResponse{Ch: make(chan int)},
 	}
 
@@ -245,7 +245,7 @@ func TestHandleQueryPacketMarshal不可序列化数据(t *testing.T) {
 func TestHandleWritePacketMarshal不可序列化数据(t *testing.T) {
 	resp := &Response{
 		Code:    0,
-		Message: "test",
+		Message: testTableName,
 		Data:    unmarshallableResponse{Ch: make(chan int)},
 	}
 
@@ -316,7 +316,7 @@ func TestHandleWritePacket完整流程(t *testing.T) {
 		wantOK bool
 	}{
 		{"正常写入", testTable, []map[string]interface{}{{"id": float64(1), testColName: testName}}, true},
-		{"重复主键", testTable, []map[string]interface{}{{"id": float64(1), testColName: "bob"}}, true},
+		{"重复主键", testTable, []map[string]interface{}{{"id": float64(1), testColName: testNameBob}}, true},
 	}
 
 	for _, tt := range tests {

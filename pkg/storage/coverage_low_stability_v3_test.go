@@ -130,7 +130,7 @@ func TestSerializeBatchWriteRecord不支持类型(t *testing.T) {
 		{
 			Key: "k1",
 			Values: map[string]common.Value{
-				"col": {Typ: common.DataType(99), Valid: true}, // 不支持的类型
+				crCol: {Typ: common.DataType(99), Valid: true}, // 不支持的类型
 			},
 		},
 	}
@@ -163,7 +163,7 @@ func TestReplayWALRecords混合类型(t *testing.T) {
 	_ = w.AppendWrite(writePayload)
 
 	// 写入 BatchWrite 记录
-	rows := []WriteRow{{Key: "key2", Values: map[string]common.Value{colVal: common.NewInt64(2)}}}
+	rows := []WriteRow{{Key: crKey2, Values: map[string]common.Value{colVal: common.NewInt64(2)}}}
 	batchPayload, _ := serializeBatchWriteRecord(rows, 2)
 	_ = w.AppendBatch([]BatchRecord{{Type: walTypeBatchWrite, Payload: batchPayload}})
 
@@ -228,7 +228,7 @@ func TestNewEngine只读目录WAL失败(t *testing.T) {
 func TestSerializeCheckpointRecord正常(t *testing.T) {
 	colMeta := []ColumnMeta{
 		{ID: 0, Name: "id", Type: common.TypeInt64},
-		{ID: 1, Name: "name", Type: common.TypeString},
+		{ID: 1, Name: benchColName, Type: common.TypeString},
 	}
 	data, err := serializeCheckpointRecord(42, colMeta)
 	if err != nil {

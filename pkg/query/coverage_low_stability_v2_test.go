@@ -42,8 +42,8 @@ func TestConvertFuncExpr正常路径(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name:     "COUNT(*)",
-			funcName: "count",
+			name:     testAggCountStar,
+			funcName: aggNameCount,
 			args: []sqlparser.SelectExpr{
 				&sqlparser.StarExpr{},
 			},
@@ -158,7 +158,7 @@ func TestSplitPredicateByAggregate非AND条件(t *testing.T) {
 		Aggregates: []AggregateExpr{
 			{Func: AggCount, Arg: &StarExpr{}},
 		},
-		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: "COUNT(*)", Type: common.TypeInt64}},
+		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: testAggCountStar, Type: common.TypeInt64}},
 	}
 
 	// 非 AND 条件（单个比较表达式）
@@ -192,11 +192,11 @@ func TestSplitPredicateByAggregate全部引用聚合列(t *testing.T) {
 		Aggregates: []AggregateExpr{
 			{Func: AggCount, Arg: &StarExpr{}},
 		},
-		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: "COUNT(*)", Type: common.TypeInt64}},
+		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: testAggCountStar, Type: common.TypeInt64}},
 	}
 
 	// 条件引用聚合列 COUNT(*)
-	cond := &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: "COUNT(*)"}, Right: &LiteralExpr{Value: common.NewInt64(5)}}
+	cond := &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testAggCountStar}, Right: &LiteralExpr{Value: common.NewInt64(5)}}
 
 	pushable, remaining := rule.splitPredicateByAggregate(cond, agg)
 	if pushable != nil {

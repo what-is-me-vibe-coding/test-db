@@ -16,7 +16,7 @@ func TestBuildAndRegisterBuildFromKeys错误(t *testing.T) {
 	bi := NewBloomIndex()
 
 	// 正常的 BuildAndRegister 不应返回错误
-	keys := []string{"key1", "key2", "key3"}
+	keys := []string{testBloomKey1, testBloomKey2, testBloomKey3}
 	err := bi.BuildAndRegister(1, keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildAndRegister 正常路径不应返回错误: %v", err)
@@ -91,7 +91,7 @@ func TestBuildFromKeys空Keys(t *testing.T) {
 
 // TestBuildFromKeys正常Keys 验证 BuildFromKeys 正常构建布隆过滤器
 func TestBuildFromKeys正常Keys(t *testing.T) {
-	keys := []string{"alpha", "beta", "gamma"}
+	keys := []string{testAlpha, testBeta, testGamma}
 	data, err := BuildFromKeys(keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildFromKeys 失败: %v", err)

@@ -97,7 +97,7 @@ func TestRegisterFromBytes正常数据(t *testing.T) {
 	bi := NewBloomIndex()
 
 	// 先构建一个有效的布隆过滤器数据
-	keys := []string{"key1", "key2"}
+	keys := []string{testBloomKey1, testBloomKey2}
 	data, err := BuildFromKeys(keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildFromKeys 失败: %v", err)
@@ -121,7 +121,7 @@ func TestRegisterFromBytes正常数据(t *testing.T) {
 func TestUnregister正常移除(t *testing.T) {
 	bi := NewBloomIndex()
 
-	keys := []string{"key1"}
+	keys := []string{testBloomKey1}
 	err := bi.BuildAndRegister(1, keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildAndRegister 失败: %v", err)
@@ -177,7 +177,7 @@ func TestMayContainString未注册Segment(t *testing.T) {
 func TestMayContainString已注册Key(t *testing.T) {
 	bi := NewBloomIndex()
 
-	keys := []string{"alpha", "beta", "gamma"}
+	keys := []string{testAlpha, testBeta, testGamma}
 	err := bi.BuildAndRegister(1, keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildAndRegister 失败: %v", err)
@@ -208,14 +208,14 @@ func TestStats初始值(t *testing.T) {
 func TestStats查询后更新(t *testing.T) {
 	bi := NewBloomIndex()
 
-	keys := []string{"key1", "key2"}
+	keys := []string{testBloomKey1, testBloomKey2}
 	err := bi.BuildAndRegister(1, keys, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildAndRegister 失败: %v", err)
 	}
 
 	// 查询已注册的 key（命中）
-	_ = bi.MayContain(1, []byte("key1"))
+	_ = bi.MayContain(1, []byte(testBloomKey1))
 
 	// 查询不存在的 key（可能命中或未命中）
 	_ = bi.MayContain(1, []byte("nonexistent_key_12345"))
@@ -402,7 +402,7 @@ func TestBloomIndex并发注册(t *testing.T) {
 func TestRegisterFromBytes覆盖注册(t *testing.T) {
 	bi := NewBloomIndex()
 
-	keys1 := []string{"key1"}
+	keys1 := []string{testBloomKey1}
 	data1, err := BuildFromKeys(keys1, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildFromKeys 失败: %v", err)
@@ -414,7 +414,7 @@ func TestRegisterFromBytes覆盖注册(t *testing.T) {
 	}
 
 	// 用新的数据覆盖
-	keys2 := []string{"key2", "key3"}
+	keys2 := []string{testBloomKey2, testBloomKey3}
 	data2, err := BuildFromKeys(keys2, DefaultBloomFPRate)
 	if err != nil {
 		t.Fatalf("BuildFromKeys 失败: %v", err)
