@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -25,9 +26,31 @@ type walColMeta struct {
 }
 
 func serializeWriteRecord(key string, version uint64, columns map[string]common.Value) ([]byte, error) {
-	// 使用二进制格式序列化，与批量写入一致
-	rows := []WriteRow{{Key: key, Values: columns}}
-	return serializeBatchWriteRecord(rows, version)
+	// 直接生成二进制格式，避免 []WriteRow 中间分配
+	size := 2 + 2 + len(key) + 8 + 2
+	for colName, v := range columns {
+		size += 2 + len(colName) + 1 + 1 + valueBinarySize(v)
+	}
+	buf := make([]byte, 0, size)
+	b := make([]byte, 8)
+	// 行数 = 1
+	binary.LittleEndian.PutUint16(b, 1)
+	buf = append(buf, b[:2]...)
+	// key
+	binary.LittleEndian.PutUint16(b, uint16(len(key)))
+	buf = append(buf, b[:2]...)
+	buf = append(buf, key...)
+	// version
+	binary.LittleEndian.PutUint64(b, version)
+	buf = append(buf, b[:8]...)
+	// 列数
+	binary.LittleEndian.PutUint16(b, uint16(len(columns)))
+	buf = append(buf, b[:2]...)
+	// 每列
+	for colName, v := range columns {
+		buf = appendValueBinary(buf, b, colName, v)
+	}
+	return buf, nil
 }
 
 func deserializeWriteRecord(data []byte) (string, uint64, map[string]common.Value, error) {
