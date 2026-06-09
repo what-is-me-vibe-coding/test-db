@@ -381,7 +381,7 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 	e.segmentLevels = remainingLevels
 
 	if err := e.compactor.CleanupSegments(allSegments); err != nil {
-		return fmt.Errorf("engine compact: cleanup: %w", err)
+		log.Printf("engine compact: cleanup segments: %v", err)
 	}
 
 	// 同步 flusher 的 nextID，避免后续 Flush 产生 segment ID 冲突
