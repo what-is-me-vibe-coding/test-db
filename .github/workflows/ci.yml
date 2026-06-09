@@ -32,9 +32,13 @@ jobs:
 
       - name: Run tests with race detector
         run: go test -race -v -p=1 ./...
+        env:
+          TMPDIR: ${{ runner.temp }}/gotest
 
       - name: Run tests with coverage
         run: go test -race -coverprofile=coverage.out -p=1 ./...
+        env:
+          TMPDIR: ${{ runner.temp }}/gotest
 
       - name: Check coverage threshold (>=90%)
         run: |
