@@ -162,12 +162,21 @@ func TestStressMemLeak_FlushCompactCycle(t *testing.T) {
 		heaps = append(heaps, heap)
 	}
 
-	first := heaps[0]
-	last := heaps[len(heaps)-1]
-	growth := float64(last) / float64(first)
-	t.Logf("FlushCompactCycle: first=%d, last=%d, growth=%.2fx over %d cycles",
-		first, last, growth, cycles)
-	if growth > 5.0 {
+	// Compare second half average to first half average to avoid cold-start skew.
+	mid := len(heaps) / 2
+	var firstHalf, secondHalf uint64
+	for _, h := range heaps[:mid] {
+		firstHalf += h
+	}
+	for _, h := range heaps[mid:] {
+		secondHalf += h
+	}
+	avgFirst := firstHalf / uint64(mid)
+	avgSecond := secondHalf / uint64(len(heaps)-mid)
+	growth := float64(avgSecond) / float64(avgFirst)
+	t.Logf("FlushCompactCycle: avg_first=%d, avg_second=%d, growth=%.2fx over %d cycles",
+		avgFirst, avgSecond, growth, cycles)
+	if growth > 3.0 {
 		t.Errorf("heap grew %.1fx over %d flush/compact cycles, possible leak", growth, cycles)
 	}
 }
