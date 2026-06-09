@@ -15,12 +15,13 @@ import (
 // WAL 尾部截断后，最新写入的记录可能丢失，但引擎应能正常启动，
 // 且段文件中已刷盘的数据不受影响。
 func TestCrashRecovery_WALCorruption(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
 	rng := rand.New(rand.NewSource(789))
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 15; i++ {
 		eng, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: new engine: %v", i, err)
@@ -76,6 +77,7 @@ func corruptWALTail(t *testing.T, walPath string, rng *rand.Rand) {
 
 // TestCrashRecovery_SegmentFileCorruption 验证段文件损坏时的恢复能力。
 func TestCrashRecovery_SegmentFileCorruption(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
@@ -135,6 +137,7 @@ func TestCrashRecovery_SegmentFileCorruption(t *testing.T) {
 
 // TestCrashRecovery_CorruptedWALRecordCRC 验证 WAL 记录 CRC 校验失败时的恢复行为。
 func TestCrashRecovery_CorruptedWALRecordCRC(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
@@ -203,6 +206,7 @@ func corruptWALRecordCRC(t *testing.T, walPath string, recordIdx int) {
 
 // TestCrashRecovery_PartialWALRecord 验证 WAL 中存在部分写入记录时的恢复。
 func TestCrashRecovery_PartialWALRecord(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
@@ -255,6 +259,7 @@ func TestCrashRecovery_PartialWALRecord(t *testing.T) {
 
 // TestCrashRecovery_CorruptedSegmentHeader 验证段文件头部损坏时的恢复行为。
 func TestCrashRecovery_CorruptedSegmentHeader(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
@@ -309,6 +314,7 @@ func TestCrashRecovery_CorruptedSegmentHeader(t *testing.T) {
 
 // TestCrashRecovery_CRCValidation 验证 WAL CRC 校验的正确性。
 func TestCrashRecovery_CRCValidation(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 

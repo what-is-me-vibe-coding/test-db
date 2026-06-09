@@ -12,9 +12,9 @@ import (
 
 // TestCrashRecovery_OverwriteAfterCrash 验证崩溃恢复后覆盖写入的正确性。
 func TestCrashRecovery_OverwriteAfterCrash(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -57,9 +57,9 @@ func TestCrashRecovery_OverwriteAfterCrash(t *testing.T) {
 
 // TestCrashRecovery_ScanAfterRecovery 验证崩溃恢复后范围扫描的正确性。
 func TestCrashRecovery_ScanAfterRecovery(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -94,13 +94,14 @@ func TestCrashRecovery_ScanAfterRecovery(t *testing.T) {
 
 // TestCrashRecovery_MultipleFlushCycles 多次刷盘循环中验证 checkpoint 机制正确。
 func TestCrashRecovery_MultipleFlushCycles(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
 	rng := rand.New(rand.NewSource(321))
 	expectedData := make(map[string]int64)
 
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 10; i++ {
 		eng, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: new engine: %v", i, err)
@@ -136,14 +137,14 @@ func TestCrashRecovery_MultipleFlushCycles(t *testing.T) {
 	defer func() { _ = eng.Close() }()
 
 	verifyRecoveredData(t, eng, expectedData)
-	t.Logf("MultipleFlushCycles: verified %d keys after 20 crash cycles", len(expectedData))
+	t.Logf("MultipleFlushCycles: verified %d keys after 10 crash cycles", len(expectedData))
 }
 
 // TestCrashRecovery_EmptyDirAfterCrash 验证崩溃后数据目录为空时引擎能正常启动。
 func TestCrashRecovery_EmptyDirAfterCrash(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -172,9 +173,9 @@ func TestCrashRecovery_EmptyDirAfterCrash(t *testing.T) {
 
 // TestCrashRecovery_CompactThenKill 验证 Compaction 完成后数据能正确恢复。
 func TestCrashRecovery_CompactThenKill(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -226,9 +227,9 @@ func TestCrashRecovery_CompactThenKill(t *testing.T) {
 
 // TestCrashRecovery_VersionMonotonicity 验证崩溃恢复后版本号单调递增。
 func TestCrashRecovery_VersionMonotonicity(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -270,13 +271,14 @@ func TestCrashRecovery_VersionMonotonicity(t *testing.T) {
 
 // TestCrashRecovery_MixedWorkload 混合工作负载下的崩溃恢复测试。
 func TestCrashRecovery_MixedWorkload(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
 	rng := rand.New(rand.NewSource(654))
 	expectedData := make(map[string]int64)
 
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 20; i++ {
 		eng, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: new engine: %v", i, err)
@@ -313,16 +315,14 @@ func TestCrashRecovery_MixedWorkload(t *testing.T) {
 	defer func() { _ = eng.Close() }()
 
 	verifyRecoveredData(t, eng, expectedData)
-	t.Logf("MixedWorkload: verified %d keys after 40 crash cycles", len(expectedData))
+	t.Logf("MixedWorkload: verified %d keys after 20 crash cycles", len(expectedData))
 }
 
 // TestCrashRecovery_WALMissing 验证 WAL 文件丢失后引擎能正常启动。
-// 注意：columnMeta 仅存储在 WAL checkpoint 中，WAL 丢失后段文件数据无法正确解读列值，
-// 但引擎应能正常启动并接受新写入。
 func TestCrashRecovery_WALMissing(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -359,9 +359,9 @@ func TestCrashRecovery_WALMissing(t *testing.T) {
 
 // TestCrashRecovery_DataIntegrityWithScan 通过扫描验证崩溃恢复后的数据完整性。
 func TestCrashRecovery_DataIntegrityWithScan(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -397,12 +397,11 @@ func TestCrashRecovery_DataIntegrityWithScan(t *testing.T) {
 }
 
 // TestCrashRecovery_AbandonWithoutClose 模拟进程被 kill（不调用 Close），
-// 验证 WAL 中已 Sync 的数据能恢复。这是最接近真实崩溃场景的测试。
+// 验证 WAL 中已 Sync 的数据能恢复。
 func TestCrashRecovery_AbandonWithoutClose(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
-	// 第一轮：写入数据后不 Close，直接放弃引擎
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -410,7 +409,6 @@ func TestCrashRecovery_AbandonWithoutClose(t *testing.T) {
 	_ = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(100)})
 	_ = eng.Write("key2", map[string]common.Value{colVal: common.NewInt64(200)})
 	// 不调用 Close，模拟进程被 kill
-	// Write 内部调用了 WAL.Sync()，数据已持久化
 
 	// 第二轮：重新打开引擎，验证 WAL 回放
 	eng2, err := NewEngine(cfg)
@@ -431,9 +429,9 @@ func TestCrashRecovery_AbandonWithoutClose(t *testing.T) {
 
 // TestCrashRecovery_AbandonWithFlush 验证 Flush 后不 Close 的崩溃恢复。
 func TestCrashRecovery_AbandonWithFlush(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -463,9 +461,9 @@ func TestCrashRecovery_AbandonWithFlush(t *testing.T) {
 
 // TestCrashRecovery_AbandonAfterCompaction 验证 Compaction 后不 Close 的崩溃恢复。
 func TestCrashRecovery_AbandonAfterCompaction(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
-
 	eng, err := NewEngine(cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)

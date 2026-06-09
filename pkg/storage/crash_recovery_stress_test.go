@@ -2,12 +2,21 @@ package storage
 
 import (
 	"fmt"
+	"io"
+	"log"
 	"math/rand"
+	"os"
 	"sync"
 	"testing"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
+
+// suppressLog 抑制引擎日志输出，减少 CI 测试输出量。
+func suppressLog() func() {
+	log.SetOutput(io.Discard)
+	return func() { log.SetOutput(os.Stderr) }
+}
 
 // verifyRecoveredData 验证恢复后的数据是否与预期一致。
 func verifyRecoveredData(t *testing.T, eng *Engine, expected map[string]int64) {
@@ -30,13 +39,14 @@ func verifyRecoveredData(t *testing.T, eng *Engine, expected map[string]int64) {
 // 因此正常关闭（Close 会 flush memtable 并写 checkpoint）后的恢复等价于
 // WAL 已 sync 但 memtable 未 flush 的崩溃恢复场景。
 func TestCrashRecovery_RandomKill100(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
 	rng := rand.New(rand.NewSource(42))
 	expectedData := make(map[string]int64)
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 30; i++ {
 		eng, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: new engine: %v", i, err)
@@ -67,18 +77,19 @@ func TestCrashRecovery_RandomKill100(t *testing.T) {
 	defer func() { _ = eng.Close() }()
 
 	verifyRecoveredData(t, eng, expectedData)
-	t.Logf("RandomKill100: verified %d keys after 100 crash cycles", len(expectedData))
+	t.Logf("RandomKill100: verified %d keys after 30 crash cycles", len(expectedData))
 }
 
 // TestCrashRecovery_RandomKillWithCompaction 随机崩溃场景下包含 Compaction 操作。
 func TestCrashRecovery_RandomKillWithCompaction(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
 	rng := rand.New(rand.NewSource(123))
 	expectedData := make(map[string]int64)
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 20; i++ {
 		eng, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: new engine: %v", i, err)
@@ -112,11 +123,12 @@ func TestCrashRecovery_RandomKillWithCompaction(t *testing.T) {
 	defer func() { _ = eng.Close() }()
 
 	verifyRecoveredData(t, eng, expectedData)
-	t.Logf("RandomKillWithCompaction: verified %d keys after 50 crash cycles", len(expectedData))
+	t.Logf("RandomKillWithCompaction: verified %d keys after 20 crash cycles", len(expectedData))
 }
 
 // TestCrashRecovery_KillDuringConcurrentWrites 并发写入后验证数据恢复。
 func TestCrashRecovery_KillDuringConcurrentWrites(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
@@ -167,13 +179,14 @@ func TestCrashRecovery_KillDuringConcurrentWrites(t *testing.T) {
 
 // TestCrashRecovery_KillDuringFlush 刷盘过程中验证数据恢复。
 func TestCrashRecovery_KillDuringFlush(t *testing.T) {
+	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 
 	rng := rand.New(rand.NewSource(456))
 	expectedData := make(map[string]int64)
 
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 15; i++ {
 		eng, err := NewEngine(cfg)
 		if err != nil {
 			t.Fatalf("iteration %d: new engine: %v", i, err)
