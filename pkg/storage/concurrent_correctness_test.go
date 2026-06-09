@@ -105,6 +105,91 @@ func ccCheckNoDuplicates(results []struct {
 	return false
 }
 
+// ccVerifyScanResults checks that scan results match expected sequential keys and values.
+func ccVerifyScanResults(results []struct {
+	Key   string
+	Value Row
+}, prefix string) bool {
+	for i, r := range results {
+		if r.Key != fmt.Sprintf("%s%04d", prefix, i) || r.Value.Columns[colVal].Int64 != int64(i) {
+			return false
+		}
+	}
+	return true
+}
+
+// ccScanInvariantWorker repeatedly scans a range and checks sorting and no-duplicate invariants.
+func ccScanInvariantWorker(eng *Engine, done <-chan struct{}, start, end string, scanErr *atomic.Int32, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			results := eng.Scan(start, end)
+			if !ccCheckScanSorted(results, start, end) {
+				scanErr.Add(1)
+			}
+			if ccCheckNoDuplicates(results) {
+				scanErr.Add(1)
+			}
+		}
+	}
+}
+
+// ccReaderWorker repeatedly reads a key until done.
+func ccReaderWorker(eng *Engine, done <-chan struct{}, key string, ops *atomic.Int64, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			_, _ = eng.Get(key)
+			ops.Add(1)
+		}
+	}
+}
+
+// ccScannerWorker repeatedly scans a range and checks sorting until done.
+func ccScannerWorker(eng *Engine, done <-chan struct{}, start, end string, errors *atomic.Int32, ops *atomic.Int64, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			results := eng.Scan(start, end)
+			if !ccCheckScanSorted(results, start, end) {
+				errors.Add(1)
+			}
+			ops.Add(1)
+		}
+	}
+}
+
+// ccScanRangeWorker repeatedly scans a range and verifies exact key/value consistency.
+func ccScanRangeWorker(eng *Engine, done <-chan struct{}, prefix string, count int, scanErr *atomic.Int32, wg *sync.WaitGroup) {
+	defer wg.Done()
+	start := fmt.Sprintf("%s0000", prefix)
+	end := fmt.Sprintf("%s%04d", prefix, count-1)
+	for {
+		select {
+		case <-done:
+			return
+		default:
+			results := eng.Scan(start, end)
+			if len(results) != count {
+				scanErr.Add(1)
+				continue
+			}
+			if !ccVerifyScanResults(results, prefix) {
+				scanErr.Add(1)
+			}
+		}
+	}
+}
+
 func TestConcurrentCorrectness_Serializability(t *testing.T) {
 	defer suppressLog()()
 	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
@@ -112,7 +197,6 @@ func TestConcurrentCorrectness_Serializability(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 	defer func() { _ = eng.Close() }()
-
 	const writers, perWriter = 8, 100
 	var wg sync.WaitGroup
 	var writeErr atomic.Int32
@@ -143,7 +227,6 @@ func TestConcurrentCorrectness_OverwriteSerialEquivalence(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 	defer func() { _ = eng.Close() }()
-
 	const overwriters = 10
 	var wg sync.WaitGroup
 	for g := 0; g < overwriters; g++ {
@@ -156,7 +239,6 @@ func TestConcurrentCorrectness_OverwriteSerialEquivalence(t *testing.T) {
 		}(g)
 	}
 	wg.Wait()
-
 	row, ok := eng.Get("shared_key")
 	if !ok {
 		t.Fatal("shared_key not found")
@@ -184,41 +266,21 @@ func TestConcurrentCorrectness_CompactAndScanInvariant(t *testing.T) {
 	}
 	defer func() { _ = eng.Close() }()
 	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
-
 	for i := 0; i < 50; i++ {
 		_ = eng.Write(fmt.Sprintf("scan_%04d", i), ccIntVal(int64(i)))
 	}
 	if err := eng.Flush(cols); err != nil {
 		t.Fatalf("initial flush: %v", err)
 	}
-
 	done := make(chan struct{})
 	time.AfterFunc(200*time.Millisecond, func() { close(done) })
 	var wg sync.WaitGroup
 	var scanErr atomic.Int32
-
 	ccStartWriters(eng, "out", 4, done, &wg)
 	ccStartFlushCompact(eng, cols, done, &wg, nil)
-
 	for s := 0; s < 4; s++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-done:
-					return
-				default:
-					results := eng.Scan("scan_0000", "scan_0049")
-					if !ccCheckScanSorted(results, "scan_0000", "scan_0049") {
-						scanErr.Add(1)
-					}
-					if ccCheckNoDuplicates(results) {
-						scanErr.Add(1)
-					}
-				}
-			}
-		}()
+		go ccScanInvariantWorker(eng, done, "scan_0000", "scan_0049", &scanErr, &wg)
 	}
 	wg.Wait()
 	if scanErr.Load() > 0 {
@@ -233,7 +295,6 @@ func TestConcurrentCorrectness_WriteBatchAtomicity(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 	defer func() { _ = eng.Close() }()
-
 	const batches, keysPerBatch = 10, 5
 	var wg sync.WaitGroup
 	var batchErr atomic.Int32
@@ -323,42 +384,15 @@ func TestConcurrentCorrectness_LongRunningStress(t *testing.T) {
 	var wg sync.WaitGroup
 	var totalOps atomic.Int64
 	var errors atomic.Int32
-
 	ccStartWriters(eng, "str", 4, done, &wg)
 	ccStartFlushCompact(eng, cols, done, &wg, &totalOps)
-
 	for r := 0; r < 2; r++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-done:
-					return
-				default:
-					_, _ = eng.Get("pre_0025")
-					totalOps.Add(1)
-				}
-			}
-		}()
+		go ccReaderWorker(eng, done, "pre_0025", &totalOps, &wg)
 	}
 	for s := 0; s < 2; s++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-done:
-					return
-				default:
-					results := eng.Scan("pre_0000", "pre_0049")
-					if !ccCheckScanSorted(results, "pre_0000", "pre_0049") {
-						errors.Add(1)
-					}
-					totalOps.Add(1)
-				}
-			}
-		}()
+		go ccScannerWorker(eng, done, "pre_0000", "pre_0049", &errors, &totalOps, &wg)
 	}
 	wg.Wait()
 	t.Logf("Stress: %d ops, %d errors in %v", totalOps.Load(), errors.Load(), duration)
@@ -381,32 +415,10 @@ func TestConcurrentCorrectness_ScanRangeConsistency(t *testing.T) {
 	time.AfterFunc(200*time.Millisecond, func() { close(done) })
 	var wg sync.WaitGroup
 	var scanErr atomic.Int32
-
 	ccStartWriters(eng, "out", 4, done, &wg)
-
 	for s := 0; s < 4; s++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-done:
-					return
-				default:
-					results := eng.Scan("range_0000", "range_0049")
-					if len(results) != 50 {
-						scanErr.Add(1)
-						continue
-					}
-					for i, r := range results {
-						if r.Key != fmt.Sprintf("range_%04d", i) || r.Value.Columns[colVal].Int64 != int64(i) {
-							scanErr.Add(1)
-							break
-						}
-					}
-				}
-			}
-		}()
+		go ccScanRangeWorker(eng, done, "range_", 50, &scanErr, &wg)
 	}
 	wg.Wait()
 	if scanErr.Load() > 0 {
