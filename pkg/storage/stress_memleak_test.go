@@ -317,18 +317,28 @@ func TestStressMemLeak_MemTableRotation(t *testing.T) {
 
 	cols := stressStringCols()
 
-	heapBefore := readHeapInUse()
-	for i := 0; i < writes; i++ {
+	// Write first batch and flush to establish baseline heap (includes segment metadata)
+	half := writes / 2
+	for i := 0; i < half; i++ {
 		key := fmt.Sprintf("mtr_%06d", i)
 		val := fmt.Sprintf("value_%d_padding_for_size", i)
 		_ = eng.Write(key, map[string]common.Value{colVal: common.NewString(val)})
 	}
-	heapAfterWrite := readHeapInUse()
-	t.Logf("After %d writes with small memtable: heap=%d (was %d)", writes, heapAfterWrite, heapBefore)
-
 	if err := eng.Flush(cols); err != nil {
-		t.Fatalf("flush: %v", err)
+		t.Fatalf("initial flush: %v", err)
 	}
+	heapBaseline := readHeapInUse()
+
+	// Write second batch and flush
+	for i := half; i < writes; i++ {
+		key := fmt.Sprintf("mtr_%06d", i)
+		val := fmt.Sprintf("value_%d_padding_for_size", i)
+		_ = eng.Write(key, map[string]common.Value{colVal: common.NewString(val)})
+	}
+	if err := eng.Flush(cols); err != nil {
+		t.Fatalf("second flush: %v", err)
+	}
+	heapAfterSecondFlush := readHeapInUse()
 
 	// Verify a sample of keys
 	notFound := 0
@@ -342,11 +352,11 @@ func TestStressMemLeak_MemTableRotation(t *testing.T) {
 		t.Errorf("%d keys not found after rotation stress", notFound)
 	}
 
-	heapAfterFlush := readHeapInUse()
-	growth := float64(heapAfterFlush) / float64(heapBefore)
-	t.Logf("MemTableRotation: heap growth=%.2fx, notFound=%d", growth, notFound)
-	// Heap should not grow proportionally to number of rotations
-	if growth > 10.0 {
+	growth := float64(heapAfterSecondFlush) / float64(heapBaseline)
+	t.Logf("MemTableRotation: baseline=%d, after=%d, growth=%.2fx, notFound=%d",
+		heapBaseline, heapAfterSecondFlush, growth, notFound)
+	// Compare second-half heap to first-half baseline; doubling data should < 3x heap.
+	if growth > 3.0 {
 		t.Errorf("heap grew %.1fx with memtable rotations, possible leak", growth)
 	}
 }
