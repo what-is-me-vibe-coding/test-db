@@ -82,7 +82,7 @@ func TestEngineWriteWALFileClosedV17(t *testing.T) {
 	// 关闭 WAL 文件描述符以触发 Sync 错误
 	_ = eng.wal.file.Close()
 
-	err = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)})
+	err = eng.Write(crKey1, map[string]common.Value{colVal: common.NewInt64(1)})
 	if err == nil {
 		t.Error("expected error when writing with closed WAL file (SyncEveryWrite mode)")
 	}
@@ -104,7 +104,7 @@ func TestEngineWriteBatchWALFileClosedV17(t *testing.T) {
 	_ = eng.wal.file.Close()
 
 	err = eng.WriteBatch([]WriteRow{
-		{Key: "key1", Values: map[string]common.Value{colVal: common.NewInt64(1)}},
+		{Key: crKey1, Values: map[string]common.Value{colVal: common.NewInt64(1)}},
 	})
 	if err == nil {
 		t.Error("expected error when WriteBatch with closed WAL file")
@@ -124,7 +124,7 @@ func TestEngineWriteBatchWALClosedV17(t *testing.T) {
 	_ = eng.wal.Close()
 
 	err = eng.WriteBatch([]WriteRow{
-		{Key: "key1", Values: map[string]common.Value{colVal: common.NewInt64(1)}},
+		{Key: crKey1, Values: map[string]common.Value{colVal: common.NewInt64(1)}},
 	})
 	if err == nil {
 		t.Error("expected error when WriteBatch with closed WAL")
@@ -140,7 +140,7 @@ func TestWriteCheckpointSyncErrorV17(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 
-	_ = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write(crKey1, map[string]common.Value{colVal: common.NewInt64(1)})
 
 	// 关闭 WAL 文件描述符以触发 Sync 错误
 	_ = eng.wal.file.Close()
@@ -163,7 +163,7 @@ func TestWriteCheckpointGroupCommitSyncNowV17(t *testing.T) {
 	}
 	defer func() { _ = eng.Close() }()
 
-	_ = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write(crKey1, map[string]common.Value{colVal: common.NewInt64(1)})
 
 	err = eng.writeCheckpoint(0)
 	if err != nil {
@@ -180,7 +180,7 @@ func TestWriteCheckpointAppendErrorV17(t *testing.T) {
 		t.Fatalf("new engine: %v", err)
 	}
 
-	_ = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)})
+	_ = eng.Write(crKey1, map[string]common.Value{colVal: common.NewInt64(1)})
 
 	// 关闭 WAL 以触发 AppendCheckpoint 错误
 	_ = eng.wal.Close()
@@ -261,7 +261,7 @@ func TestEngineWriteGroupCommitWithFileClosedV17(t *testing.T) {
 	_ = eng.wal.file.Close()
 
 	// GroupCommit 模式下，Write 应该在 AppendWrite 阶段就失败
-	err = eng.Write("key1", map[string]common.Value{colVal: common.NewInt64(1)})
+	err = eng.Write(crKey1, map[string]common.Value{colVal: common.NewInt64(1)})
 	if err == nil {
 		t.Error("expected error when writing with closed WAL file in GroupCommit mode")
 	}
