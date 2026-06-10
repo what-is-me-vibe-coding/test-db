@@ -32,23 +32,23 @@ func serializeWriteRecord(key string, version uint64, columns map[string]common.
 		size += 2 + len(colName) + 1 + 1 + valueBinarySize(v)
 	}
 	buf := make([]byte, 0, size)
-	b := make([]byte, 8)
+	var b [8]byte // stack-allocated, eliminates one heap allocation per write
 	// 行数 = 1
-	binary.LittleEndian.PutUint16(b, 1)
+	binary.LittleEndian.PutUint16(b[:], 1)
 	buf = append(buf, b[:2]...)
 	// key
-	binary.LittleEndian.PutUint16(b, uint16(len(key)))
+	binary.LittleEndian.PutUint16(b[:], uint16(len(key)))
 	buf = append(buf, b[:2]...)
 	buf = append(buf, key...)
 	// version
-	binary.LittleEndian.PutUint64(b, version)
+	binary.LittleEndian.PutUint64(b[:], version)
 	buf = append(buf, b[:8]...)
 	// 列数
-	binary.LittleEndian.PutUint16(b, uint16(len(columns)))
+	binary.LittleEndian.PutUint16(b[:], uint16(len(columns)))
 	buf = append(buf, b[:2]...)
 	// 每列
 	for colName, v := range columns {
-		buf = appendValueBinary(buf, b, colName, v)
+		buf = appendValueBinary(buf, b[:], colName, v)
 	}
 	return buf, nil
 }

@@ -51,32 +51,29 @@ func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 		return decodedColumn{}, false
 	}
 
-	// 快速路径：读锁检查是否存在
+	// 快速路径：读锁查找（允许并发读）
 	c.mu.RLock()
-	_, ok := c.items[key]
-	c.mu.RUnlock()
-
+	elem, ok := c.items[key]
 	if !ok {
+		c.mu.RUnlock()
 		c.mu.Lock()
 		c.misses++
 		c.mu.Unlock()
 		return decodedColumn{}, false
 	}
+	data := elem.Value.(*cacheEntry).data
+	c.mu.RUnlock()
 
-	// 命中：写锁更新 LRU 顺序和计数
+	// 慢路径：短暂写锁更新 LRU 顺序
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	elem, ok := c.items[key]
-	if !ok {
-		// 双检：在 RLock 和 Lock 之间可能被淘汰
-		c.misses++
-		return decodedColumn{}, false
+	// 双检：在 RUnlock 和 Lock 之间可能被淘汰
+	if elem, ok = c.items[key]; ok {
+		c.order.MoveToFront(elem)
 	}
-
-	c.order.MoveToFront(elem)
 	c.hits++
-	return elem.Value.(*cacheEntry).data, true
+	c.mu.Unlock()
+
+	return data, true
 }
 
 // put 将已解码的列数据放入缓存。
@@ -289,27 +286,25 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
 		return nil, false
 	}
 
-	// 快速路径：读锁检查是否存在
+	// 快速路径：读锁查找
 	c.mu.RLock()
-	_, ok := c.items[segmentID]
-	c.mu.RUnlock()
-
-	if !ok {
-		return nil, false
-	}
-
-	// 命中：写锁更新 LRU 顺序
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	elem, ok := c.items[segmentID]
 	if !ok {
-		// 双检：在 RLock 和 Lock 之间可能被淘汰
+		c.mu.RUnlock()
 		return nil, false
 	}
+	stats := elem.Value.(*indexCacheEntry).stats
+	c.mu.RUnlock()
 
-	c.order.MoveToFront(elem)
-	return elem.Value.(*indexCacheEntry).stats, true
+	// 慢路径：短暂写锁更新 LRU 顺序
+	c.mu.Lock()
+	// 双检：在 RUnlock 和 Lock 之间可能被淘汰
+	if elem, ok = c.items[segmentID]; ok {
+		c.order.MoveToFront(elem)
+	}
+	c.mu.Unlock()
+
+	return stats, true
 }
 
 // PutColumnStats 将 Segment 的列统计信息放入缓存。
