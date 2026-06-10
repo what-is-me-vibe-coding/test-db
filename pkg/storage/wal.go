@@ -76,24 +76,18 @@ func OpenWAL(path string) (*WAL, []RawRecord, error) {
 
 	records, validOffset, err := replayWAL(f)
 	if err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			log.Printf("wal open: close file after replay failure: %v", closeErr)
-		}
+		logClose(f)
 		return nil, nil, fmt.Errorf("wal replay: %w", err)
 	}
 
 	// Truncate file at the last valid record position to remove
 	// any partial/corrupted data, then seek to the end for appending.
 	if err := f.Truncate(validOffset); err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			log.Printf("wal open: close file after truncate failure: %v", closeErr)
-		}
+		logClose(f)
 		return nil, nil, fmt.Errorf("wal truncate: %w", err)
 	}
 	if _, err := f.Seek(validOffset, io.SeekStart); err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			log.Printf("wal open: close file after seek failure: %v", closeErr)
-		}
+		logClose(f)
 		return nil, nil, fmt.Errorf("wal seek: %w", err)
 	}
 
@@ -189,9 +183,7 @@ func (w *WAL) Close() error {
 	defer w.mu.Unlock()
 	// 先同步缓冲区到磁盘，再关闭文件，确保数据持久化
 	if err := w.file.Sync(); err != nil {
-		if closeErr := w.file.Close(); closeErr != nil {
-			log.Printf("wal close: close file after sync failure (sync=%v, close=%v)", err, closeErr)
-		}
+		logClose(w.file)
 		return fmt.Errorf("wal close sync: %w", err)
 	}
 	return w.file.Close()
@@ -239,34 +231,21 @@ func (w *WAL) maybeRotate() error {
 	// 关闭旧文件
 	old := w.file
 	if err := old.Close(); err != nil {
-		if closeErr := newF.Close(); closeErr != nil {
-			log.Printf("wal rotate: close temp file after old close failure: %v", closeErr)
-		}
-		if removeErr := os.Remove(w.path + ".tmp"); removeErr != nil {
-			log.Printf("wal rotate: remove temp file after old close failure: %v", removeErr)
-		}
+		logClose(newF)
+		logRemove(w.path + ".tmp")
 		return fmt.Errorf("wal rotate close: %w", err)
 	}
 
 	// 重命名旧文件为 .prev
 	if err := os.Rename(w.path, rotatedPath); err != nil {
-		// 旧文件已关闭但重命名失败，尝试恢复：重新打开旧路径
-		if removeErr := os.Remove(w.path + ".tmp"); removeErr != nil {
-			log.Printf("wal rotate: remove temp file after rename failure: %v", removeErr)
-		}
-		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
-		if recoverErr == nil {
-			w.file = recoveredF
-		} else {
-			log.Printf("wal rotate: recovery open failed after rename failure: %v", recoverErr)
-		}
+		logRemove(w.path + ".tmp")
+		w.recoverOpen()
 		return fmt.Errorf("wal rotate rename: %w", err)
 	}
 
 	// 将临时新文件重命名为正式 WAL 路径
 	if err := os.Rename(w.path+".tmp", w.path); err != nil {
-		// 极端情况：旧文件已重命名，新文件重命名失败
-		// 尝试将 .prev 改回来恢复
+		// 极端情况：旧文件已重命名，新文件重命名失败，尝试恢复
 		// 关闭新文件描述符，避免泄漏
 		if closeErr := newF.Close(); closeErr != nil {
 			log.Printf("wal rotate: close temp file after rename failure: %v", closeErr)
@@ -274,18 +253,37 @@ func (w *WAL) maybeRotate() error {
 		if renameErr := os.Rename(rotatedPath, w.path); renameErr != nil {
 			log.Printf("wal rotate: recovery rename failed: %v", renameErr)
 		}
-		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
-		if recoverErr == nil {
-			w.file = recoveredF
-		} else {
-			log.Printf("wal rotate: recovery open failed after temp rename failure: %v", recoverErr)
-		}
+		w.recoverOpen()
 		return fmt.Errorf("wal rotate rename temp: %w", err)
 	}
 
 	w.file = newF
 	w.offset = 0
 	return nil
+}
+
+// recoverOpen 尝试重新打开 WAL 文件用于错误恢复，失败时记录日志。
+func (w *WAL) recoverOpen() {
+	f, err := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
+	if err == nil {
+		w.file = f
+	} else {
+		log.Printf("wal: recovery open failed: %v", err)
+	}
+}
+
+// logClose 记录文件关闭错误。
+func logClose(f *os.File) {
+	if err := f.Close(); err != nil {
+		log.Printf("wal: close file in error path: %v", err)
+	}
+}
+
+// logRemove 记录文件删除错误。
+func logRemove(path string) {
+	if err := os.Remove(path); err != nil {
+		log.Printf("wal: remove file in error path: %v", err)
+	}
 }
 
 // recordBufPool 复用 WAL 记录编码缓冲区，减少写路径上的堆分配。
