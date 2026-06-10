@@ -50,32 +50,17 @@ func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 		return decodedColumn{}, false
 	}
 
-	// 先用读锁检查是否存在
-	c.mu.RLock()
-	_, ok := c.items[key]
-	c.mu.RUnlock()
-
-	if !ok {
-		c.mu.Lock()
-		c.misses++
-		c.mu.Unlock()
-		return decodedColumn{}, false
-	}
-
-	// 命中时需要写锁来移动到前端并更新计数器
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 双检：在获取写锁后再次确认条目仍然存在
-	elem, ok := c.items[key]
-	if !ok {
-		c.misses++
-		return decodedColumn{}, false
+	if elem, ok := c.items[key]; ok {
+		c.order.MoveToFront(elem)
+		c.hits++
+		return elem.Value.(*cacheEntry).data, true
 	}
 
-	c.order.MoveToFront(elem)
-	c.hits++
-	return elem.Value.(*cacheEntry).data, true
+	c.misses++
+	return decodedColumn{}, false
 }
 
 // put 将已解码的列数据放入缓存。
@@ -287,27 +272,15 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
 		return nil, false
 	}
 
-	// 先用读锁检查是否存在
-	c.mu.RLock()
-	_, ok := c.items[segmentID]
-	c.mu.RUnlock()
-
-	if !ok {
-		return nil, false
-	}
-
-	// 命中时需要写锁来移动到前端
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// 双检：在获取写锁后再次确认条目仍然存在
-	elem, ok := c.items[segmentID]
-	if !ok {
-		return nil, false
+	if elem, ok := c.items[segmentID]; ok {
+		c.order.MoveToFront(elem)
+		return elem.Value.(*indexCacheEntry).stats, true
 	}
 
-	c.order.MoveToFront(elem)
-	return elem.Value.(*indexCacheEntry).stats, true
+	return nil, false
 }
 
 // PutColumnStats 将 Segment 的列统计信息放入缓存。
