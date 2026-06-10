@@ -147,7 +147,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		// HTTP 监听失败，需优雅关闭已启动的 TCP goroutine
 		close(s.done)
-		_ = s.tcpListener.Close() // 错误路径，忽略关闭错误
+		if closeErr := s.tcpListener.Close(); closeErr != nil {
+			log.Printf("server: close tcp listener after http listen failure: %v", closeErr)
+		}
 		s.wg.Wait()
 		// 重置 done 通道，允许后续重试 Start
 		s.done = make(chan struct{})
@@ -195,13 +197,19 @@ func (s *Server) Stop() error {
 	close(s.done)
 
 	if s.tcpListener != nil {
-		_ = s.tcpListener.Close() // 关闭错误不影响主流程
+		if err := s.tcpListener.Close(); err != nil {
+			log.Printf("server: close tcp listener: %v", err)
+		}
 	}
 	if s.httpListener != nil {
-		_ = s.httpListener.Close() // 关闭错误不影响主流程
+		if err := s.httpListener.Close(); err != nil {
+			log.Printf("server: close http listener: %v", err)
+		}
 	}
 	if s.httpServer != nil {
-		_ = s.httpServer.Close() // 关闭错误不影响主流程
+		if err := s.httpServer.Close(); err != nil {
+			log.Printf("server: close http server: %v", err)
+		}
 	}
 
 	s.wg.Wait()
