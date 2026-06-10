@@ -19,7 +19,7 @@ func TestOpenWALWithValidRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWAL failed: %v", err)
 	}
-	if err := w.AppendWrite([]byte("record1")); err != nil {
+	if err := w.AppendWrite([]byte(walRec1)); err != nil {
 		t.Fatalf("AppendWrite failed: %v", err)
 	}
 	if err := w.AppendCommit([]byte("commit1")); err != nil {
@@ -42,7 +42,7 @@ func TestOpenWALWithValidRecords(t *testing.T) {
 	if len(records) != 3 {
 		t.Fatalf("expected 3 records, got %d", len(records))
 	}
-	if records[0].Type != walTypeWrite || string(records[0].Payload) != "record1" {
+	if records[0].Type != walTypeWrite || string(records[0].Payload) != walRec1 {
 		t.Errorf("record 0: type=%d payload=%q", records[0].Type, records[0].Payload)
 	}
 	if records[1].Type != walTypeCommit || string(records[1].Payload) != "commit1" {
@@ -323,7 +323,7 @@ func TestOpenWALReplayCorruptCRC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWAL 失败: %v", err)
 	}
-	if err := w.AppendWrite([]byte("record1")); err != nil {
+	if err := w.AppendWrite([]byte(walRec1)); err != nil {
 		t.Fatalf("AppendWrite record1 失败: %v", err)
 	}
 	if err := w.AppendWrite([]byte("record2")); err != nil {
@@ -362,8 +362,8 @@ func TestOpenWALReplayCorruptCRC(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("期望 2 条有效记录，得到 %d", len(records))
 	}
-	if string(records[0].Payload) != "record1" {
-		t.Errorf("record0: 期望 %q，得到 %q", "record1", string(records[0].Payload))
+	if string(records[0].Payload) != walRec1 {
+		t.Errorf("record0: 期望 %q，得到 %q", walRec1, string(records[0].Payload))
 	}
 	if string(records[1].Payload) != "record2" {
 		t.Errorf("record1: 期望 %q，得到 %q", "record2", string(records[1].Payload))
