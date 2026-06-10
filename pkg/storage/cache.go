@@ -3,6 +3,7 @@ package storage
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,21 +46,27 @@ func NewBlockCache(capacity int64) *BlockCache {
 
 // get 从缓存中获取指定列的已解码数据。
 // 返回 (decodedColumn, true) 表示命中，(decodedColumn{}, false) 表示未命中。
+// 使用 RLock 读取缓存数据，减少读路径锁竞争；hits/misses 使用原子操作避免竞态。
 func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 	if c == nil || c.capacity <= 0 {
 		return decodedColumn{}, false
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+	c.mu.RLock()
 	if elem, ok := c.items[key]; ok {
-		c.order.MoveToFront(elem)
-		c.hits++
-		return elem.Value.(*cacheEntry).data, true
+		data := elem.Value.(*cacheEntry).data
+		c.mu.RUnlock()
+		atomic.AddInt64(&c.hits, 1)
+		// MoveToFront 需要写锁，单独获取以减少读路径阻塞
+		c.mu.Lock()
+		if elem, ok = c.items[key]; ok {
+			c.order.MoveToFront(elem)
+		}
+		c.mu.Unlock()
+		return data, true
 	}
-
-	c.misses++
+	c.mu.RUnlock()
+	atomic.AddInt64(&c.misses, 1)
 	return decodedColumn{}, false
 }
 
@@ -182,26 +189,33 @@ type CacheStats struct {
 }
 
 // Stats 返回当前缓存的统计信息。
+// hits/misses 通过原子操作读取，无需持锁，避免与读路径的 RLock 竞争。
 func (c *BlockCache) Stats() CacheStats {
 	if c == nil {
 		return CacheStats{}
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	hits := atomic.LoadInt64(&c.hits)
+	misses := atomic.LoadInt64(&c.misses)
 
-	total := c.hits + c.misses
+	c.mu.RLock()
+	used := c.used
+	capacity := c.capacity
+	entries := len(c.items)
+	c.mu.RUnlock()
+
+	total := hits + misses
 	var hitRate float64
 	if total > 0 {
-		hitRate = float64(c.hits) / float64(total)
+		hitRate = float64(hits) / float64(total)
 	}
 
 	return CacheStats{
-		Hits:     c.hits,
-		Misses:   c.misses,
-		Size:     c.used,
-		Capacity: c.capacity,
-		Entries:  len(c.items),
+		Hits:     hits,
+		Misses:   misses,
+		Size:     used,
+		Capacity: capacity,
+		Entries:  entries,
 		HitRate:  hitRate,
 	}
 }

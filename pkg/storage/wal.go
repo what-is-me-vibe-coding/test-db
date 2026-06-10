@@ -250,6 +250,7 @@ func (w *WAL) maybeRotate() error {
 	if err := os.Rename(w.path+".tmp", w.path); err != nil {
 		// 极端情况：旧文件已重命名，新文件重命名失败
 		// 尝试将 .prev 改回来恢复
+		_ = newF.Close()                   // 关闭新文件描述符，避免泄漏
 		_ = os.Rename(rotatedPath, w.path) // 错误恢复路径，忽略重命名错误
 		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
 		if recoverErr == nil {

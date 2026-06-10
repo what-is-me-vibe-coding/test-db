@@ -259,7 +259,15 @@ func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 执行错误: %v", err)}, nil
 	}
 
-	data := chunksToRows(chunks)
+	// 从查询计划的 Schema 中提取列名，用于 JSON 响应的 key
+	var colNames []string
+	if schema := optimized.Schema(); len(schema) > 0 {
+		colNames = make([]string, len(schema))
+		for i, col := range schema {
+			colNames[i] = col.Name
+		}
+	}
+	data := chunksToRows(chunks, colNames)
 	totalRows := countRows(chunks)
 
 	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
