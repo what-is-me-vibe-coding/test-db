@@ -127,10 +127,11 @@ func TestNeedsProjection_SimpleColumnsNoProjection(t *testing.T) {
 
 // --- buildChunksFromEntries 覆盖率提升测试 ---
 
-// TestBuildChunksFromEntries_EmptyEntries 测试空 entries 返回 nil。
-func TestBuildChunksFromEntries_EmptyEntries(t *testing.T) {
-	schema := []ColumnDef{
-		{Name: testColID, Type: common.TypeInt64, Nullable: false},
+// TestBuildChunksFromEntries_EmptyInputs 测试空 entries/schema 返回 nil。
+func TestBuildChunksFromEntries_EmptyInputs(t *testing.T) {
+	schema := []ColumnDef{{Name: testColID, Type: common.TypeInt64, Nullable: false}}
+	entries := []storage.ScanEntry{
+		{Key: "a", Value: storage.Row{Columns: map[string]common.Value{testColID: common.NewInt64(1)}}},
 	}
 	chunks, err := buildChunksFromEntries(nil, schema, 1024)
 	if err != nil {
@@ -139,19 +140,26 @@ func TestBuildChunksFromEntries_EmptyEntries(t *testing.T) {
 	if chunks != nil {
 		t.Errorf("buildChunksFromEntries(空entries) = %v, want nil", chunks)
 	}
-}
-
-// TestBuildChunksFromEntries_EmptySchema 测试空 schema 返回 nil。
-func TestBuildChunksFromEntries_EmptySchema(t *testing.T) {
-	entries := []storage.ScanEntry{
-		{Key: "a", Value: storage.Row{Columns: map[string]common.Value{testColID: common.NewInt64(1)}}},
-	}
-	chunks, err := buildChunksFromEntries(entries, nil, 1024)
+	chunks, err = buildChunksFromEntries(entries, nil, 1024)
 	if err != nil {
 		t.Fatalf("buildChunksFromEntries: %v", err)
 	}
 	if chunks != nil {
 		t.Errorf("buildChunksFromEntries(空schema) = %v, want nil", chunks)
+	}
+	chunks, err = buildChunksFromEntries(nil, nil, 1024)
+	if err != nil {
+		t.Fatalf("buildChunksFromEntries: %v", err)
+	}
+	if chunks != nil {
+		t.Errorf("buildChunksFromEntries(空entries和schema) = %v, want nil", chunks)
+	}
+	chunks, err = buildChunksFromEntries([]storage.ScanEntry{}, schema, 1024)
+	if err != nil {
+		t.Fatalf("buildChunksFromEntries: %v", err)
+	}
+	if chunks != nil {
+		t.Errorf("buildChunksFromEntries(空entries切片) = %v, want nil", chunks)
 	}
 }
 
@@ -436,26 +444,6 @@ func TestConvertLimit_InvalidCountValue(t *testing.T) {
 	_, err := p.convertLimit(limit)
 	if err == nil {
 		t.Error("convertLimit(负数count) 应返回错误，got nil")
-	}
-}
-
-// TestBuildChunksFromEntries_EmptyEntriesAndSchema 测试空 entries 和空 schema 都返回 nil。
-func TestBuildChunksFromEntries_EmptyEntriesAndSchema(t *testing.T) {
-	chunks, err := buildChunksFromEntries(nil, nil, 1024)
-	if err != nil {
-		t.Fatalf("buildChunksFromEntries: %v", err)
-	}
-	if chunks != nil {
-		t.Errorf("buildChunksFromEntries(空entries和schema) = %v, want nil", chunks)
-	}
-
-	// 空 entries 切片（非 nil）也应返回 nil
-	chunks, err = buildChunksFromEntries([]storage.ScanEntry{}, []ColumnDef{{Name: testColID, Type: common.TypeInt64}}, 1024)
-	if err != nil {
-		t.Fatalf("buildChunksFromEntries: %v", err)
-	}
-	if chunks != nil {
-		t.Errorf("buildChunksFromEntries(空entries切片) = %v, want nil", chunks)
 	}
 }
 
