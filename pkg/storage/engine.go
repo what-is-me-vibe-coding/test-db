@@ -1,3 +1,5 @@
+// Package storage 实现存储引擎核心，包括 WAL、MemTable、Segment、Compaction。
+// 可依赖 pkg/common 与 pkg/catalog。
 package storage
 
 import (
@@ -5,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -310,6 +313,101 @@ func (e *Engine) Close() error {
 
 	if err := e.wal.Close(); err != nil {
 		return fmt.Errorf("engine close: close wal: %w", err)
+	}
+
+	return nil
+}
+
+// parseSegmentEntry parses a directory entry into a Segment, returning the segment,
+// its ID, whether the entry was a segment file, and an error if it was a segment file
+// that failed to load.
+func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool, error) {
+	if entry.IsDir() {
+		return nil, 0, false, nil
+	}
+	name := entry.Name()
+	if !strings.HasPrefix(name, "segment_") || !strings.HasSuffix(name, ".widb") {
+		return nil, 0, false, nil
+	}
+
+	filePath := filepath.Join(e.flusher.dataDir, name)
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, 0, true, fmt.Errorf("failed to read segment file %s: %w", name, err)
+	}
+
+	seg, err := DeserializeSegment(data)
+	if err != nil {
+		return nil, 0, true, fmt.Errorf("failed to deserialize segment file %s: %w", name, err)
+	}
+	seg.FilePath = filePath
+
+	// Extract segment ID from filename: segment_<id>.widb
+	idStr := name[len("segment_") : len(name)-len(".widb")]
+	var segID uint64
+	if _, err := fmt.Sscanf(idStr, "%d", &segID); err == nil {
+		seg.ID = segID
+	}
+
+	// Derive MinKey/MaxKey from sorted keys
+	if len(seg.Keys) > 0 {
+		seg.MinKey = seg.Keys[0]
+		seg.MaxKey = seg.Keys[len(seg.Keys)-1]
+	}
+
+	return seg, segID, true, nil
+}
+
+// loadSegments 从磁盘加载已有的 Segment 文件。
+func (e *Engine) loadSegments() error {
+	entries, err := os.ReadDir(e.flusher.dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("engine: read data dir: %w", err)
+	}
+
+	var maxSegID uint64
+	var segFileCount int
+	var failedCount int
+	for _, entry := range entries {
+		seg, segID, isSegFile, parseErr := e.parseSegmentEntry(entry)
+		if !isSegFile {
+			continue
+		}
+		segFileCount++
+		if parseErr != nil {
+			log.Printf("engine: %v", parseErr)
+			failedCount++
+			continue
+		}
+		e.segments = append(e.segments, seg)
+		e.segmentMap[seg.ID] = seg
+		e.segmentLevels = append(e.segmentLevels, 0)
+		if segID > maxSegID {
+			maxSegID = segID
+		}
+	}
+
+	if failedCount > 0 {
+		log.Printf("engine: warning: %d of %d segment files failed to load during recovery", failedCount, segFileCount)
+		if failedCount == segFileCount {
+			return fmt.Errorf("engine: all %d segment files failed to load during recovery", segFileCount)
+		}
+	}
+
+	// Register indexes for loaded segments
+	for i, seg := range e.segments {
+		if err := e.registerSegmentIndexes(seg, e.segmentLevels[i]); err != nil {
+			return fmt.Errorf("engine: register segment %d indexes: %w", seg.ID, err)
+		}
+	}
+
+	// Update flusher and compactor nextID to avoid ID collisions
+	if maxSegID > 0 {
+		e.flusher.nextID = maxSegID
+		e.compactor.nextID = maxSegID
 	}
 
 	return nil
