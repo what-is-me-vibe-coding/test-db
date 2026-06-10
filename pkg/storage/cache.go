@@ -52,13 +52,15 @@ func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 		return decodedColumn{}, false
 	}
 
+	// Fast path: read-only lookup with RLock (allows concurrent reads)
 	c.mu.RLock()
 	if elem, ok := c.items[key]; ok {
 		data := elem.Value.(*cacheEntry).data
 		c.mu.RUnlock()
 		atomic.AddInt64(&c.hits, 1)
-		// MoveToFront 需要写锁，单独获取以减少读路径阻塞
+		// Slow path: move to front with write lock (brief hold)
 		c.mu.Lock()
+		// Re-check since the entry might have been evicted between RUnlock and Lock
 		if elem, ok = c.items[key]; ok {
 			c.order.MoveToFront(elem)
 		}
@@ -286,15 +288,24 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
 		return nil, false
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if elem, ok := c.items[segmentID]; ok {
-		c.order.MoveToFront(elem)
-		return elem.Value.(*indexCacheEntry).stats, true
+	// Fast path: read-only lookup with RLock
+	c.mu.RLock()
+	elem, ok := c.items[segmentID]
+	if !ok {
+		c.mu.RUnlock()
+		return nil, false
 	}
+	stats := elem.Value.(*indexCacheEntry).stats
+	c.mu.RUnlock()
 
-	return nil, false
+	// Slow path: move to front with write lock
+	c.mu.Lock()
+	if elem, ok = c.items[segmentID]; ok {
+		c.order.MoveToFront(elem)
+	}
+	c.mu.Unlock()
+
+	return stats, true
 }
 
 // PutColumnStats 将 Segment 的列统计信息放入缓存。

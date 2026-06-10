@@ -56,7 +56,6 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 		// 创建新 map 而非清空复用，避免逐键删除的开销
 		columns := make(map[string]common.Value, len(e.columnMeta))
 		for colIdx, col := range e.columnMeta {
-			// 优先从 BlockCache 获取已解码的列数据
 			cacheKey := CacheKey{SegmentID: segID, ColumnIdx: uint32(colIdx)}
 			if dc, ok := e.blockCache.get(cacheKey); ok {
 				columns[col.Name] = extractValue(dc, rowIdx)
@@ -66,6 +65,10 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 					continue
 				}
 				columns[col.Name] = val
+				// Cache the decoded column for future queries
+				if dc, ok := seg.getColCache(uint32(colIdx)); ok {
+					e.blockCache.put(cacheKey, dc)
+				}
 			}
 		}
 		return Row{Version: seg.ID, Columns: columns}, true
