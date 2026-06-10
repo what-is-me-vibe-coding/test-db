@@ -41,9 +41,9 @@ func TestHandleQueryPacketInvalidJSON_CovV2(t *testing.T) {
 		payload []byte
 	}{
 		{"空payload", []byte{}},
-		{"不完整JSON", []byte("{")},
-		{"纯数字", []byte("42")},
-		{"二进制垃圾", []byte{0x00, 0xFF, 0xFE}},
+		{testNameIncompleteJSON, []byte("{")},
+		{testNamePureNumber, []byte("42")},
+		{testNameBinaryGarbage, []byte{0x00, 0xFF, 0xFE}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,9 +70,9 @@ func TestHandleWritePacketInvalidJSON_CovV2(t *testing.T) {
 		payload []byte
 	}{
 		{"空payload", []byte{}},
-		{"不完整JSON", []byte("{")},
-		{"纯数字", []byte("42")},
-		{"二进制垃圾", []byte{0xDE, 0xAD}},
+		{testNameIncompleteJSON, []byte("{")},
+		{testNamePureNumber, []byte("42")},
+		{testNameBinaryGarbage, []byte{0xDE, 0xAD}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
