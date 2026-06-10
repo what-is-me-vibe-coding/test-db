@@ -96,7 +96,7 @@ func TestIsClosedConnErr_V4(t *testing.T) {
 		{"net.ErrClosed", net.ErrClosed, true},
 		{"wrapped net.ErrClosed", fmt.Errorf("wrap: %w", net.ErrClosed), true},
 		{"regular error", errors.New("something else"), false},
-		{testNameNilError, nil, false},
+		{testNameNilErr, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -144,7 +144,7 @@ func TestIsTransientAcceptErr_V4(t *testing.T) {
 			false,
 		},
 		{
-			testNameNilError,
+			testNameNilErr,
 			nil,
 			false,
 		},
