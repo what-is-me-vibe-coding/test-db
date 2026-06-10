@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -31,7 +32,7 @@ var crcTable = crc32.MakeTable(crc32.Castagnoli)
 type WAL struct {
 	file    *os.File
 	path    string
-	offset  int64
+	offset  atomic.Int64 // 无锁读取当前偏移量
 	maxSize int64
 	mu      sync.Mutex
 }
@@ -57,7 +58,6 @@ func CreateWAL(path string) (*WAL, error) {
 	return &WAL{
 		file:    f,
 		path:    path,
-		offset:  0,
 		maxSize: walDefaultMaxSize,
 	}, nil
 }
@@ -92,9 +92,9 @@ func OpenWAL(path string) (*WAL, []RawRecord, error) {
 	w := &WAL{
 		file:    f,
 		path:    path,
-		offset:  validOffset,
 		maxSize: walDefaultMaxSize,
 	}
+	w.offset.Store(validOffset)
 
 	return w, records, nil
 }
@@ -118,7 +118,7 @@ func (w *WAL) Append(tp byte, payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("wal write: %w", err)
 	}
-	w.offset += int64(n)
+	w.offset.Add(int64(n))
 	return nil
 }
 
@@ -141,7 +141,7 @@ func (w *WAL) AppendBatch(records []BatchRecord) error {
 		if err != nil {
 			return fmt.Errorf("wal write batch: %w", err)
 		}
-		w.offset += int64(n)
+		w.offset.Add(int64(n))
 	}
 	return nil
 }
@@ -169,10 +169,9 @@ func (w *WAL) Sync() error {
 }
 
 // Size 返回当前 WAL 文件的字节偏移量。
+// 使用 atomic 读取，无需获取互斥锁，适合高频监控调用。
 func (w *WAL) Size() int64 {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.offset
+	return w.offset.Load()
 }
 
 // Close 同步并关闭 WAL 文件。
@@ -206,7 +205,7 @@ func (w *WAL) Truncate() error {
 	}
 
 	w.file = f
-	w.offset = 0
+	w.offset.Store(0)
 	return nil
 }
 
@@ -214,7 +213,7 @@ func (w *WAL) Truncate() error {
 // 采用"先建后删"策略：先创建新文件，再重命名旧文件，
 // 避免在 Rename 成功但 Create 失败时导致 WAL 不可用。
 func (w *WAL) maybeRotate() error {
-	if w.offset < w.maxSize {
+	if w.offset.Load() < w.maxSize {
 		return nil
 	}
 
@@ -258,7 +257,7 @@ func (w *WAL) maybeRotate() error {
 	}
 
 	w.file = newF
-	w.offset = 0
+	w.offset.Store(0)
 	return nil
 }
 

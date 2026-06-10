@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
@@ -19,23 +20,25 @@ const (
 type Compactor struct {
 	mu      sync.Mutex
 	dataDir string
-	nextID  uint64
+	nextID  atomic.Uint64 // 无锁读取 segment ID
 }
 
 // SetNextID updates the compactor's nextID if the given id is larger.
 func (c *Compactor) SetNextID(id uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if id > c.nextID {
-		c.nextID = id
+	for {
+		current := c.nextID.Load()
+		if id <= current {
+			return
+		}
+		if c.nextID.CompareAndSwap(current, id) {
+			return
+		}
 	}
 }
 
-// NextID returns the compactor's current nextID.
+// NextID 无锁读取 compactor 的当前 nextID。
 func (c *Compactor) NextID() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.nextID
+	return c.nextID.Load()
 }
 
 // NewCompactor 创建一个 Compactor 实例。
@@ -265,8 +268,8 @@ func (c *Compactor) buildSegment(rows []memRow, cols []ColumnMeta) (*Segment, er
 	minKey := rows[0].Key
 	maxKey := rows[len(rows)-1].Key
 
-	c.nextID++
-	builder := NewSegmentBuilder(c.nextID, minKey, maxKey)
+	c.nextID.Add(1)
+	builder := NewSegmentBuilder(c.nextID.Load(), minKey, maxKey)
 
 	keys := make([]string, len(rows))
 	for i, row := range rows {
@@ -301,7 +304,7 @@ func (c *Compactor) buildSegment(rows []memRow, cols []ColumnMeta) (*Segment, er
 		return nil, fmt.Errorf("compactor: build segment: %w", err)
 	}
 
-	fileName := filepath.Join(c.dataDir, fmt.Sprintf("segment_%d.widb", c.nextID))
+	fileName := filepath.Join(c.dataDir, fmt.Sprintf("segment_%d.widb", c.nextID.Load()))
 	data, err := seg.Serialize()
 	if err != nil {
 		return nil, fmt.Errorf("compactor: serialize segment: %w", err)

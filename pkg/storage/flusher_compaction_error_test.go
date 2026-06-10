@@ -121,7 +121,7 @@ func TestCompactorBuildSegmentMkdirAllError(t *testing.T) {
 	defer func() { _ = os.Remove(tmpPath) }()
 
 	compactor := NewCompactor(tmpPath + "/subdir/data")
-	compactor.nextID = 1
+	compactor.nextID.Store(1)
 
 	rows := []memRow{
 		{Key: "k1", Values: []common.Value{
@@ -141,7 +141,7 @@ func TestCompactorBuildSegmentMkdirAllError(t *testing.T) {
 func TestCompactorBuildSegmentWriteFileError(t *testing.T) {
 	tmpDir := t.TempDir()
 	compactor := NewCompactor(tmpDir)
-	compactor.nextID = 1
+	compactor.nextID.Store(1)
 
 	// 预先创建一个目录，路径与 buildSegment 将要写入的文件路径相同
 	// buildSegment 会先执行 c.nextID++，所以 nextID 从 1 变为 2，文件名为 segment_2.widb
@@ -236,7 +236,7 @@ func TestCompactorCleanupSegmentsRemoveError(t *testing.T) {
 func TestCompactorBuildSegmentTypeMismatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	compactor := NewCompactor(tmpDir)
-	compactor.nextID = 1
+	compactor.nextID.Store(1)
 
 	// 列定义是 INT64，但行数据中是 STRING
 	rows := []memRow{
@@ -256,7 +256,7 @@ func TestCompactorBuildSegmentTypeMismatch(t *testing.T) {
 func TestCompactorBuildSegmentNullTypeMismatch(t *testing.T) {
 	tmpDir := t.TempDir()
 	compactor := NewCompactor(tmpDir)
-	compactor.nextID = 1
+	compactor.nextID.Store(1)
 
 	// 列定义是 STRING，但行数据中是 INT64（非 null，类型不匹配）
 	rows := []memRow{
