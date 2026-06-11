@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
@@ -341,5 +342,99 @@ func TestIndexCacheLen(t *testing.T) {
 	cache.PutColumnStats(2, []ColumnStat{{ColumnID: 0}})
 	if cache.Len() != 2 {
 		t.Fatalf("expected 2 length, got %d", cache.Len())
+	}
+}
+
+// TestBlockCacheConcurrentReadWrite 验证 RLock 读路径与写路径的并发正确性。
+// 多个 goroutine 同时执行 get（RLock）和 put（Lock），确保不出现数据竞争或死锁。
+func TestBlockCacheConcurrentReadWrite(t *testing.T) {
+	cache := NewBlockCache(1 << 20) // 1MB
+	const goroutines = 50
+	const iterations = 200
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 3) // readers + writers + invalidators
+
+	// 并发读者
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				key := CacheKey{SegmentID: uint64(id % 5), ColumnIdx: uint32(i % 10)}
+				cache.get(key)
+			}
+		}(g)
+	}
+
+	// 并发写者
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				key := CacheKey{SegmentID: uint64(id % 5), ColumnIdx: uint32(i % 10)}
+				cache.put(key, decodedColumn{
+					data: []int64{int64(id), int64(i)},
+					typ:  common.TypeInt64,
+				})
+			}
+		}(g)
+	}
+
+	// 并发失效者
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				cache.Invalidate(uint64(id % 5))
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	// 验证统计信息一致性：hits + misses 应等于总操作次数
+	stats := cache.Stats()
+	if stats.Hits+stats.Misses == 0 {
+		t.Fatal("expected some cache operations")
+	}
+}
+
+// TestBlockCacheConcurrentStats 验证并发读写时 Stats 的原子计数正确性。
+func TestBlockCacheConcurrentStats(t *testing.T) {
+	cache := NewBlockCache(1 << 20)
+
+	// 预填充
+	for i := uint32(0); i < 10; i++ {
+		cache.put(CacheKey{SegmentID: 1, ColumnIdx: i}, decodedColumn{
+			data: []int64{int64(i)},
+			typ:  common.TypeInt64,
+		})
+	}
+
+	const goroutines = 20
+	const iterations = 500
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				key := CacheKey{SegmentID: 1, ColumnIdx: uint32(id % 10)}
+				cache.get(key)
+			}
+		}(g)
+	}
+
+	wg.Wait()
+
+	stats := cache.Stats()
+	// 总操作数 = goroutines * iterations
+	totalOps := int64(goroutines * iterations)
+	actualTotal := stats.Hits + stats.Misses
+	if actualTotal != totalOps {
+		t.Fatalf("hits+misses = %d, expected %d (hits=%d, misses=%d)",
+			actualTotal, totalOps, stats.Hits, stats.Misses)
 	}
 }

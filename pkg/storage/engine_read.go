@@ -30,13 +30,8 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 		return Row{}, false
 	}
 
-	// Sort segment IDs in ascending order so that newer segments (higher IDs)
-	// are checked first when iterating in reverse.
 	sort.Slice(segIDs, func(i, j int) bool { return segIDs[i] < segIDs[j] })
 
-	// Iterate in reverse order: since segment IDs are monotonically increasing,
-	// higher IDs appear later in the slice, so reverse iteration checks
-	// newer segments first without allocating a sorted copy.
 	for i := len(segIDs) - 1; i >= 0; i-- {
 		segID := segIDs[i]
 		if !e.bloomIndex.MayContainString(segID, key) {
@@ -89,8 +84,6 @@ func (e *Engine) findSegmentByID(segID uint64) *Segment {
 }
 
 // Scan 扫描指定键范围内的所有行。
-// 使用 MergeIterator 合并所有数据源（MemTable、Immutable、Segment），
-// 结果按键排序，重复键取最新版本。
 func (e *Engine) Scan(start, end string) []struct {
 	Key   string
 	Value Row

@@ -104,7 +104,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	} else {
 		// Replay WAL records to recover data
 		if err := eng.replayWALRecords(records); err != nil {
-			_ = wal.Close() // 错误路径，忽略关闭错误
+			if closeErr := wal.Close(); closeErr != nil {
+				log.Printf("engine: close wal after replay failure: %v", closeErr)
+			}
 			return nil, fmt.Errorf("engine: replay wal: %w", err)
 		}
 	}

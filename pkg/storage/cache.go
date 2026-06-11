@@ -3,6 +3,7 @@ package storage
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,7 +46,7 @@ func NewBlockCache(capacity int64) *BlockCache {
 
 // get 从缓存中获取指定列的已解码数据。
 // 返回 (decodedColumn, true) 表示命中，(decodedColumn{}, false) 表示未命中。
-// 使用 RLock 快速路径检查存在性，仅在命中时升级为写锁以更新 LRU 顺序。
+// 使用 RLock 读取缓存数据，减少读路径锁竞争；hits/misses 使用原子操作避免竞态。
 func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 	if c == nil || c.capacity <= 0 {
 		return decodedColumn{}, false
@@ -53,27 +54,22 @@ func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 
 	// 快速路径：读锁查找（允许并发读）
 	c.mu.RLock()
-	elem, ok := c.items[key]
-	if !ok {
+	if elem, ok := c.items[key]; ok {
+		data := elem.Value.(*cacheEntry).data
 		c.mu.RUnlock()
+		atomic.AddInt64(&c.hits, 1)
+		// 慢路径：短暂写锁更新 LRU 顺序
 		c.mu.Lock()
-		c.misses++
+		// 双检：在 RUnlock 和 Lock 之间可能被淘汰
+		if elem, ok = c.items[key]; ok {
+			c.order.MoveToFront(elem)
+		}
 		c.mu.Unlock()
-		return decodedColumn{}, false
+		return data, true
 	}
-	data := elem.Value.(*cacheEntry).data
 	c.mu.RUnlock()
-
-	// 慢路径：短暂写锁更新 LRU 顺序
-	c.mu.Lock()
-	// 双检：在 RUnlock 和 Lock 之间可能被淘汰
-	if elem, ok = c.items[key]; ok {
-		c.order.MoveToFront(elem)
-	}
-	c.hits++
-	c.mu.Unlock()
-
-	return data, true
+	atomic.AddInt64(&c.misses, 1)
+	return decodedColumn{}, false
 }
 
 // put 将已解码的列数据放入缓存。
@@ -128,13 +124,11 @@ func (c *BlockCache) removeFromSegIndex(key CacheKey) {
 	keys := c.segIndex[key.SegmentID]
 	for i, k := range keys {
 		if k == key {
-			// 用最后一个元素覆盖被删除的位置，然后截断
-			// 不需要保持顺序，因为 Invalidate 会删除整个 segment 的所有缓存
 			lastIdx := len(keys) - 1
 			if i < lastIdx {
 				keys[i] = keys[lastIdx]
 			}
-			keys[lastIdx] = CacheKey{} // 零化防止内存泄漏
+			keys[lastIdx] = CacheKey{}
 			c.segIndex[key.SegmentID] = keys[:lastIdx]
 			break
 		}
@@ -195,33 +189,40 @@ type CacheStats struct {
 }
 
 // Stats 返回当前缓存的统计信息。
+// hits/misses 通过原子操作读取，无需持锁，避免与读路径的 RLock 竞争。
 func (c *BlockCache) Stats() CacheStats {
 	if c == nil {
 		return CacheStats{}
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	hits := atomic.LoadInt64(&c.hits)
+	misses := atomic.LoadInt64(&c.misses)
 
-	total := c.hits + c.misses
+	c.mu.RLock()
+	used := c.used
+	capacity := c.capacity
+	entries := len(c.items)
+	c.mu.RUnlock()
+
+	total := hits + misses
 	var hitRate float64
 	if total > 0 {
-		hitRate = float64(c.hits) / float64(total)
+		hitRate = float64(hits) / float64(total)
 	}
 
 	return CacheStats{
-		Hits:     c.hits,
-		Misses:   c.misses,
-		Size:     c.used,
-		Capacity: c.capacity,
-		Entries:  len(c.items),
+		Hits:     hits,
+		Misses:   misses,
+		Size:     used,
+		Capacity: capacity,
+		Entries:  entries,
 		HitRate:  hitRate,
 	}
 }
 
 // estimateDecodedSize 估算已解码列数据的内存占用。
 func estimateDecodedSize(dc decodedColumn) int64 {
-	const overhead = 64 // decodedColumn 结构体本身的开销
+	const overhead = 64
 
 	if dc.data == nil {
 		return overhead
@@ -237,15 +238,14 @@ func estimateDecodedSize(dc decodedColumn) int64 {
 		dataSize = int64(len(v)) * 8
 	case []string:
 		for _, s := range v {
-			dataSize += int64(len(s)) + 16 // 字符串头开销
+			dataSize += int64(len(s)) + 16
 		}
 	case []time.Time:
 		dataSize = int64(len(v)) * 24
 	default:
-		dataSize = 256 // 未知类型默认估算
+		dataSize = 256
 	}
 
-	// NULL 位图开销
 	if dc.nulls != nil {
 		dataSize += int64(dc.nulls.Len()/8 + 32)
 	}
@@ -254,14 +254,11 @@ func estimateDecodedSize(dc decodedColumn) int64 {
 }
 
 // IndexCache 缓存 Segment 级别的索引元数据。
-// 当前 BloomIndex 和 SparseIndex 已在内存中维护，
-// IndexCache 主要缓存 Segment Footer 的列统计信息，
-// 避免重复解析 Segment 文件。
 type IndexCache struct {
 	mu       sync.RWMutex
 	capacity int
 	used     int
-	items    map[uint64]*list.Element // key: segmentID
+	items    map[uint64]*list.Element
 	order    *list.List
 }
 
@@ -323,7 +320,6 @@ func (c *IndexCache) PutColumnStats(segmentID uint64, stats []ColumnStat) {
 		return
 	}
 
-	// LRU 淘汰
 	for c.used >= c.capacity && c.order.Len() > 0 {
 		oldest := c.order.Back()
 		if oldest == nil {

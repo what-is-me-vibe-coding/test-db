@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -75,18 +76,18 @@ func OpenWAL(path string) (*WAL, []RawRecord, error) {
 
 	records, validOffset, err := replayWAL(f)
 	if err != nil {
-		_ = f.Close() // 错误路径，忽略关闭错误
+		logClose(f)
 		return nil, nil, fmt.Errorf("wal replay: %w", err)
 	}
 
 	// Truncate file at the last valid record position to remove
 	// any partial/corrupted data, then seek to the end for appending.
 	if err := f.Truncate(validOffset); err != nil {
-		_ = f.Close() // 错误路径，忽略关闭错误
+		logClose(f)
 		return nil, nil, fmt.Errorf("wal truncate: %w", err)
 	}
 	if _, err := f.Seek(validOffset, io.SeekStart); err != nil {
-		_ = f.Close() // 错误路径，忽略关闭错误
+		logClose(f)
 		return nil, nil, fmt.Errorf("wal seek: %w", err)
 	}
 
@@ -182,7 +183,7 @@ func (w *WAL) Close() error {
 	defer w.mu.Unlock()
 	// 先同步缓冲区到磁盘，再关闭文件，确保数据持久化
 	if err := w.file.Sync(); err != nil {
-		_ = w.file.Close() // 错误路径，忽略关闭错误
+		logClose(w.file)
 		return fmt.Errorf("wal close sync: %w", err)
 	}
 	return w.file.Close()
@@ -230,31 +231,29 @@ func (w *WAL) maybeRotate() error {
 	// 关闭旧文件
 	old := w.file
 	if err := old.Close(); err != nil {
-		_ = newF.Close()               // 错误路径，忽略关闭错误
-		_ = os.Remove(w.path + ".tmp") // 错误路径，忽略清理错误
+		logClose(newF)
+		logRemove(w.path + ".tmp")
 		return fmt.Errorf("wal rotate close: %w", err)
 	}
 
 	// 重命名旧文件为 .prev
 	if err := os.Rename(w.path, rotatedPath); err != nil {
-		// 旧文件已关闭但重命名失败，尝试恢复：重新打开旧路径
-		_ = os.Remove(w.path + ".tmp") // 错误路径，忽略清理错误
-		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
-		if recoverErr == nil {
-			w.file = recoveredF
-		}
+		logRemove(w.path + ".tmp")
+		w.recoverOpen()
 		return fmt.Errorf("wal rotate rename: %w", err)
 	}
 
 	// 将临时新文件重命名为正式 WAL 路径
 	if err := os.Rename(w.path+".tmp", w.path); err != nil {
-		// 极端情况：旧文件已重命名，新文件重命名失败
-		// 尝试将 .prev 改回来恢复
-		_ = os.Rename(rotatedPath, w.path) // 错误恢复路径，忽略重命名错误
-		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
-		if recoverErr == nil {
-			w.file = recoveredF
+		// 极端情况：旧文件已重命名，新文件重命名失败，尝试恢复
+		// 关闭新文件描述符，避免泄漏
+		if closeErr := newF.Close(); closeErr != nil {
+			log.Printf("wal rotate: close temp file after rename failure: %v", closeErr)
 		}
+		if renameErr := os.Rename(rotatedPath, w.path); renameErr != nil {
+			log.Printf("wal rotate: recovery rename failed: %v", renameErr)
+		}
+		w.recoverOpen()
 		return fmt.Errorf("wal rotate rename temp: %w", err)
 	}
 

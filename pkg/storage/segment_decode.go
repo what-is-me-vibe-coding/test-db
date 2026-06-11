@@ -73,8 +73,6 @@ func extractTimestampValue(data any, row uint32) common.Value {
 }
 
 // decodeAllColumns 一次性解压并解码 Segment 的所有列，返回解码缓存。
-// 用于范围扫描等需要读取多行的场景，避免每行重复解压解码。
-// 如果任一列解压或解码失败，返回错误。
 func (s *Segment) decodeAllColumns() ([]decodedColumn, error) {
 	columns := make([]decodedColumn, len(s.Columns))
 	for i := range s.Columns {
@@ -84,12 +82,10 @@ func (s *Segment) decodeAllColumns() ([]decodedColumn, error) {
 			Type:     src.Type,
 			RowCount: src.RowCount,
 		}
-		// Data 需要深拷贝，因为 DecompressColumn 会替换 enc.Data
 		if len(src.Data) > 0 {
 			enc.Data = make([]byte, len(src.Data))
 			copy(enc.Data, src.Data)
 		}
-		// Offsets 和 Nulls 只读，无需深拷贝，直接引用原始数据
 		if len(src.Offsets) > 0 {
 			enc.Offsets = src.Offsets
 		}
@@ -183,7 +179,6 @@ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, er
 }
 
 // getColCache returns the decoded column cache entry for the given column index.
-// Returns (decodedColumn, false) if the column has not been decoded yet.
 func (s *Segment) getColCache(colIdx uint32) (decodedColumn, bool) {
 	if int(colIdx) >= len(s.colCache) {
 		return decodedColumn{}, false
@@ -196,8 +191,6 @@ func (s *Segment) getColCache(colIdx uint32) (decodedColumn, bool) {
 }
 
 // GetAllColumnValues 提取指定行所有列的值。
-// 如果某列提取失败，跳过该列并在返回的 map 中不包含该列，
-// 但不会返回错误，以保证调用方仍可获取已成功提取的列值。
 func (s *Segment) GetAllColumnValues(rowIdx uint32, colMeta []ColumnMeta) (map[string]common.Value, error) {
 	values := make(map[string]common.Value, len(colMeta))
 	for colIdx, col := range colMeta {
