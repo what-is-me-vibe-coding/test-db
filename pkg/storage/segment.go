@@ -42,9 +42,16 @@ type Segment struct {
 	Keys     []string
 
 	// 逐列延迟解码缓存：首次访问某列时解码并缓存，避免点查时解码所有列
-	colCache  []decodedColumn
-	colOnce   []sync.Once
-	cacheInit sync.Once
+	colCache       []decodedColumn
+	colDecodeState []colDecodeState
+	cacheInit      sync.Once
+}
+
+// colDecodeState 跟踪逐列解码状态，支持解码失败时重试。
+// 替代 sync.Once 以解决解码失败后不可重试的问题。
+type colDecodeState struct {
+	mu      sync.Mutex
+	decoded bool
 }
 
 // SegmentID 返回 Segment 的唯一标识。

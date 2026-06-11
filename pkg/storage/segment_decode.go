@@ -2,7 +2,6 @@ package storage
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
@@ -124,13 +123,14 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
 func (s *Segment) ensureColCache() {
 	s.cacheInit.Do(func() {
 		s.colCache = make([]decodedColumn, len(s.Columns))
-		s.colOnce = make([]sync.Once, len(s.Columns))
+		s.colDecodeState = make([]colDecodeState, len(s.Columns))
 	})
 }
 
 // GetColumnValue 从指定列中提取给定行索引的值。
 // 使用逐列延迟解码：仅解码请求的列，避免点查时解码所有列的开销。
 // 解码结果缓存在 Segment 级别的 colCache 中，后续调用直接从缓存读取。
+// 解码失败时不标记为已完成，允许后续调用重试。
 func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
 	if int(colIdx) >= len(s.Columns) {
 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
@@ -138,7 +138,9 @@ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, er
 
 	s.ensureColCache()
 
-	s.colOnce[colIdx].Do(func() {
+	ds := &s.colDecodeState[colIdx]
+	ds.mu.Lock()
+	if !ds.decoded {
 		src := &s.Columns[colIdx]
 		enc := &EncodedColumn{
 			Encoding: src.Encoding,
@@ -159,16 +161,18 @@ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, er
 			enc.Nulls = src.Nulls
 		}
 		if err := DecompressColumn(enc); err != nil {
-			s.colCache[colIdx] = decodedColumn{}
-			return
+			ds.mu.Unlock()
+			return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
 		}
 		decoded, nulls, err := DecodeColumn(enc)
 		if err != nil {
-			s.colCache[colIdx] = decodedColumn{}
-			return
+			ds.mu.Unlock()
+			return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
 		}
 		s.colCache[colIdx] = decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
-	})
+		ds.decoded = true
+	}
+	ds.mu.Unlock()
 
 	dc := s.colCache[colIdx]
 	if dc.data == nil {
