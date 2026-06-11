@@ -1,0 +1,482 @@
+diff --git a/pkg/storage/cache.go b/pkg/storage/cache.go
+index 4c70561..733c2b4 100644
+--- a/pkg/storage/cache.go
++++ b/pkg/storage/cache.go
+@@ -51,32 +51,29 @@ func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
+ 		return decodedColumn{}, false
+ 	}
+ 
+-	// 快速路径：读锁检查是否存在
++	// 快速路径：读锁查找（允许并发读）
+ 	c.mu.RLock()
+-	_, ok := c.items[key]
+-	c.mu.RUnlock()
+-
++	elem, ok := c.items[key]
+ 	if !ok {
++		c.mu.RUnlock()
+ 		c.mu.Lock()
+ 		c.misses++
+ 		c.mu.Unlock()
+ 		return decodedColumn{}, false
+ 	}
++	data := elem.Value.(*cacheEntry).data
++	c.mu.RUnlock()
+ 
+-	// 命中：写锁更新 LRU 顺序和计数
++	// 慢路径：短暂写锁更新 LRU 顺序
+ 	c.mu.Lock()
+-	defer c.mu.Unlock()
+-
+-	elem, ok := c.items[key]
+-	if !ok {
+-		// 双检：在 RLock 和 Lock 之间可能被淘汰
+-		c.misses++
+-		return decodedColumn{}, false
++	// 双检：在 RUnlock 和 Lock 之间可能被淘汰
++	if elem, ok = c.items[key]; ok {
++		c.order.MoveToFront(elem)
+ 	}
+-
+-	c.order.MoveToFront(elem)
+ 	c.hits++
+-	return elem.Value.(*cacheEntry).data, true
++	c.mu.Unlock()
++
++	return data, true
+ }
+ 
+ // put 将已解码的列数据放入缓存。
+@@ -289,27 +286,25 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
+ 		return nil, false
+ 	}
+ 
+-	// 快速路径：读锁检查是否存在
++	// 快速路径：读锁查找
+ 	c.mu.RLock()
+-	_, ok := c.items[segmentID]
+-	c.mu.RUnlock()
+-
++	elem, ok := c.items[segmentID]
+ 	if !ok {
++		c.mu.RUnlock()
+ 		return nil, false
+ 	}
++	stats := elem.Value.(*indexCacheEntry).stats
++	c.mu.RUnlock()
+ 
+-	// 命中：写锁更新 LRU 顺序
++	// 慢路径：短暂写锁更新 LRU 顺序
+ 	c.mu.Lock()
+-	defer c.mu.Unlock()
+-
+-	elem, ok := c.items[segmentID]
+-	if !ok {
+-		// 双检：在 RLock 和 Lock 之间可能被淘汰
+-		return nil, false
++	// 双检：在 RUnlock 和 Lock 之间可能被淘汰
++	if elem, ok = c.items[segmentID]; ok {
++		c.order.MoveToFront(elem)
+ 	}
++	c.mu.Unlock()
+ 
+-	c.order.MoveToFront(elem)
+-	return elem.Value.(*indexCacheEntry).stats, true
++	return stats, true
+ }
+ 
+ // PutColumnStats 将 Segment 的列统计信息放入缓存。
+diff --git a/pkg/storage/engine.go b/pkg/storage/engine.go
+index 32073a7..9377280 100644
+--- a/pkg/storage/engine.go
++++ b/pkg/storage/engine.go
+@@ -14,35 +14,37 @@ import (
+ 
+ // Engine 是存储引擎的核心结构。
+ type Engine struct {
+-	mu             sync.RWMutex
+-	activeMem      *MemTable
+-	immutable      []*MemTable
+-	wal            *WAL
+-	flusher        *Flusher
+-	compactor      *Compactor
+-	segments       []*Segment
+-	segmentMap     map[uint64]*Segment
+-	segmentLevels  []int
+-	nextVersion    uint64
+-	primaryIndex   *index.PrimaryIndex
+-	bloomIndex     *index.BloomIndex
+-	sparseIndex    *index.SparseIndex
+-	columnMeta     []ColumnMeta
+-	blockCache     *BlockCache
+-	indexCache     *IndexCache
+-	scheduler      *Scheduler
+-	groupCommitter *GroupCommitter
+-	syncMode       SyncMode
++	mu                     sync.RWMutex
++	activeMem              *MemTable
++	immutable              []*MemTable
++	wal                    *WAL
++	flusher                *Flusher
++	compactor              *Compactor
++	segments               []*Segment
++	segmentMap             map[uint64]*Segment
++	segmentLevels          []int
++	nextVersion            uint64
++	primaryIndex           *index.PrimaryIndex
++	bloomIndex             *index.BloomIndex
++	sparseIndex            *index.SparseIndex
++	columnMeta             []ColumnMeta
++	blockCache             *BlockCache
++	indexCache             *IndexCache
++	scheduler              *Scheduler
++	groupCommitter         *GroupCommitter
++	syncMode               SyncMode
++	blockCacheMaxEntrySize int64 // 单个缓存条目的最大允许大小，超过此值不缓存
+ }
+ 
+ // EngineConfig 是 Engine 的配置参数。
+ type EngineConfig struct {
+-	DataDir         string
+-	MaxMemTableSize int64
+-	BlockCacheSize  int64         // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
+-	IndexCacheSize  int           // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
+-	SyncMode        SyncMode      // WAL 同步模式，默认 SyncEveryWrite
+-	SyncInterval    time.Duration // GroupCommit 模式下的同步间隔，默认 1ms
++	DataDir                string
++	MaxMemTableSize        int64         // MemTable 最大容量（字节），默认 4MB
++	BlockCacheSize         int64         // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
++	BlockCacheMaxEntrySize int64         // 单个缓存条目的最大允许大小（字节），默认 1MB，超过此值不缓存，防止冷数据污染
++	IndexCacheSize         int           // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
++	SyncMode               SyncMode      // WAL 同步模式，默认 SyncEveryWrite
++	SyncInterval           time.Duration // GroupCommit 模式下的同步间隔，默认 1ms
+ }
+ 
+ // NewEngine 创建一个新的存储引擎实例。
+@@ -61,23 +63,29 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
+ 		blockCacheSize = 256 * 1024 * 1024 // 默认 256MB
+ 	}
+ 
++	blockCacheMaxEntrySize := cfg.BlockCacheMaxEntrySize
++	if blockCacheMaxEntrySize == 0 {
++		blockCacheMaxEntrySize = 1024 * 1024 // 默认 1MB
++	}
++
+ 	indexCacheSize := cfg.IndexCacheSize
+ 	if indexCacheSize == 0 {
+ 		indexCacheSize = 1000 // 默认 1000 条目
+ 	}
+ 
+ 	eng := &Engine{
+-		activeMem:    NewMemTableWithSize(maxSize),
+-		flusher:      NewFlusher(cfg.DataDir),
+-		compactor:    NewCompactor(cfg.DataDir),
+-		segmentMap:   make(map[uint64]*Segment),
+-		nextVersion:  1,
+-		primaryIndex: index.NewPrimaryIndex(),
+-		bloomIndex:   index.NewBloomIndex(),
+-		sparseIndex:  index.NewSparseIndex(),
+-		blockCache:   NewBlockCache(blockCacheSize),
+-		indexCache:   NewIndexCache(indexCacheSize),
+-		syncMode:     cfg.SyncMode,
++		activeMem:              NewMemTableWithSize(maxSize),
++		flusher:                NewFlusher(cfg.DataDir),
++		compactor:              NewCompactor(cfg.DataDir),
++		segmentMap:             make(map[uint64]*Segment),
++		nextVersion:            1,
++		primaryIndex:           index.NewPrimaryIndex(),
++		bloomIndex:             index.NewBloomIndex(),
++		sparseIndex:            index.NewSparseIndex(),
++		blockCache:             NewBlockCache(blockCacheSize),
++		indexCache:             NewIndexCache(indexCacheSize),
++		syncMode:               cfg.SyncMode,
++		blockCacheMaxEntrySize: blockCacheMaxEntrySize,
+ 	}
+ 
+ 	// Load existing segments from disk
+@@ -112,37 +120,33 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
+ 
+ // Write 向引擎写入一行数据。
+ func (e *Engine) Write(key string, values map[string]common.Value) error {
++	// Step 1: Allocate version under lock (brief hold)
+ 	e.mu.Lock()
+-
+ 	version := e.nextVersion
++	e.nextVersion++
++	e.mu.Unlock()
+ 
+-	// Write to WAL first (write-ahead logging)
++	// Step 2: Serialize WAL record (no lock needed, CPU-bound)
+ 	payload, err := serializeWriteRecord(key, version, values)
+ 	if err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: serialize wal: %w", err)
+ 	}
++
++	// Step 3: WAL append + sync (I/O-bound, no engine lock needed)
++	// WAL has its own internal serialization for concurrent appends.
+ 	if err := e.wal.AppendWrite(payload); err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: wal append: %w", err)
+ 	}
+ 
+-	// 根据同步模式选择同步策略
+ 	var syncCh <-chan struct{}
+ 	if e.groupCommitter != nil {
+ 		syncCh = e.groupCommitter.Submit()
+ 	} else if err := e.wal.Sync(); err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: wal sync: %w", err)
+ 	}
+ 
+-	e.nextVersion++
+-
+-	row := Row{
+-		Version: version,
+-		Columns: values,
+-	}
+-
++	// Step 4: Put to memtable under lock (brief hold)
++	e.mu.Lock()
+ 	if e.activeMem.ShouldFlush() {
+ 		if err := e.rotateMemTable(); err != nil {
+ 			e.mu.Unlock()
+@@ -150,16 +154,14 @@ func (e *Engine) Write(key string, values map[string]common.Value) error {
+ 		}
+ 	}
+ 
+-	_, _, err = e.activeMem.Put(key, row)
++	_, _, err = e.activeMem.Put(key, Row{Version: version, Columns: values})
++	e.mu.Unlock()
++
+ 	if err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: %w", err)
+ 	}
+ 
+-	e.mu.Unlock()
+-
+-	// GroupCommit 模式下，在引擎锁外等待 WAL sync 完成
+-	// 这样其他写入可以在等待期间并行进行
++	// Step 5: Wait for WAL sync completion (outside engine lock)
+ 	if syncCh != nil {
+ 		<-syncCh
+ 	}
+diff --git a/pkg/storage/engine_read.go b/pkg/storage/engine_read.go
+index a4729f7..ef54279 100644
+--- a/pkg/storage/engine_read.go
++++ b/pkg/storage/engine_read.go
+@@ -53,27 +53,37 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 			continue
+ 		}
+ 
+-		// 创建新 map 而非清空复用，避免逐键删除的开销
+-		columns := make(map[string]common.Value, len(e.columnMeta))
+-		for colIdx, col := range e.columnMeta {
+-			// 优先从 BlockCache 获取已解码的列数据
+-			cacheKey := CacheKey{SegmentID: segID, ColumnIdx: uint32(colIdx)}
+-			if dc, ok := e.blockCache.get(cacheKey); ok {
+-				columns[col.Name] = extractValue(dc, rowIdx)
+-			} else {
+-				val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
+-				if err != nil {
+-					continue
+-				}
+-				columns[col.Name] = val
+-			}
+-		}
++		columns := e.fetchColumnsFromSegment(seg, segID, rowIdx)
+ 		return Row{Version: seg.ID, Columns: columns}, true
+ 	}
+ 
+ 	return Row{}, false
+ }
+ 
++// fetchColumnsFromSegment 从 Segment 中提取指定行所有列的值，优先从 BlockCache 读取。
++// 解码后的列数据在大小允许时写入 BlockCache，防止大体积冷数据驱逐热数据。
++func (e *Engine) fetchColumnsFromSegment(seg *Segment, segID uint64, rowIdx uint32) map[string]common.Value {
++	columns := make(map[string]common.Value, len(e.columnMeta))
++	for colIdx, col := range e.columnMeta {
++		cacheKey := CacheKey{SegmentID: segID, ColumnIdx: uint32(colIdx)}
++		if dc, ok := e.blockCache.get(cacheKey); ok {
++			columns[col.Name] = extractValue(dc, rowIdx)
++			continue
++		}
++		val, err := seg.GetColumnValue(uint32(colIdx), rowIdx)
++		if err != nil {
++			continue
++		}
++		columns[col.Name] = val
++		if dc, ok := seg.getColCache(uint32(colIdx)); ok {
++			if estimateDecodedSize(dc) <= e.blockCacheMaxEntrySize {
++				e.blockCache.put(cacheKey, dc)
++			}
++		}
++	}
++	return columns
++}
++
+ func (e *Engine) findSegmentByID(segID uint64) *Segment {
+ 	return e.segmentMap[segID]
+ }
+diff --git a/pkg/storage/segment.go b/pkg/storage/segment.go
+index 84fcdc7..342ccf0 100644
+--- a/pkg/storage/segment.go
++++ b/pkg/storage/segment.go
+@@ -41,9 +41,17 @@ type Segment struct {
+ 	FilePath string
+ 	Keys     []string
+ 
+-	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
+-	decodedCache []decodedColumn
+-	decodeOnce   sync.Once
++	// 逐列延迟解码缓存：首次访问某列时解码并缓存，避免点查时解码所有列
++	colCache       []decodedColumn
++	colDecodeState []colDecodeState
++	cacheInit      sync.Once
++}
++
++// colDecodeState 跟踪逐列解码状态，支持解码失败时重试。
++// 替代 sync.Once 以解决解码失败后不可重试的问题。
++type colDecodeState struct {
++	mu      sync.Mutex
++	decoded bool
+ }
+ 
+ // SegmentID 返回 Segment 的唯一标识。
+diff --git a/pkg/storage/segment_decode.go b/pkg/storage/segment_decode.go
+index d99844f..5378e4e 100644
+--- a/pkg/storage/segment_decode.go
++++ b/pkg/storage/segment_decode.go
+@@ -119,35 +119,80 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
+ 	return extractValue(cols[colIdx], rowIdx)
+ }
+ 
++// ensureColCache 初始化逐列解码缓存，使用 sync.Once 保证线程安全。
++func (s *Segment) ensureColCache() {
++	s.cacheInit.Do(func() {
++		s.colCache = make([]decodedColumn, len(s.Columns))
++		s.colDecodeState = make([]colDecodeState, len(s.Columns))
++	})
++}
++
+ // GetColumnValue 从指定列中提取给定行索引的值。
+-// 使用 Segment 级解码缓存，首次访问时解码所有列并缓存，后续调用直接从缓存读取，
+-// 避免点查时重复解压解码整列数据。
+-// 仅 Data 需要深拷贝（DecompressColumn 会替换 enc.Data），
+-// Offsets、Dict、Nulls 在解压和解码过程中只读，可直接引用。
++// 使用逐列延迟解码：仅解码请求的列，避免点查时解码所有列的开销。
++// 解码结果缓存在 Segment 级别的 colCache 中，后续调用直接从缓存读取。
++// 解码失败时不标记为已完成，允许后续调用重试。
+ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
+ 	if int(colIdx) >= len(s.Columns) {
+ 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+ 	}
+ 
+-	s.decodeOnce.Do(func() {
+-		cols, err := s.decodeAllColumns()
++	s.ensureColCache()
++
++	ds := &s.colDecodeState[colIdx]
++	ds.mu.Lock()
++	if !ds.decoded {
++		src := &s.Columns[colIdx]
++		enc := &EncodedColumn{
++			Encoding: src.Encoding,
++			Type:     src.Type,
++			RowCount: src.RowCount,
++		}
++		if len(src.Data) > 0 {
++			enc.Data = make([]byte, len(src.Data))
++			copy(enc.Data, src.Data)
++		}
++		if len(src.Offsets) > 0 {
++			enc.Offsets = src.Offsets
++		}
++		if len(src.Dict) > 0 {
++			enc.Dict = src.Dict
++		}
++		if len(src.Nulls) > 0 {
++			enc.Nulls = src.Nulls
++		}
++		if err := DecompressColumn(enc); err != nil {
++			ds.mu.Unlock()
++			return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
++		}
++		decoded, nulls, err := DecodeColumn(enc)
+ 		if err != nil {
+-			// 解码失败时设置空缓存，后续调用将返回 Null
+-			s.decodedCache = make([]decodedColumn, 0)
+-			return
++			ds.mu.Unlock()
++			return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
+ 		}
+-		s.decodedCache = cols
+-	})
+-
+-	if len(s.decodedCache) == 0 {
+-		return common.NewNull(), fmt.Errorf("segment: decode cache unavailable")
++		s.colCache[colIdx] = decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
++		ds.decoded = true
+ 	}
++	ds.mu.Unlock()
+ 
+-	if int(colIdx) >= len(s.decodedCache) {
+-		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
++	dc := s.colCache[colIdx]
++	if dc.data == nil {
++		return common.NewNull(), fmt.Errorf("segment: column %d decode unavailable", colIdx)
+ 	}
+ 
+-	return extractValue(s.decodedCache[colIdx], rowIdx), nil
++	return extractValue(dc, rowIdx), nil
++}
++
++// getColCache returns the decoded column cache entry for the given column index.
++// Returns (decodedColumn, false) if the column has not been decoded yet.
++func (s *Segment) getColCache(colIdx uint32) (decodedColumn, bool) {
++	if int(colIdx) >= len(s.colCache) {
++		return decodedColumn{}, false
++	}
++	dc := s.colCache[colIdx]
++	if dc.data == nil {
++		return decodedColumn{}, false
++	}
++	return dc, true
+ }
+ 
+ // GetAllColumnValues 提取指定行所有列的值。
+diff --git a/pkg/storage/wal_record.go b/pkg/storage/wal_record.go
+index 5e801f4..1ac1149 100644
+--- a/pkg/storage/wal_record.go
++++ b/pkg/storage/wal_record.go
+@@ -32,23 +32,23 @@ func serializeWriteRecord(key string, version uint64, columns map[string]common.
+ 		size += 2 + len(colName) + 1 + 1 + valueBinarySize(v)
+ 	}
+ 	buf := make([]byte, 0, size)
+-	b := make([]byte, 8)
++	var b [8]byte // stack-allocated, eliminates one heap allocation per write
+ 	// 行数 = 1
+-	binary.LittleEndian.PutUint16(b, 1)
++	binary.LittleEndian.PutUint16(b[:], 1)
+ 	buf = append(buf, b[:2]...)
+ 	// key
+-	binary.LittleEndian.PutUint16(b, uint16(len(key)))
++	binary.LittleEndian.PutUint16(b[:], uint16(len(key)))
+ 	buf = append(buf, b[:2]...)
+ 	buf = append(buf, key...)
+ 	// version
+-	binary.LittleEndian.PutUint64(b, version)
++	binary.LittleEndian.PutUint64(b[:], version)
+ 	buf = append(buf, b[:8]...)
+ 	// 列数
+-	binary.LittleEndian.PutUint16(b, uint16(len(columns)))
++	binary.LittleEndian.PutUint16(b[:], uint16(len(columns)))
+ 	buf = append(buf, b[:2]...)
+ 	// 每列
+ 	for colName, v := range columns {
+-		buf = appendValueBinary(buf, b, colName, v)
++		buf = appendValueBinary(buf, b[:], colName, v)
+ 	}
+ 	return buf, nil
+ }

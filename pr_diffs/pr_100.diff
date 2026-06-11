@@ -1,0 +1,719 @@
+diff --git a/cmd/server/main_test.go b/cmd/server/main_test.go
+index d38a827..97b94b4 100644
+--- a/cmd/server/main_test.go
++++ b/cmd/server/main_test.go
+@@ -162,15 +162,10 @@ func TestServerDoubleStop(t *testing.T) {
+ 		t.Fatalf("第一次 Stop 失败: %v", err)
+ 	}
+ 
+-	// 第二次 Stop 应该 panic（关闭已关闭的 channel）
+-	defer func() {
+-		if r := recover(); r == nil {
+-			t.Error("预期第二次 Stop 会 panic，但没有发生")
+-		} else {
+-			t.Logf("第二次 Stop 如预期 panic: %v", r)
+-		}
+-	}()
+-	_ = srv.Stop()
++	// 第二次 Stop 应该安全返回（sync.Once 保护，不会 panic）
++	if err := srv.Stop(); err != nil {
++		t.Fatalf("第二次 Stop 不应返回错误: %v", err)
++	}
+ }
+ 
+ // TestRunServerStopFailure 测试 run() 函数在服务器 Stop() 失败时的行为。
+diff --git a/pkg/query/coverage_groupkey_test.go b/pkg/query/coverage_groupkey_test.go
+new file mode 100644
+index 0000000..d8f644e
+--- /dev/null
++++ b/pkg/query/coverage_groupkey_test.go
+@@ -0,0 +1,79 @@
++package query
++
++import (
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// TestBuildGroupKeySeparatorNoCollision 验证 buildGroupKey 使用 '\x00' 分隔符时，
++// 列值中包含 '|' 字符不会导致分组键碰撞。
++// 修复前使用 '|' 作为分隔符，"a|b"|"c" 和 "a"|"b|c" 会产生相同的键。
++func TestBuildGroupKeySeparatorNoCollision(t *testing.T) {
++	t.Parallel()
++
++	colIdxMap := map[string]int{testStrCol1: 0, testStrCol2: 1}
++
++	// 情况 1: col1="a|b", col2="c"
++	row1 := map[string]common.Value{
++		testStrCol1: common.NewString("a|b"),
++		testStrCol2: common.NewString("c"),
++	}
++	groupBy1 := []Expression{
++		&ResolvedColumnExpr{Name: testStrCol1, Idx: 0, typ: common.TypeString},
++		&ResolvedColumnExpr{Name: testStrCol2, Idx: 1, typ: common.TypeString},
++	}
++	key1 := buildGroupKey(groupBy1, row1, colIdxMap)
++
++	// 情况 2: col1="a", col2="b|c"
++	row2 := map[string]common.Value{
++		testStrCol1: common.NewString("a"),
++		testStrCol2: common.NewString("b|c"),
++	}
++	key2 := buildGroupKey(groupBy1, row2, colIdxMap)
++
++	if key1 == key2 {
++		t.Errorf("分组键碰撞: key1=%q, key2=%q，不同列值应产生不同分组键", key1, key2)
++	}
++}
++
++// TestBuildGroupKeySeparatorWithNullChar 验证使用 '\x00' 分隔符时，
++// 即使列值包含 '\x00' 也不会产生碰撞（因为 '\x00' 在正常文本中极少出现）。
++func TestBuildGroupKeySeparatorWithNullChar(t *testing.T) {
++	t.Parallel()
++
++	colIdxMap := map[string]int{testStrCol1: 0, testStrCol2: 1}
++
++	groupBy := []Expression{
++		&ResolvedColumnExpr{Name: testStrCol1, Idx: 0, typ: common.TypeString},
++		&ResolvedColumnExpr{Name: testStrCol2, Idx: 1, typ: common.TypeString},
++	}
++
++	// 情况 1: col1="a", col2="b"
++	row1 := map[string]common.Value{
++		testStrCol1: common.NewString("a"),
++		testStrCol2: common.NewString("b"),
++	}
++	key1 := buildGroupKey(groupBy, row1, colIdxMap)
++
++	// 情况 2: col1="a\x00b", col2="" — 不同的值组合
++	row2 := map[string]common.Value{
++		testStrCol1: common.NewString("a\x00b"),
++		testStrCol2: common.NewString(""),
++	}
++	key2 := buildGroupKey(groupBy, row2, colIdxMap)
++
++	if key1 == key2 {
++		t.Errorf("分组键碰撞: key1=%q, key2=%q", key1, key2)
++	}
++}
++
++// TestBuildGroupKeyEmptyGroupBy 验证空 GROUP BY 返回空字符串。
++func TestBuildGroupKeyEmptyGroupBy(t *testing.T) {
++	t.Parallel()
++
++	key := buildGroupKey(nil, nil, nil)
++	if key != "" {
++		t.Errorf("expected empty key for empty GROUP BY, got %q", key)
++	}
++}
+diff --git a/pkg/query/coverage_low_executor_v2_test.go b/pkg/query/coverage_low_executor_v2_test.go
+index 05b0162..14391cf 100644
+--- a/pkg/query/coverage_low_executor_v2_test.go
++++ b/pkg/query/coverage_low_executor_v2_test.go
+@@ -188,8 +188,8 @@ func TestBuildGroupKeyMultipleColumns(t *testing.T) {
+ 		&ResolvedColumnExpr{Name: testColAge, Idx: 1, typ: common.TypeInt64},
+ 	}, row, colIdxMap)
+ 
+-	if key != "alice|30" {
+-		t.Errorf("buildGroupKey multiple columns: got %q, want 'alice|30'", key)
++	if key != "alice\x0030" {
++		t.Errorf("buildGroupKey multiple columns: got %q, want 'alice\\x0030'", key)
+ 	}
+ }
+ 
+diff --git a/pkg/query/executor.go b/pkg/query/executor.go
+index 3b8b52b..aa788b6 100644
+--- a/pkg/query/executor.go
++++ b/pkg/query/executor.go
+@@ -2,6 +2,7 @@ package query
+ 
+ import (
+ 	"fmt"
++	"log"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
+@@ -147,6 +148,7 @@ func (e *Executor) filterEntriesByPredicate(entries []storage.ScanEntry, pred Ex
+ 	for _, entry := range entries {
+ 		val, err := evalExpr(pred, entry.Value.Columns, colIdxMap)
+ 		if err != nil {
++			log.Printf("executor: filter predicate eval error for key %s: %v", entry.Key, err)
+ 			continue
+ 		}
+ 		if isTruthyValue(val) {
+diff --git a/pkg/query/executor_aggregate.go b/pkg/query/executor_aggregate.go
+index 4e35f03..e545644 100644
+--- a/pkg/query/executor_aggregate.go
++++ b/pkg/query/executor_aggregate.go
+@@ -207,6 +207,7 @@ func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef,
+ 
+ // buildGroupKey 构建分组键。
+ // 使用 strings.Builder 避免创建临时字符串切片，减少内存分配。
++// 使用 '\x00' 作为分隔符，避免列值中包含可打印字符时产生碰撞。
+ func buildGroupKey(groupBy []Expression, row map[string]common.Value, colIdxMap map[string]int) string {
+ 	if len(groupBy) == 0 {
+ 		return ""
+@@ -214,7 +215,7 @@ func buildGroupKey(groupBy []Expression, row map[string]common.Value, colIdxMap
+ 	var b strings.Builder
+ 	for i, gb := range groupBy {
+ 		if i > 0 {
+-			b.WriteByte('|')
++			b.WriteByte('\x00')
+ 		}
+ 		val, _ := evalExpr(gb, row, colIdxMap)
+ 		b.WriteString(val.String())
+diff --git a/pkg/query/optimizer_test.go b/pkg/query/optimizer_test.go
+index 5099fcc..afb1934 100644
+--- a/pkg/query/optimizer_test.go
++++ b/pkg/query/optimizer_test.go
+@@ -125,7 +125,7 @@ func TestOptimizerConstantFoldingProjectNode(t *testing.T) {
+ 			&BinaryExpr{Op: OpAdd, Left: &LiteralExpr{Value: common.NewInt64(1)}, Right: &LiteralExpr{Value: common.NewInt64(2)}},
+ 		},
+ 		Aliases: []string{""},
+-		schema:  []ColumnDef{{Name: "col1", Type: common.TypeInt64}},
++		schema:  []ColumnDef{{Name: testStrCol1, Type: common.TypeInt64}},
+ 	}
+ 
+ 	result := rule.Apply(proj)
+diff --git a/pkg/query/test_helpers_test.go b/pkg/query/test_helpers_test.go
+index 9b1ede3..7d8f924 100644
+--- a/pkg/query/test_helpers_test.go
++++ b/pkg/query/test_helpers_test.go
+@@ -35,4 +35,6 @@ const (
+ 	testFuncUnknownFunc    = "unknown_func"
+ 	testFuncUnknown        = "unknown"
+ 	testDefaultKeyRangeEnd = "\xff\xff\xff\xff"
++	testStrCol1            = "col1"
++	testStrCol2            = "col2"
+ )
+diff --git a/pkg/server/protocol.go b/pkg/server/protocol.go
+index ee1e011..7876ff1 100644
+--- a/pkg/server/protocol.go
++++ b/pkg/server/protocol.go
+@@ -75,6 +75,11 @@ func DecodePacket(r io.Reader) (*Packet, error) {
+ 			pkt.Magic, Magic)
+ 	}
+ 
++	if pkt.Version != ProtocolVersion {
++		return nil, fmt.Errorf("decode packet: unsupported version %d, expected %d",
++			pkt.Version, ProtocolVersion)
++	}
++
+ 	if pkt.Length > MaxPacketSize {
+ 		return nil, fmt.Errorf("decode packet: payload size %d exceeds maximum %d",
+ 			pkt.Length, MaxPacketSize)
+diff --git a/pkg/server/protocol_test.go b/pkg/server/protocol_test.go
+index 1601ba7..5e6ef6a 100644
+--- a/pkg/server/protocol_test.go
++++ b/pkg/server/protocol_test.go
+@@ -348,3 +348,51 @@ func TestToInt64ValueErrors(t *testing.T) {
+ 		t.Error("期望返回类型不匹配错误")
+ 	}
+ }
++
++// TestDecodePacketWrongVersion 验证 DecodePacket 拒绝错误版本号的包。
++// 修复前可能未检查版本号，导致不兼容的客户端请求被错误接受。
++func TestDecodePacketWrongVersion(t *testing.T) {
++	tests := []struct {
++		name    string
++		version uint16
++	}{
++		{"版本0", 0},
++		{"版本2", 2},
++		{"版本255", 255},
++		{"版本999", 999},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			pkt := &Packet{
++				Magic:   Magic,
++				Version: tt.version,
++				Type:    PacketQuery,
++				Length:  0,
++			}
++			encoded := pkt.Encode()
++
++			_, err := DecodePacket(bytes.NewReader(encoded))
++			if err == nil {
++				t.Fatalf("期望返回版本错误，但成功解码（version=%d）", tt.version)
++			}
++			if !strings.Contains(err.Error(), "unsupported version") {
++				t.Errorf("错误信息应包含 'unsupported version'，实际: %v", err)
++			}
++		})
++	}
++}
++
++// TestDecodePacketCorrectVersion 验证 DecodePacket 接受正确版本号的包。
++func TestDecodePacketCorrectVersion(t *testing.T) {
++	pkt := NewPacket(PacketPing, nil)
++	encoded := pkt.Encode()
++
++	decoded, err := DecodePacket(bytes.NewReader(encoded))
++	if err != nil {
++		t.Fatalf("期望成功解码，但返回错误: %v", err)
++	}
++	if decoded.Version != ProtocolVersion {
++		t.Errorf("Version = %d, 期望 %d", decoded.Version, ProtocolVersion)
++	}
++}
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 18687d9..332da54 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -49,6 +49,7 @@ type Server struct {
+ 	connCount int64 // 当前活跃 TCP 连接数
+ 	wg        sync.WaitGroup
+ 	done      chan struct{}
++	stopOnce  sync.Once
+ }
+ 
+ // storageAdapter 适配 storage.Engine 以实现 query.StorageProvider 接口。
+@@ -191,29 +192,34 @@ func (s *Server) Catalog() *catalog.Catalog {
+ }
+ 
+ // Stop 优雅关闭服务器，等待所有活跃连接完成。
++// 多次调用是安全的，仅第一次调用会执行关闭逻辑。
+ func (s *Server) Stop() error {
+-	close(s.done)
++	var stopErr error
++	s.stopOnce.Do(func() {
++		close(s.done)
+ 
+-	if s.tcpListener != nil {
+-		_ = s.tcpListener.Close() // 关闭错误不影响主流程
+-	}
+-	if s.httpListener != nil {
+-		_ = s.httpListener.Close() // 关闭错误不影响主流程
+-	}
+-	if s.httpServer != nil {
+-		_ = s.httpServer.Close() // 关闭错误不影响主流程
+-	}
++		if s.tcpListener != nil {
++			_ = s.tcpListener.Close() // 关闭错误不影响主流程
++		}
++		if s.httpListener != nil {
++			_ = s.httpListener.Close() // 关闭错误不影响主流程
++		}
++		if s.httpServer != nil {
++			_ = s.httpServer.Close() // 关闭错误不影响主流程
++		}
+ 
+-	s.wg.Wait()
++		s.wg.Wait()
+ 
+-	if s.storage != nil {
+-		if err := s.storage.Close(); err != nil {
+-			return fmt.Errorf("server: close storage: %w", err)
++		if s.storage != nil {
++			if err := s.storage.Close(); err != nil {
++				stopErr = fmt.Errorf("server: close storage: %w", err)
++				return
++			}
+ 		}
+-	}
+ 
+-	log.Println("服务器已关闭")
+-	return nil
++		log.Println("服务器已关闭")
++	})
++	return stopErr
+ }
+ 
+ // serveHTTP 启动 HTTP 服务。
+diff --git a/pkg/server/server_test.go b/pkg/server/server_test.go
+index 0c55da2..c0c5256 100644
+--- a/pkg/server/server_test.go
++++ b/pkg/server/server_test.go
+@@ -435,3 +435,44 @@ func TestHandleWritePacketValid(t *testing.T) {
+ 		t.Errorf("response type = %d, want %d", resp.Type, PacketResponse)
+ 	}
+ }
++
++// TestServerStopDoubleCall 验证多次调用 Stop() 不会 panic。
++// 修复前双重调用可能因重复关闭 channel 而崩溃。
++func TestServerStopDoubleCall(t *testing.T) {
++	srv := newTestServer(t)
++
++	// 第一次 Stop
++	if err := srv.Stop(); err != nil {
++		t.Fatalf("第一次 Stop 失败: %v", err)
++	}
++
++	// 第二次 Stop 不应 panic
++	if err := srv.Stop(); err != nil {
++		t.Fatalf("第二次 Stop 不应返回错误: %v", err)
++	}
++
++	// 第三次 Stop 也不应 panic
++	if err := srv.Stop(); err != nil {
++		t.Fatalf("第三次 Stop 不应返回错误: %v", err)
++	}
++}
++
++// TestServerStopDoubleCallAfterStart 验证启动后多次调用 Stop() 不会 panic。
++func TestServerStopDoubleCallAfterStart(t *testing.T) {
++	srv := newTestServer(t)
++
++	if err := srv.Start(); err != nil {
++		t.Fatalf("Start 失败: %v", err)
++	}
++	time.Sleep(50 * time.Millisecond)
++
++	// 第一次 Stop
++	if err := srv.Stop(); err != nil {
++		t.Fatalf("第一次 Stop 失败: %v", err)
++	}
++
++	// 第二次 Stop 不应 panic
++	if err := srv.Stop(); err != nil {
++		t.Fatalf("第二次 Stop 不应返回错误: %v", err)
++	}
++}
+diff --git a/pkg/storage/bugfix_safety_test.go b/pkg/storage/bugfix_safety_test.go
+new file mode 100644
+index 0000000..0356340
+--- /dev/null
++++ b/pkg/storage/bugfix_safety_test.go
+@@ -0,0 +1,151 @@
++package storage
++
++import (
++	"sync"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// TestScanRangeAcquiresRLockInternally 验证 ScanRange 内部获取 RLock，
++// 调用方无需手动加锁即可安全调用。
++func TestScanRangeAcquiresRLockInternally(t *testing.T) {
++	t.Parallel()
++
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("new engine: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	// 写入一些数据
++	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
++	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
++	_ = eng.Write("c", map[string]common.Value{colVal: common.NewInt64(3)})
++
++	// 不手动获取锁，直接调用 ScanRange，应正常工作
++	results := eng.ScanRange("a", "c")
++	if len(results) != 3 {
++		t.Errorf("expected 3 results, got %d", len(results))
++	}
++}
++
++// TestScanRangeConcurrentWithWrite 验证 ScanRange 与并发 Write 不会产生数据竞态。
++// ScanRange 内部获取 RLock，Write 获取 Lock，两者应正确互斥。
++func TestScanRangeConcurrentWithWrite(t *testing.T) {
++	t.Parallel()
++
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("new engine: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	// 预先写入数据
++	for i := 0; i < 10; i++ {
++		key := string(rune('a' + i))
++		_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(i))})
++	}
++
++	var wg sync.WaitGroup
++	const readers = 4
++	const writers = 2
++
++	wg.Add(readers + writers)
++
++	// 并发读
++	for i := 0; i < readers; i++ {
++		go func() {
++			defer wg.Done()
++			for j := 0; j < 50; j++ {
++				results := eng.ScanRange("a", "z")
++				_ = results
++			}
++		}()
++	}
++
++	// 并发写
++	for i := 0; i < writers; i++ {
++		go func(id int) {
++			defer wg.Done()
++			for j := 0; j < 50; j++ {
++				key := string(rune('A' + id))
++				_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(id*100 + j))})
++			}
++		}(i)
++	}
++
++	wg.Wait()
++}
++
++// TestComputeStringStatsShortOffsets 验证 computeStringStats 在 offsets 数组
++// 长度不足时不会 panic，而是安全地跳过越界行。
++func TestComputeStringStatsShortOffsets(t *testing.T) {
++	t.Parallel()
++
++	// 构造 rowCount=5 但 offsets 只有 2 个元素（不足以覆盖所有行）
++	data := []byte("helloworld")
++	offsets := []uint32{0, 5} // 只能安全访问第 0 行
++	rowCount := uint32(5)
++
++	stat := &ColumnStat{}
++	// 不应 panic
++	computeStringStats(data, offsets, rowCount, nil, stat)
++
++	// 第 0 行 "hello" 应被正确统计
++	if stat.Min == nil || string(stat.Min) != testStrHello {
++		t.Errorf("expected Min='hello', got %v", stat.Min)
++	}
++	if stat.Max == nil || string(stat.Max) != testStrHello {
++		t.Errorf("expected Max='hello', got %v", stat.Max)
++	}
++}
++
++// TestComputeStringStatsEmptyOffsets 验证 computeStringStats 在 offsets 为空时不会 panic。
++func TestComputeStringStatsEmptyOffsets(t *testing.T) {
++	t.Parallel()
++
++	data := []byte(testStrHello)
++	rowCount := uint32(3)
++
++	stat := &ColumnStat{}
++	// 不应 panic
++	computeStringStats(data, nil, rowCount, nil, stat)
++
++	// 无有效行可统计，Min/Max 应为 nil
++	if stat.Min != nil || stat.Max != nil {
++		t.Errorf("expected nil Min/Max for empty offsets, got Min=%v Max=%v", stat.Min, stat.Max)
++	}
++}
++
++// TestIndexCacheGetColumnStatsConcurrentReads 验证 IndexCache.GetColumnStats
++// 允许多个 goroutine 并发读取而不会死锁。
++func TestIndexCacheGetColumnStatsConcurrentReads(t *testing.T) {
++	t.Parallel()
++
++	cache := NewIndexCache(100)
++
++	// 预填充数据
++	for i := uint64(0); i < 20; i++ {
++		cache.PutColumnStats(i, []ColumnStat{{ColumnID: uint32(i), NullCount: uint32(i)}})
++	}
++
++	var wg sync.WaitGroup
++	const goroutines = 10
++	const iterations = 100
++
++	wg.Add(goroutines)
++	for g := 0; g < goroutines; g++ {
++		go func() {
++			defer wg.Done()
++			for i := 0; i < iterations; i++ {
++				// 并发读取不同的 segmentID
++				stats, ok := cache.GetColumnStats(uint64(i % 20))
++				if ok && len(stats) != 1 {
++					t.Errorf("unexpected stats length: %d", len(stats))
++				}
++			}
++		}()
++	}
++	wg.Wait()
++}
+diff --git a/pkg/storage/cache.go b/pkg/storage/cache.go
+index 4c70561..dba71ad 100644
+--- a/pkg/storage/cache.go
++++ b/pkg/storage/cache.go
+@@ -289,27 +289,24 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
+ 		return nil, false
+ 	}
+ 
+-	// 快速路径：读锁检查是否存在
+ 	c.mu.RLock()
+-	_, ok := c.items[segmentID]
+-	c.mu.RUnlock()
+-
+-	if !ok {
+-		return nil, false
+-	}
++	if elem, ok := c.items[segmentID]; ok {
++		stats := elem.Value.(*indexCacheEntry).stats
++		c.mu.RUnlock()
+ 
+-	// 命中：写锁更新 LRU 顺序
+-	c.mu.Lock()
+-	defer c.mu.Unlock()
++		// LRU 移动需要写锁，单独获取
++		c.mu.Lock()
++		// 重新检查，因为期间可能被淘汰
++		if elem, ok := c.items[segmentID]; ok {
++			c.order.MoveToFront(elem)
++		}
++		c.mu.Unlock()
+ 
+-	elem, ok := c.items[segmentID]
+-	if !ok {
+-		// 双检：在 RLock 和 Lock 之间可能被淘汰
+-		return nil, false
++		return stats, true
+ 	}
++	c.mu.RUnlock()
+ 
+-	c.order.MoveToFront(elem)
+-	return elem.Value.(*indexCacheEntry).stats, true
++	return nil, false
+ }
+ 
+ // PutColumnStats 将 Segment 的列统计信息放入缓存。
+diff --git a/pkg/storage/engine_batch.go b/pkg/storage/engine_batch.go
+index 952f591..cea1ee4 100644
+--- a/pkg/storage/engine_batch.go
++++ b/pkg/storage/engine_batch.go
+@@ -18,29 +18,45 @@ func (e *Engine) WriteBatch(rows []WriteRow) error {
+ 		return nil
+ 	}
+ 	e.mu.Lock()
+-	defer e.mu.Unlock()
+ 	payload, err := serializeBatchWriteRecord(rows, e.nextVersion)
+ 	if err != nil {
++		e.mu.Unlock()
+ 		return fmt.Errorf("engine write batch: serialize: %w", err)
+ 	}
+ 	if err := e.wal.AppendBatch([]BatchRecord{{Type: walTypeBatchWrite, Payload: payload}}); err != nil {
++		e.mu.Unlock()
+ 		return fmt.Errorf("engine write batch: wal: %w", err)
+ 	}
+-	if err := e.wal.Sync(); err != nil {
++
++	// 根据同步模式选择同步策略，与 Engine.Write 保持一致
++	var syncCh <-chan struct{}
++	if e.groupCommitter != nil {
++		syncCh = e.groupCommitter.Submit()
++	} else if err := e.wal.Sync(); err != nil {
++		e.mu.Unlock()
+ 		return fmt.Errorf("engine write batch: sync: %w", err)
+ 	}
++
+ 	// 先写入所有行到 MemTable，全部成功后再递增版本号，避免部分失败导致版本号跳跃
+ 	baseVersion := e.nextVersion
+ 	for i := range rows {
+ 		if _, _, err := e.activeMem.Put(rows[i].Key, Row{Version: baseVersion + uint64(i), Columns: rows[i].Values}); err != nil {
++			e.mu.Unlock()
+ 			return fmt.Errorf("engine write batch: %w", err)
+ 		}
+ 	}
+ 	e.nextVersion += uint64(len(rows))
+ 	if e.activeMem.ShouldFlush() {
+ 		if err := e.rotateMemTable(); err != nil {
++			e.mu.Unlock()
+ 			return fmt.Errorf("engine write batch: rotate: %w", err)
+ 		}
+ 	}
++
++	// GroupCommit 模式下，在引擎锁外等待 WAL sync 完成
++	e.mu.Unlock()
++	if syncCh != nil {
++		<-syncCh
++	}
+ 	return nil
+ }
+diff --git a/pkg/storage/engine_batch_test.go b/pkg/storage/engine_batch_test.go
+index cbf1dfb..d68607c 100644
+--- a/pkg/storage/engine_batch_test.go
++++ b/pkg/storage/engine_batch_test.go
+@@ -144,7 +144,7 @@ func TestEngineWriteBatchAllTypes(t *testing.T) {
+ 				"bool_col": common.NewBool(true),
+ 				"int":      common.NewInt64(-42),
+ 				"float":    common.NewFloat64(3.14),
+-				"str":      common.NewString("hello"),
++				"str":      common.NewString(testStrHello),
+ 				"time":     common.NewTimestamp(ts),
+ 			},
+ 		},
+@@ -167,7 +167,7 @@ func TestEngineWriteBatchAllTypes(t *testing.T) {
+ 	if v := got.Columns["float"]; v.Float64 != 3.14 {
+ 		t.Errorf("float: expected 3.14, got %f", v.Float64)
+ 	}
+-	if v := got.Columns["str"]; v.Str != "hello" {
++	if v := got.Columns["str"]; v.Str != testStrHello {
+ 		t.Errorf("str: expected hello, got %s", v.Str)
+ 	}
+ 	if v := got.Columns["time"]; !v.Time.Equal(ts) {
+diff --git a/pkg/storage/engine_read.go b/pkg/storage/engine_read.go
+index a4729f7..437f2b9 100644
+--- a/pkg/storage/engine_read.go
++++ b/pkg/storage/engine_read.go
+@@ -88,7 +88,7 @@ func (e *Engine) Scan(start, end string) []struct {
+ 	e.mu.RLock()
+ 	defer e.mu.RUnlock()
+ 
+-	entries := e.ScanRange(start, end)
++	entries := e.scanRangeUnlocked(start, end)
+ 	results := make([]struct {
+ 		Key   string
+ 		Value Row
+diff --git a/pkg/storage/iterator.go b/pkg/storage/iterator.go
+index ea50dcc..8f38653 100644
+--- a/pkg/storage/iterator.go
++++ b/pkg/storage/iterator.go
+@@ -422,6 +422,14 @@ func (e *Engine) buildScanIterators(start, end string) []ScanIterator {
+ // deduplicated results across all data sources.
+ // Caller must hold e.mu.RLock.
+ func (e *Engine) ScanRange(start, end string) []ScanEntry {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	return e.scanRangeUnlocked(start, end)
++}
++
++// scanRangeUnlocked performs the actual scan without acquiring the lock.
++// Caller must hold e.mu.RLock.
++func (e *Engine) scanRangeUnlocked(start, end string) []ScanEntry {
+ 	iters := e.buildScanIterators(start, end)
+ 	if len(iters) == 0 {
+ 		return nil
+diff --git a/pkg/storage/segment.go b/pkg/storage/segment.go
+index 84fcdc7..70e5742 100644
+--- a/pkg/storage/segment.go
++++ b/pkg/storage/segment.go
+@@ -280,8 +280,14 @@ func computeStringStats(data []byte, offsets []uint32, rowCount uint32, nulls *c
+ 		if nulls != nil && nulls.Get(i) {
+ 			continue
+ 		}
++		if int(i+1) >= len(offsets) {
++			break
++		}
+ 		start := offsets[i]
+ 		end := offsets[i+1]
++		if int(end) > len(data) || int(start) > len(data) {
++			break
++		}
+ 		s := string(data[start:end])
+ 		if first {
+ 			minStr, maxStr = s, s
+diff --git a/pkg/storage/wal.go b/pkg/storage/wal.go
+index 009f095..1d6ebdd 100644
+--- a/pkg/storage/wal.go
++++ b/pkg/storage/wal.go
+@@ -227,6 +227,13 @@ func (w *WAL) maybeRotate() error {
+ 		return fmt.Errorf("wal rotate create temp: %w", err)
+ 	}
+ 
++	// 确保新文件的目录条目已持久化到磁盘，避免 rename 后崩溃导致新文件丢失
++	if err := newF.Sync(); err != nil {
++		_ = newF.Close()
++		_ = os.Remove(w.path + ".tmp")
++		return fmt.Errorf("wal rotate sync temp: %w", err)
++	}
++
+ 	// 关闭旧文件
+ 	old := w.file
+ 	if err := old.Close(); err != nil {

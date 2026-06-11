@@ -1,0 +1,668 @@
+diff --git a/pkg/server/converter.go b/pkg/server/converter.go
+index 37e000e..189cbb6 100644
+--- a/pkg/server/converter.go
++++ b/pkg/server/converter.go
+@@ -81,30 +81,45 @@ func toTimestampValue(raw any) (common.Value, error) {
+ }
+ 
+ // chunksToRows 将 Chunk 切片转换为可 JSON 序列化的行数据。
+-func chunksToRows(chunks []*storage.Chunk) []map[string]any {
++// colNames 为每列的名称，按列索引顺序排列。若 colNames 为空则回退到 col_N 格式。
++func chunksToRows(chunks []*storage.Chunk, colNames []string) []map[string]any {
+ 	var result []map[string]any
+ 	for _, chunk := range chunks {
+ 		if chunk == nil {
+ 			continue
+ 		}
+ 		for i := uint32(0); i < chunk.RowCount(); i++ {
+-			rowMap := make(map[string]any)
+-			for colIdx := 0; colIdx < chunk.ColumnCount(); colIdx++ {
+-				col, err := chunk.GetColumn(colIdx)
+-				if err != nil {
+-					continue
+-				}
+-				if i < col.Len() {
+-					val := col.GetValue(i)
+-					rowMap[fmt.Sprintf("col_%d", colIdx)] = valueToInterface(val)
+-				}
+-			}
+-			result = append(result, rowMap)
++			result = append(result, buildRowMap(chunk, i, colNames))
+ 		}
+ 	}
+ 	return result
+ }
+ 
++// buildRowMap 从 Chunk 中构建单行数据映射。
++func buildRowMap(chunk *storage.Chunk, rowIdx uint32, colNames []string) map[string]any {
++	rowMap := make(map[string]any)
++	for colIdx := 0; colIdx < chunk.ColumnCount(); colIdx++ {
++		col, err := chunk.GetColumn(colIdx)
++		if err != nil {
++			continue
++		}
++		if rowIdx < col.Len() {
++			val := col.GetValue(rowIdx)
++			name := columnName(colNames, colIdx)
++			rowMap[name] = valueToInterface(val)
++		}
++	}
++	return rowMap
++}
++
++// columnName 解析列名，优先使用 colNames 中指定名称，否则回退到 col_N 格式。
++func columnName(colNames []string, colIdx int) string {
++	if colNames != nil && colIdx < len(colNames) && colNames[colIdx] != "" {
++		return colNames[colIdx]
++	}
++	return fmt.Sprintf("col_%d", colIdx)
++}
++
+ // valueToInterface 将 common.Value 转换为 any。
+ func valueToInterface(v common.Value) any {
+ 	if !v.Valid {
+diff --git a/pkg/server/converter_coverage_test.go b/pkg/server/converter_coverage_test.go
+index a421de7..c4177a0 100644
+--- a/pkg/server/converter_coverage_test.go
++++ b/pkg/server/converter_coverage_test.go
+@@ -212,7 +212,7 @@ func TestValueToInterfaceBool(t *testing.T) {
+ 
+ // TestChunksToRowsNilChunk 测试 chunksToRows 跳过 nil chunk
+ func TestChunksToRowsNilChunk(t *testing.T) {
+-	result := chunksToRows([]*storage.Chunk{nil})
++	result := chunksToRows([]*storage.Chunk{nil}, nil)
+ 	if len(result) != 0 {
+ 		t.Errorf("chunksToRows with nil chunk = %d rows, want 0", len(result))
+ 	}
+@@ -228,7 +228,7 @@ func TestCountRowsNilChunk(t *testing.T) {
+ 
+ // TestChunksToRowsEmpty 测试 chunksToRows 对空切片返回 nil
+ func TestChunksToRowsEmpty(t *testing.T) {
+-	result := chunksToRows([]*storage.Chunk{})
++	result := chunksToRows([]*storage.Chunk{}, nil)
+ 	if result != nil {
+ 		t.Errorf("chunksToRows(empty) = %v, want nil", result)
+ 	}
+diff --git a/pkg/server/protocol_test.go b/pkg/server/protocol_test.go
+index 1601ba7..1826d32 100644
+--- a/pkg/server/protocol_test.go
++++ b/pkg/server/protocol_test.go
+@@ -311,12 +311,12 @@ func TestCountRows(t *testing.T) {
+ }
+ 
+ func TestChunksToRows(t *testing.T) {
+-	result := chunksToRows(nil)
++	result := chunksToRows(nil, nil)
+ 	if result != nil {
+ 		t.Errorf("chunksToRows(nil) 应返回 nil, 实际: %v", result)
+ 	}
+ 
+-	result = chunksToRows([]*storage.Chunk{nil})
++	result = chunksToRows([]*storage.Chunk{nil}, nil)
+ 	if result != nil {
+ 		t.Errorf("chunksToRows([nil]) 应返回 nil, 实际: %v", result)
+ 	}
+@@ -326,13 +326,23 @@ func TestChunksToRows(t *testing.T) {
+ 	_ = col.Append(common.NewInt64(42))
+ 	_ = chunk.AddColumn(col)
+ 
+-	result = chunksToRows([]*storage.Chunk{chunk})
++	// 无列名时回退到 col_N 格式
++	result = chunksToRows([]*storage.Chunk{chunk}, nil)
+ 	if len(result) != 1 {
+ 		t.Fatalf("结果行数 = %d, 期望 1", len(result))
+ 	}
+ 	if result[0]["col_0"] != int64(42) {
+ 		t.Errorf("col_0 = %v, 期望 42", result[0]["col_0"])
+ 	}
++
++	// 有列名时使用列名作为 key
++	result = chunksToRows([]*storage.Chunk{chunk}, []string{"id"})
++	if len(result) != 1 {
++		t.Fatalf("结果行数 = %d, 期望 1", len(result))
++	}
++	if result[0]["id"] != int64(42) {
++		t.Errorf("id = %v, 期望 42", result[0]["id"])
++	}
+ }
+ 
+ func TestToFloat64ValueErrors(t *testing.T) {
+diff --git a/pkg/server/server.go b/pkg/server/server.go
+index 18687d9..719dd7f 100644
+--- a/pkg/server/server.go
++++ b/pkg/server/server.go
+@@ -259,7 +259,15 @@ func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
+ 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 执行错误: %v", err)}, nil
+ 	}
+ 
+-	data := chunksToRows(chunks)
++	// 从查询计划的 Schema 中提取列名，用于 JSON 响应的 key
++	var colNames []string
++	if schema := optimized.Schema(); len(schema) > 0 {
++		colNames = make([]string, len(schema))
++		for i, col := range schema {
++			colNames[i] = col.Name
++		}
++	}
++	data := chunksToRows(chunks, colNames)
+ 	totalRows := countRows(chunks)
+ 
+ 	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+diff --git a/pkg/storage/cache.go b/pkg/storage/cache.go
+index 4c70561..54ce713 100644
+--- a/pkg/storage/cache.go
++++ b/pkg/storage/cache.go
+@@ -3,6 +3,7 @@ package storage
+ import (
+ 	"container/list"
+ 	"sync"
++	"sync/atomic"
+ 	"time"
+ )
+ 
+@@ -45,38 +46,30 @@ func NewBlockCache(capacity int64) *BlockCache {
+ 
+ // get 从缓存中获取指定列的已解码数据。
+ // 返回 (decodedColumn, true) 表示命中，(decodedColumn{}, false) 表示未命中。
+-// 使用 RLock 快速路径检查存在性，仅在命中时升级为写锁以更新 LRU 顺序。
++// 使用 RLock 读取缓存数据，减少读路径锁竞争；hits/misses 使用原子操作避免竞态。
+ func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
+ 	if c == nil || c.capacity <= 0 {
+ 		return decodedColumn{}, false
+ 	}
+ 
+-	// 快速路径：读锁检查是否存在
++	// Fast path: read-only lookup with RLock (allows concurrent reads)
+ 	c.mu.RLock()
+-	_, ok := c.items[key]
+-	c.mu.RUnlock()
+-
+-	if !ok {
++	if elem, ok := c.items[key]; ok {
++		data := elem.Value.(*cacheEntry).data
++		c.mu.RUnlock()
++		atomic.AddInt64(&c.hits, 1)
++		// Slow path: move to front with write lock (brief hold)
+ 		c.mu.Lock()
+-		c.misses++
++		// Re-check since the entry might have been evicted between RUnlock and Lock
++		if elem, ok = c.items[key]; ok {
++			c.order.MoveToFront(elem)
++		}
+ 		c.mu.Unlock()
+-		return decodedColumn{}, false
++		return data, true
+ 	}
+-
+-	// 命中：写锁更新 LRU 顺序和计数
+-	c.mu.Lock()
+-	defer c.mu.Unlock()
+-
+-	elem, ok := c.items[key]
+-	if !ok {
+-		// 双检：在 RLock 和 Lock 之间可能被淘汰
+-		c.misses++
+-		return decodedColumn{}, false
+-	}
+-
+-	c.order.MoveToFront(elem)
+-	c.hits++
+-	return elem.Value.(*cacheEntry).data, true
++	c.mu.RUnlock()
++	atomic.AddInt64(&c.misses, 1)
++	return decodedColumn{}, false
+ }
+ 
+ // put 将已解码的列数据放入缓存。
+@@ -198,26 +191,33 @@ type CacheStats struct {
+ }
+ 
+ // Stats 返回当前缓存的统计信息。
++// hits/misses 通过原子操作读取，无需持锁，避免与读路径的 RLock 竞争。
+ func (c *BlockCache) Stats() CacheStats {
+ 	if c == nil {
+ 		return CacheStats{}
+ 	}
+ 
++	hits := atomic.LoadInt64(&c.hits)
++	misses := atomic.LoadInt64(&c.misses)
++
+ 	c.mu.RLock()
+-	defer c.mu.RUnlock()
++	used := c.used
++	capacity := c.capacity
++	entries := len(c.items)
++	c.mu.RUnlock()
+ 
+-	total := c.hits + c.misses
++	total := hits + misses
+ 	var hitRate float64
+ 	if total > 0 {
+-		hitRate = float64(c.hits) / float64(total)
++		hitRate = float64(hits) / float64(total)
+ 	}
+ 
+ 	return CacheStats{
+-		Hits:     c.hits,
+-		Misses:   c.misses,
+-		Size:     c.used,
+-		Capacity: c.capacity,
+-		Entries:  len(c.items),
++		Hits:     hits,
++		Misses:   misses,
++		Size:     used,
++		Capacity: capacity,
++		Entries:  entries,
+ 		HitRate:  hitRate,
+ 	}
+ }
+@@ -289,27 +289,24 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
+ 		return nil, false
+ 	}
+ 
+-	// 快速路径：读锁检查是否存在
++	// Fast path: read-only lookup with RLock
+ 	c.mu.RLock()
+-	_, ok := c.items[segmentID]
+-	c.mu.RUnlock()
+-
++	elem, ok := c.items[segmentID]
+ 	if !ok {
++		c.mu.RUnlock()
+ 		return nil, false
+ 	}
++	stats := elem.Value.(*indexCacheEntry).stats
++	c.mu.RUnlock()
+ 
+-	// 命中：写锁更新 LRU 顺序
++	// Slow path: move to front with write lock
+ 	c.mu.Lock()
+-	defer c.mu.Unlock()
+-
+-	elem, ok := c.items[segmentID]
+-	if !ok {
+-		// 双检：在 RLock 和 Lock 之间可能被淘汰
+-		return nil, false
++	if elem, ok = c.items[segmentID]; ok {
++		c.order.MoveToFront(elem)
+ 	}
++	c.mu.Unlock()
+ 
+-	c.order.MoveToFront(elem)
+-	return elem.Value.(*indexCacheEntry).stats, true
++	return stats, true
+ }
+ 
+ // PutColumnStats 将 Segment 的列统计信息放入缓存。
+diff --git a/pkg/storage/cache_test.go b/pkg/storage/cache_test.go
+index 562770d..140a0c1 100644
+--- a/pkg/storage/cache_test.go
++++ b/pkg/storage/cache_test.go
+@@ -1,6 +1,7 @@
+ package storage
+ 
+ import (
++	"sync"
+ 	"testing"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+@@ -343,3 +344,97 @@ func TestIndexCacheLen(t *testing.T) {
+ 		t.Fatalf("expected 2 length, got %d", cache.Len())
+ 	}
+ }
++
++// TestBlockCacheConcurrentReadWrite 验证 RLock 读路径与写路径的并发正确性。
++// 多个 goroutine 同时执行 get（RLock）和 put（Lock），确保不出现数据竞争或死锁。
++func TestBlockCacheConcurrentReadWrite(t *testing.T) {
++	cache := NewBlockCache(1 << 20) // 1MB
++	const goroutines = 50
++	const iterations = 200
++
++	var wg sync.WaitGroup
++	wg.Add(goroutines * 3) // readers + writers + invalidators
++
++	// 并发读者
++	for g := 0; g < goroutines; g++ {
++		go func(id int) {
++			defer wg.Done()
++			for i := 0; i < iterations; i++ {
++				key := CacheKey{SegmentID: uint64(id % 5), ColumnIdx: uint32(i % 10)}
++				cache.get(key)
++			}
++		}(g)
++	}
++
++	// 并发写者
++	for g := 0; g < goroutines; g++ {
++		go func(id int) {
++			defer wg.Done()
++			for i := 0; i < iterations; i++ {
++				key := CacheKey{SegmentID: uint64(id % 5), ColumnIdx: uint32(i % 10)}
++				cache.put(key, decodedColumn{
++					data: []int64{int64(id), int64(i)},
++					typ:  common.TypeInt64,
++				})
++			}
++		}(g)
++	}
++
++	// 并发失效者
++	for g := 0; g < goroutines; g++ {
++		go func(id int) {
++			defer wg.Done()
++			for i := 0; i < iterations; i++ {
++				cache.Invalidate(uint64(id % 5))
++			}
++		}(g)
++	}
++
++	wg.Wait()
++
++	// 验证统计信息一致性：hits + misses 应等于总操作次数
++	stats := cache.Stats()
++	if stats.Hits+stats.Misses == 0 {
++		t.Fatal("expected some cache operations")
++	}
++}
++
++// TestBlockCacheConcurrentStats 验证并发读写时 Stats 的原子计数正确性。
++func TestBlockCacheConcurrentStats(t *testing.T) {
++	cache := NewBlockCache(1 << 20)
++
++	// 预填充
++	for i := uint32(0); i < 10; i++ {
++		cache.put(CacheKey{SegmentID: 1, ColumnIdx: i}, decodedColumn{
++			data: []int64{int64(i)},
++			typ:  common.TypeInt64,
++		})
++	}
++
++	const goroutines = 20
++	const iterations = 500
++
++	var wg sync.WaitGroup
++	wg.Add(goroutines)
++
++	for g := 0; g < goroutines; g++ {
++		go func(id int) {
++			defer wg.Done()
++			for i := 0; i < iterations; i++ {
++				key := CacheKey{SegmentID: 1, ColumnIdx: uint32(id % 10)}
++				cache.get(key)
++			}
++		}(g)
++	}
++
++	wg.Wait()
++
++	stats := cache.Stats()
++	// 总操作数 = goroutines * iterations
++	totalOps := int64(goroutines * iterations)
++	actualTotal := stats.Hits + stats.Misses
++	if actualTotal != totalOps {
++		t.Fatalf("hits+misses = %d, expected %d (hits=%d, misses=%d)",
++			actualTotal, totalOps, stats.Hits, stats.Misses)
++	}
++}
+diff --git a/pkg/storage/engine.go b/pkg/storage/engine.go
+index 32073a7..c3269db 100644
+--- a/pkg/storage/engine.go
++++ b/pkg/storage/engine.go
+@@ -112,37 +112,33 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
+ 
+ // Write 向引擎写入一行数据。
+ func (e *Engine) Write(key string, values map[string]common.Value) error {
++	// Step 1: Allocate version under lock (brief hold)
+ 	e.mu.Lock()
+-
+ 	version := e.nextVersion
++	e.nextVersion++
++	e.mu.Unlock()
+ 
+-	// Write to WAL first (write-ahead logging)
++	// Step 2: Serialize WAL record (no lock needed, CPU-bound)
+ 	payload, err := serializeWriteRecord(key, version, values)
+ 	if err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: serialize wal: %w", err)
+ 	}
++
++	// Step 3: WAL append + sync (I/O-bound, no engine lock needed)
++	// WAL has its own internal serialization for concurrent appends.
+ 	if err := e.wal.AppendWrite(payload); err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: wal append: %w", err)
+ 	}
+ 
+-	// 根据同步模式选择同步策略
+ 	var syncCh <-chan struct{}
+ 	if e.groupCommitter != nil {
+ 		syncCh = e.groupCommitter.Submit()
+ 	} else if err := e.wal.Sync(); err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: wal sync: %w", err)
+ 	}
+ 
+-	e.nextVersion++
+-
+-	row := Row{
+-		Version: version,
+-		Columns: values,
+-	}
+-
++	// Step 4: Put to memtable under lock (brief hold)
++	e.mu.Lock()
+ 	if e.activeMem.ShouldFlush() {
+ 		if err := e.rotateMemTable(); err != nil {
+ 			e.mu.Unlock()
+@@ -150,16 +146,14 @@ func (e *Engine) Write(key string, values map[string]common.Value) error {
+ 		}
+ 	}
+ 
+-	_, _, err = e.activeMem.Put(key, row)
++	_, _, err = e.activeMem.Put(key, Row{Version: version, Columns: values})
++	e.mu.Unlock()
++
+ 	if err != nil {
+-		e.mu.Unlock()
+ 		return fmt.Errorf("engine write: %w", err)
+ 	}
+ 
+-	e.mu.Unlock()
+-
+-	// GroupCommit 模式下，在引擎锁外等待 WAL sync 完成
+-	// 这样其他写入可以在等待期间并行进行
++	// Step 5: Wait for WAL sync completion (outside engine lock)
+ 	if syncCh != nil {
+ 		<-syncCh
+ 	}
+diff --git a/pkg/storage/engine_read.go b/pkg/storage/engine_read.go
+index a4729f7..4eb072c 100644
+--- a/pkg/storage/engine_read.go
++++ b/pkg/storage/engine_read.go
+@@ -56,7 +56,6 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 		// 创建新 map 而非清空复用，避免逐键删除的开销
+ 		columns := make(map[string]common.Value, len(e.columnMeta))
+ 		for colIdx, col := range e.columnMeta {
+-			// 优先从 BlockCache 获取已解码的列数据
+ 			cacheKey := CacheKey{SegmentID: segID, ColumnIdx: uint32(colIdx)}
+ 			if dc, ok := e.blockCache.get(cacheKey); ok {
+ 				columns[col.Name] = extractValue(dc, rowIdx)
+@@ -66,6 +65,10 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
+ 					continue
+ 				}
+ 				columns[col.Name] = val
++				// Cache the decoded column for future queries
++				if dc, ok := seg.getColCache(uint32(colIdx)); ok {
++					e.blockCache.put(cacheKey, dc)
++				}
+ 			}
+ 		}
+ 		return Row{Version: seg.ID, Columns: columns}, true
+diff --git a/pkg/storage/segment.go b/pkg/storage/segment.go
+index 84fcdc7..19ca78e 100644
+--- a/pkg/storage/segment.go
++++ b/pkg/storage/segment.go
+@@ -41,9 +41,10 @@ type Segment struct {
+ 	FilePath string
+ 	Keys     []string
+ 
+-	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
+-	decodedCache []decodedColumn
+-	decodeOnce   sync.Once
++	// 逐列延迟解码缓存：首次访问某列时解码并缓存，避免点查时解码所有列
++	colCache  []decodedColumn
++	colOnce   []sync.Once
++	cacheInit sync.Once
+ }
+ 
+ // SegmentID 返回 Segment 的唯一标识。
+diff --git a/pkg/storage/segment_decode.go b/pkg/storage/segment_decode.go
+index d99844f..c10aeb3 100644
+--- a/pkg/storage/segment_decode.go
++++ b/pkg/storage/segment_decode.go
+@@ -2,6 +2,7 @@ package storage
+ 
+ import (
+ 	"fmt"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+@@ -119,35 +120,75 @@ func (s *Segment) getColumnValueFromDecoded(cols []decodedColumn, colIdx uint32,
+ 	return extractValue(cols[colIdx], rowIdx)
+ }
+ 
++// ensureColCache 初始化逐列解码缓存，使用 sync.Once 保证线程安全。
++func (s *Segment) ensureColCache() {
++	s.cacheInit.Do(func() {
++		s.colCache = make([]decodedColumn, len(s.Columns))
++		s.colOnce = make([]sync.Once, len(s.Columns))
++	})
++}
++
+ // GetColumnValue 从指定列中提取给定行索引的值。
+-// 使用 Segment 级解码缓存，首次访问时解码所有列并缓存，后续调用直接从缓存读取，
+-// 避免点查时重复解压解码整列数据。
+-// 仅 Data 需要深拷贝（DecompressColumn 会替换 enc.Data），
+-// Offsets、Dict、Nulls 在解压和解码过程中只读，可直接引用。
++// 使用逐列延迟解码：仅解码请求的列，避免点查时解码所有列的开销。
++// 解码结果缓存在 Segment 级别的 colCache 中，后续调用直接从缓存读取。
+ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, error) {
+ 	if int(colIdx) >= len(s.Columns) {
+ 		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+ 	}
+ 
+-	s.decodeOnce.Do(func() {
+-		cols, err := s.decodeAllColumns()
++	s.ensureColCache()
++
++	s.colOnce[colIdx].Do(func() {
++		src := &s.Columns[colIdx]
++		enc := &EncodedColumn{
++			Encoding: src.Encoding,
++			Type:     src.Type,
++			RowCount: src.RowCount,
++		}
++		if len(src.Data) > 0 {
++			enc.Data = make([]byte, len(src.Data))
++			copy(enc.Data, src.Data)
++		}
++		if len(src.Offsets) > 0 {
++			enc.Offsets = src.Offsets
++		}
++		if len(src.Dict) > 0 {
++			enc.Dict = src.Dict
++		}
++		if len(src.Nulls) > 0 {
++			enc.Nulls = src.Nulls
++		}
++		if err := DecompressColumn(enc); err != nil {
++			s.colCache[colIdx] = decodedColumn{}
++			return
++		}
++		decoded, nulls, err := DecodeColumn(enc)
+ 		if err != nil {
+-			// 解码失败时设置空缓存，后续调用将返回 Null
+-			s.decodedCache = make([]decodedColumn, 0)
++			s.colCache[colIdx] = decodedColumn{}
+ 			return
+ 		}
+-		s.decodedCache = cols
++		s.colCache[colIdx] = decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
+ 	})
+ 
+-	if len(s.decodedCache) == 0 {
+-		return common.NewNull(), fmt.Errorf("segment: decode cache unavailable")
++	dc := s.colCache[colIdx]
++	if dc.data == nil {
++		return common.NewNull(), fmt.Errorf("segment: column %d decode unavailable", colIdx)
+ 	}
+ 
+-	if int(colIdx) >= len(s.decodedCache) {
+-		return common.NewNull(), fmt.Errorf("segment: column index %d out of range", colIdx)
+-	}
++	return extractValue(dc, rowIdx), nil
++}
+ 
+-	return extractValue(s.decodedCache[colIdx], rowIdx), nil
++// getColCache returns the decoded column cache entry for the given column index.
++// Returns (decodedColumn, false) if the column has not been decoded yet.
++func (s *Segment) getColCache(colIdx uint32) (decodedColumn, bool) {
++	if int(colIdx) >= len(s.colCache) {
++		return decodedColumn{}, false
++	}
++	dc := s.colCache[colIdx]
++	if dc.data == nil {
++		return decodedColumn{}, false
++	}
++	return dc, true
+ }
+ 
+ // GetAllColumnValues 提取指定行所有列的值。
+diff --git a/pkg/storage/wal.go b/pkg/storage/wal.go
+index 009f095..4e40331 100644
+--- a/pkg/storage/wal.go
++++ b/pkg/storage/wal.go
+@@ -250,6 +250,7 @@ func (w *WAL) maybeRotate() error {
+ 	if err := os.Rename(w.path+".tmp", w.path); err != nil {
+ 		// 极端情况：旧文件已重命名，新文件重命名失败
+ 		// 尝试将 .prev 改回来恢复
++		_ = newF.Close()                   // 关闭新文件描述符，避免泄漏
+ 		_ = os.Rename(rotatedPath, w.path) // 错误恢复路径，忽略重命名错误
+ 		recoveredF, recoverErr := os.OpenFile(w.path, os.O_RDWR|os.O_CREATE, 0644)
+ 		if recoverErr == nil {
+diff --git a/pkg/storage/wal_record.go b/pkg/storage/wal_record.go
+index 5e801f4..1ac1149 100644
+--- a/pkg/storage/wal_record.go
++++ b/pkg/storage/wal_record.go
+@@ -32,23 +32,23 @@ func serializeWriteRecord(key string, version uint64, columns map[string]common.
+ 		size += 2 + len(colName) + 1 + 1 + valueBinarySize(v)
+ 	}
+ 	buf := make([]byte, 0, size)
+-	b := make([]byte, 8)
++	var b [8]byte // stack-allocated, eliminates one heap allocation per write
+ 	// 行数 = 1
+-	binary.LittleEndian.PutUint16(b, 1)
++	binary.LittleEndian.PutUint16(b[:], 1)
+ 	buf = append(buf, b[:2]...)
+ 	// key
+-	binary.LittleEndian.PutUint16(b, uint16(len(key)))
++	binary.LittleEndian.PutUint16(b[:], uint16(len(key)))
+ 	buf = append(buf, b[:2]...)
+ 	buf = append(buf, key...)
+ 	// version
+-	binary.LittleEndian.PutUint64(b, version)
++	binary.LittleEndian.PutUint64(b[:], version)
+ 	buf = append(buf, b[:8]...)
+ 	// 列数
+-	binary.LittleEndian.PutUint16(b, uint16(len(columns)))
++	binary.LittleEndian.PutUint16(b[:], uint16(len(columns)))
+ 	buf = append(buf, b[:2]...)
+ 	// 每列
+ 	for colName, v := range columns {
+-		buf = appendValueBinary(buf, b, colName, v)
++		buf = appendValueBinary(buf, b[:], colName, v)
+ 	}
+ 	return buf, nil
+ }

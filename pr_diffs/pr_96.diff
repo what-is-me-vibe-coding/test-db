@@ -1,0 +1,4597 @@
+diff --git a/pkg/query/analyzer.go b/pkg/query/analyzer.go
+index 1b65609..c1b12b3 100644
+--- a/pkg/query/analyzer.go
++++ b/pkg/query/analyzer.go
+@@ -2,7 +2,6 @@ package query
+ 
+ import (
+ 	"fmt"
+-	"strings"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+@@ -282,123 +281,6 @@ func (a *Analyzer) collectExprColumns(expr Expression, colSet map[string]bool) {
+ 	}
+ }
+ 
+-func (a *Analyzer) hasAggregateFuncs(cols []SelectColumn) bool {
+-	for _, col := range cols {
+-		if a.exprHasAggregate(col.Expr) {
+-			return true
+-		}
+-	}
+-	return false
+-}
+-
+-func (a *Analyzer) exprHasAggregate(expr Expression) bool {
+-	switch e := expr.(type) {
+-	case *FuncExpr:
+-		if isAggregateFunc(e.Name) {
+-			return true
+-		}
+-		for _, arg := range e.Args {
+-			if a.exprHasAggregate(arg) {
+-				return true
+-			}
+-		}
+-	case *BinaryExpr:
+-		return a.exprHasAggregate(e.Left) || a.exprHasAggregate(e.Right)
+-	case *UnaryExpr:
+-		return a.exprHasAggregate(e.Expr)
+-	}
+-	return false
+-}
+-
+-func isAggregateFunc(name string) bool {
+-	switch strings.ToLower(name) {
+-	case aggNameCount, aggNameSum, aggNameMin, aggNameMax, aggNameAvg:
+-		return true
+-	}
+-	return false
+-}
+-
+-func (a *Analyzer) buildAggregateNode(sel *SelectStatement, table *catalog.Table, child PlanNode) (*AggregateNode, error) {
+-	groupBy := make([]Expression, len(sel.GroupBy))
+-	for i, gb := range sel.GroupBy {
+-		resolved, err := a.resolveExpr(gb, table)
+-		if err != nil {
+-			return nil, err
+-		}
+-		groupBy[i] = resolved
+-	}
+-
+-	var aggregates []AggregateExpr
+-	for _, col := range sel.Columns {
+-		a.collectAggregates(col.Expr, &aggregates)
+-	}
+-
+-	schema := make([]ColumnDef, 0, len(groupBy)+len(aggregates))
+-	for _, gb := range groupBy {
+-		schema = append(schema, ColumnDef{
+-			Name:     gb.String(),
+-			Type:     exprReturnType(gb),
+-			Nullable: true,
+-		})
+-	}
+-	for _, agg := range aggregates {
+-		schema = append(schema, ColumnDef{
+-			Name:     agg.String(),
+-			Type:     inferAggReturnType(agg),
+-			Nullable: true,
+-		})
+-	}
+-
+-	return &AggregateNode{
+-		Child:      child,
+-		GroupBy:    groupBy,
+-		Aggregates: aggregates,
+-		schema:     schema,
+-	}, nil
+-}
+-
+-func (a *Analyzer) collectAggregates(expr Expression, aggs *[]AggregateExpr) {
+-	switch e := expr.(type) {
+-	case *FuncExpr:
+-		if isAggregateFunc(e.Name) {
+-			var arg Expression
+-			if len(e.Args) > 0 {
+-				arg = e.Args[0]
+-			}
+-			*aggs = append(*aggs, AggregateExpr{
+-				Func: parseAggFunc(e.Name),
+-				Arg:  arg,
+-			})
+-			return
+-		}
+-		for _, arg := range e.Args {
+-			a.collectAggregates(arg, aggs)
+-		}
+-	case *BinaryExpr:
+-		a.collectAggregates(e.Left, aggs)
+-		a.collectAggregates(e.Right, aggs)
+-	case *UnaryExpr:
+-		a.collectAggregates(e.Expr, aggs)
+-	}
+-}
+-
+-func parseAggFunc(name string) AggregateFunc {
+-	switch strings.ToLower(name) {
+-	case aggNameCount:
+-		return AggCount
+-	case aggNameSum:
+-		return AggSum
+-	case aggNameMin:
+-		return AggMin
+-	case aggNameMax:
+-		return AggMax
+-	case aggNameAvg:
+-		return AggAvg
+-	default:
+-		return AggCount
+-	}
+-}
+-
+ func (a *Analyzer) buildProjectOutput(_ []SelectColumn, resolved []resolvedColumn, _ *catalog.Table) ([]Expression, []string, []ColumnDef, error) {
+ 	exprs := make([]Expression, len(resolved))
+ 	aliases := make([]string, len(resolved))
+diff --git a/pkg/query/analyzer_aggregate.go b/pkg/query/analyzer_aggregate.go
+new file mode 100644
+index 0000000..e4c7328
+--- /dev/null
++++ b/pkg/query/analyzer_aggregate.go
+@@ -0,0 +1,124 @@
++package query
++
++import (
++	"strings"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
++)
++
++func (a *Analyzer) hasAggregateFuncs(cols []SelectColumn) bool {
++	for _, col := range cols {
++		if a.exprHasAggregate(col.Expr) {
++			return true
++		}
++	}
++	return false
++}
++
++func (a *Analyzer) exprHasAggregate(expr Expression) bool {
++	switch e := expr.(type) {
++	case *FuncExpr:
++		if isAggregateFunc(e.Name) {
++			return true
++		}
++		for _, arg := range e.Args {
++			if a.exprHasAggregate(arg) {
++				return true
++			}
++		}
++	case *BinaryExpr:
++		return a.exprHasAggregate(e.Left) || a.exprHasAggregate(e.Right)
++	case *UnaryExpr:
++		return a.exprHasAggregate(e.Expr)
++	}
++	return false
++}
++
++func isAggregateFunc(name string) bool {
++	switch strings.ToLower(name) {
++	case aggNameCount, aggNameSum, aggNameMin, aggNameMax, aggNameAvg:
++		return true
++	}
++	return false
++}
++
++func (a *Analyzer) buildAggregateNode(sel *SelectStatement, table *catalog.Table, child PlanNode) (*AggregateNode, error) {
++	groupBy := make([]Expression, len(sel.GroupBy))
++	for i, gb := range sel.GroupBy {
++		resolved, err := a.resolveExpr(gb, table)
++		if err != nil {
++			return nil, err
++		}
++		groupBy[i] = resolved
++	}
++
++	var aggregates []AggregateExpr
++	for _, col := range sel.Columns {
++		a.collectAggregates(col.Expr, &aggregates)
++	}
++
++	schema := make([]ColumnDef, 0, len(groupBy)+len(aggregates))
++	for _, gb := range groupBy {
++		schema = append(schema, ColumnDef{
++			Name:     gb.String(),
++			Type:     exprReturnType(gb),
++			Nullable: true,
++		})
++	}
++	for _, agg := range aggregates {
++		schema = append(schema, ColumnDef{
++			Name:     agg.String(),
++			Type:     inferAggReturnType(agg),
++			Nullable: true,
++		})
++	}
++
++	return &AggregateNode{
++		Child:      child,
++		GroupBy:    groupBy,
++		Aggregates: aggregates,
++		schema:     schema,
++	}, nil
++}
++
++func (a *Analyzer) collectAggregates(expr Expression, aggs *[]AggregateExpr) {
++	switch e := expr.(type) {
++	case *FuncExpr:
++		if isAggregateFunc(e.Name) {
++			var arg Expression
++			if len(e.Args) > 0 {
++				arg = e.Args[0]
++			}
++			*aggs = append(*aggs, AggregateExpr{
++				Func: parseAggFunc(e.Name),
++				Arg:  arg,
++			})
++			return
++		}
++		for _, arg := range e.Args {
++			a.collectAggregates(arg, aggs)
++		}
++	case *BinaryExpr:
++		a.collectAggregates(e.Left, aggs)
++		a.collectAggregates(e.Right, aggs)
++	case *UnaryExpr:
++		a.collectAggregates(e.Expr, aggs)
++	}
++}
++
++func parseAggFunc(name string) AggregateFunc {
++	switch strings.ToLower(name) {
++	case aggNameCount:
++		return AggCount
++	case aggNameSum:
++		return AggSum
++	case aggNameMin:
++		return AggMin
++	case aggNameMax:
++		return AggMax
++	case aggNameAvg:
++		return AggAvg
++	default:
++		return AggCount
++	}
++}
+diff --git a/pkg/query/coverage_low_optimizer_v2_test.go b/pkg/query/coverage_low_optimizer_v2_test.go
+index b09e3d4..467ed46 100644
+--- a/pkg/query/coverage_low_optimizer_v2_test.go
++++ b/pkg/query/coverage_low_optimizer_v2_test.go
+@@ -6,6 +6,151 @@ import (
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ )
+ 
++// ---------------------------------------------------------------------------
++// pushFilterDown through AggregateNode: predicates referencing GROUP BY
++// columns remain as FilterNode above Aggregate, while other predicates
++// are pushed below.
++// ---------------------------------------------------------------------------
++
++func TestPushFilterDownThroughAggregate_SplitPredicate(t *testing.T) {
++	rule := &PredicatePushdownRule{}
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColAge, testColScore},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
++			{Name: testColAge, Type: common.TypeInt64},
++			{Name: testColScore, Type: common.TypeFloat64},
++		},
++	}
++
++	agg := &AggregateNode{
++		Child:   scan,
++		GroupBy: []Expression{&ColumnExpr{Name: testColAge}},
++		Aggregates: []AggregateExpr{
++			{Func: AggCount, Arg: &StarExpr{}},
++		},
++		schema: []ColumnDef{
++			{Name: testColAge, Type: common.TypeInt64},
++			{Name: testAggCountStar, Type: common.TypeInt64},
++		},
++	}
++
++	// Condition: age > 20 AND COUNT(*) > 5
++	// age > 20 references a GROUP BY column -> stays above aggregate
++	// COUNT(*) > 5 references an aggregate column -> stays above aggregate
++	// But wait: splitPredicateByAggregate checks if cols are in aggCols.
++	// "age" is in GroupBy, so it's in aggCols -> stays as remaining.
++	// "COUNT(*)" is in Aggregates, so it's in aggCols -> stays as remaining.
++	// So both stay above the aggregate.
++	filter := &FilterNode{
++		Child: agg,
++		Condition: &BinaryExpr{
++			Op:    OpAnd,
++			Left:  &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColAge}, Right: &LiteralExpr{Value: common.NewInt64(20)}},
++			Right: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testAggCountStar}, Right: &LiteralExpr{Value: common.NewInt64(5)}},
++		},
++	}
++
++	result := rule.Apply(filter)
++
++	// Both predicates reference GROUP BY / aggregate columns, so they remain
++	// as a FilterNode above the AggregateNode
++	resultFilter, ok := result.(*FilterNode)
++	if !ok {
++		t.Fatalf("expected FilterNode above Aggregate, got %T", result)
++	}
++	if resultFilter.Condition == nil {
++		t.Error("expected remaining filter condition above aggregate")
++	}
++
++	// The child should be an AggregateNode
++	resultAgg, ok := resultFilter.Child.(*AggregateNode)
++	if !ok {
++		t.Fatalf("expected AggregateNode under Filter, got %T", resultFilter.Child)
++	}
++	// No predicate should have been pushed below the aggregate
++	resultAggChildScan, ok := resultAgg.Child.(*ScanNode)
++	if !ok {
++		t.Fatalf("expected ScanNode under Aggregate, got %T", resultAgg.Child)
++	}
++	if resultAggChildScan.Predicate != nil {
++		t.Errorf("expected no predicate pushed to ScanNode, got %v", resultAggChildScan.Predicate)
++	}
++}
++
++// TestPushFilterDownThroughAggregate_PushablePredicate tests that a predicate
++// referencing a non-GROUP BY, non-aggregate column is pushed below the aggregate.
++func TestPushFilterDownThroughAggregate_PushablePredicate(t *testing.T) {
++	rule := &PredicatePushdownRule{}
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColAge, testColScore},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
++			{Name: testColAge, Type: common.TypeInt64},
++			{Name: testColScore, Type: common.TypeFloat64},
++		},
++	}
++
++	agg := &AggregateNode{
++		Child:   scan,
++		GroupBy: []Expression{&ColumnExpr{Name: testColAge}},
++		Aggregates: []AggregateExpr{
++			{Func: AggCount, Arg: &StarExpr{}},
++		},
++		schema: []ColumnDef{
++			{Name: testColAge, Type: common.TypeInt64},
++			{Name: testAggCountStar, Type: common.TypeInt64},
++		},
++	}
++
++	// Condition: score > 90.0 AND COUNT(*) > 5
++	// score > 90.0 does NOT reference a GROUP BY or aggregate column -> pushed below
++	// COUNT(*) > 5 references an aggregate column -> stays above
++	filter := &FilterNode{
++		Child: agg,
++		Condition: &BinaryExpr{
++			Op:    OpAnd,
++			Left:  &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColScore}, Right: &LiteralExpr{Value: common.NewFloat64(90.0)}},
++			Right: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testAggCountStar}, Right: &LiteralExpr{Value: common.NewInt64(5)}},
++		},
++	}
++
++	result := rule.Apply(filter)
++
++	// There should be a FilterNode remaining above the AggregateNode
++	// for the COUNT(*) > 5 predicate
++	resultFilter, ok := result.(*FilterNode)
++	if !ok {
++		t.Fatalf("expected FilterNode above Aggregate, got %T", result)
++	}
++	if resultFilter.Condition == nil {
++		t.Error("expected remaining filter condition above aggregate")
++	}
++
++	// The child should be an AggregateNode
++	resultAgg, ok := resultFilter.Child.(*AggregateNode)
++	if !ok {
++		t.Fatalf("expected AggregateNode under Filter, got %T", resultFilter.Child)
++	}
++
++	// The pushable predicate (score > 90.0) should have been pushed below the aggregate
++	_, isFilter := resultAgg.Child.(*FilterNode)
++	if !isFilter {
++		// It might be a ScanNode if the filter was pushed all the way through
++		if scanNode, ok2 := resultAgg.Child.(*ScanNode); ok2 {
++			if scanNode.Predicate == nil {
++				t.Error("expected pushable predicate to be pushed below aggregate")
++			}
++		} else {
++			t.Fatalf("expected FilterNode or ScanNode under Aggregate, got %T", resultAgg.Child)
++		}
++	}
++}
++
+ // --- pushFilterDown with AggregateNode: split predicates (pushable + remaining) ---
+ 
+ // TestPushFilterDown_AggregateSplitPredicate tests pushFilterDown with an AggregateNode
+@@ -143,258 +288,146 @@ func TestPushFilterDown_AggregateAllPushable(t *testing.T) {
+ 	}
+ }
+ 
+-// --- pushFilterDown with ProjectNode that can't be pushed through ---
++// ---------------------------------------------------------------------------
++// pushFilterDown with existing ScanNode predicate: predicates are merged with AND
++// ---------------------------------------------------------------------------
+ 
+-// TestPushFilterDown_ProjectCannotPush tests pushFilterDown with a ProjectNode
+-// where the filter references a column not in the project's child schema,
+-// so the filter cannot be pushed through.
+-func TestPushFilterDown_ProjectCannotPush(t *testing.T) {
++func TestPushFilterDown_ScanNodeExistingPredicate(t *testing.T) {
+ 	rule := &PredicatePushdownRule{}
+ 
+ 	scan := &ScanNode{
+-		Table:   testTableUsers,
+-		Columns: []string{testColID, testColName},
+-		schema: []ColumnDef{
+-			{Name: testColID, Type: common.TypeInt64},
+-			{Name: testColName, Type: common.TypeString},
+-		},
++		Table:     testTableUsers,
++		Columns:   []string{testColID, testColAge},
++		schema:    []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: testColAge, Type: common.TypeInt64}},
++		Predicate: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColAge}, Right: &LiteralExpr{Value: common.NewInt64(18)}},
+ 	}
+ 
+-	proj := &ProjectNode{
+-		Child:       scan,
+-		Expressions: []Expression{&ColumnExpr{Name: testColID}},
+-		Aliases:     []string{""},
+-		schema: []ColumnDef{
+-			{Name: testColID, Type: common.TypeInt64},
+-		},
+-	}
+-
+-	// Filter references "age" which is NOT in the project's child schema
+ 	filter := &FilterNode{
+-		Child: proj,
+-		Condition: &BinaryExpr{
+-			Op:    OpGt,
+-			Left:  &ColumnExpr{Name: testColAge},
+-			Right: &LiteralExpr{Value: common.NewInt64(20)},
+-		},
++		Child:     scan,
++		Condition: &BinaryExpr{Op: OpLt, Left: &ColumnExpr{Name: testColID}, Right: &LiteralExpr{Value: common.NewInt64(100)}},
+ 	}
+ 
+ 	result := rule.Apply(filter)
+ 
+-	// The filter should remain above the project since "age" is not in the project schema
+-	resultFilter, ok := result.(*FilterNode)
++	resultScan, ok := result.(*ScanNode)
+ 	if !ok {
+-		t.Fatalf("expected FilterNode (cannot push through project), got %T", result)
++		t.Fatalf("expected ScanNode with merged predicate, got %T", result)
+ 	}
+-	if resultFilter.Condition == nil {
+-		t.Error("expected filter condition to remain above project")
++	if resultScan.Predicate == nil {
++		t.Fatal("expected merged predicate in ScanNode")
++	}
++
++	// The merged predicate should be an AND expression
++	binExpr, ok := resultScan.Predicate.(*BinaryExpr)
++	if !ok {
++		t.Fatalf("expected BinaryExpr for merged predicate, got %T", resultScan.Predicate)
++	}
++	if binExpr.Op != OpAnd {
++		t.Errorf("expected OpAnd for merged predicate, got %v", binExpr.Op)
+ 	}
+ }
+ 
+-// --- pushFilterDown with nested FilterNode (merge case) ---
++// ---------------------------------------------------------------------------
++// pushFilterDown through ProjectNode (cannot push): filter references a column
++// not in the project's child schema, so filter is NOT pushed down
++// ---------------------------------------------------------------------------
+ 
+-// TestPushFilterDown_NestedFilterMerge tests that nested FilterNodes are merged
+-// when the inner filter cannot be pushed down (e.g., above a LimitNode).
+-func TestPushFilterDown_NestedFilterMerge(t *testing.T) {
++func TestPushFilterDownThroughProject_CannotPushMissingColumn(t *testing.T) {
+ 	rule := &PredicatePushdownRule{}
+ 
+ 	scan := &ScanNode{
+ 		Table:   testTableUsers,
+-		Columns: []string{testColID, testColAge},
++		Columns: []string{testColID, testColName},
+ 		schema: []ColumnDef{
+ 			{Name: testColID, Type: common.TypeInt64},
+-			{Name: testColAge, Type: common.TypeInt64},
++			{Name: testColName, Type: common.TypeString},
+ 		},
+ 	}
+ 
+-	limit := &LimitNode{Child: scan, Count: 10}
+-
+-	// Inner filter above limit - cannot be pushed down
+-	innerFilter := &FilterNode{
+-		Child: limit,
+-		Condition: &BinaryExpr{
+-			Op:    OpGt,
+-			Left:  &ColumnExpr{Name: testColAge},
+-			Right: &LiteralExpr{Value: common.NewInt64(20)},
++	// Project only id and name
++	proj := &ProjectNode{
++		Child:       scan,
++		Expressions: []Expression{&ColumnExpr{Name: testColID}, &ColumnExpr{Name: testColName}},
++		Aliases:     []string{"", ""},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
++			{Name: testColName, Type: common.TypeString},
+ 		},
+ 	}
+ 
+-	// Outer filter above inner filter
+-	outerFilter := &FilterNode{
+-		Child: innerFilter,
+-		Condition: &BinaryExpr{
+-			Op:    OpLt,
+-			Left:  &ColumnExpr{Name: testColID},
+-			Right: &LiteralExpr{Value: common.NewInt64(100)},
+-		},
++	// Filter references "score" which does NOT exist in proj.Child.Schema()
++	filter := &FilterNode{
++		Child:     proj,
++		Condition: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColScore}, Right: &LiteralExpr{Value: common.NewFloat64(90.0)}},
+ 	}
+ 
+-	result := rule.Apply(outerFilter)
++	result := rule.Apply(filter)
+ 
+-	// The outer filter should be merged with the inner filter
+-	// (both remain above the limit since they can't be pushed through)
++	// Filter should NOT be pushed down; it should remain as FilterNode above ProjectNode
+ 	resultFilter, ok := result.(*FilterNode)
+ 	if !ok {
+-		t.Fatalf("expected FilterNode (merged filters), got %T", result)
++		t.Fatalf("expected FilterNode (not pushed through project), got %T", result)
+ 	}
+ 	if resultFilter.Condition == nil {
+-		t.Error("expected merged filter condition")
++		t.Error("expected filter condition to remain")
++	}
++
++	// The child of the filter should be a ProjectNode
++	resultProj, ok := resultFilter.Child.(*ProjectNode)
++	if !ok {
++		t.Fatalf("expected ProjectNode under Filter, got %T", resultFilter.Child)
++	}
++	// The ProjectNode's child should be a ScanNode (no filter pushed below)
++	_, ok = resultProj.Child.(*ScanNode)
++	if !ok {
++		t.Fatalf("expected ScanNode under Project, got %T", resultProj.Child)
+ 	}
+ }
+ 
+-// --- pushFilterDown with LimitNode child ---
++// --- pushFilterDown with ProjectNode that can't be pushed through ---
+ 
+-// TestPushFilterDown_LimitChild tests that a filter above a LimitNode cannot
+-// be pushed through and remains as a FilterNode.
+-func TestPushFilterDown_LimitChild(t *testing.T) {
++// TestPushFilterDown_ProjectCannotPush tests pushFilterDown with a ProjectNode
++// where the filter references a column not in the project's child schema,
++// so the filter cannot be pushed through.
++func TestPushFilterDown_ProjectCannotPush(t *testing.T) {
+ 	rule := &PredicatePushdownRule{}
+ 
+ 	scan := &ScanNode{
+ 		Table:   testTableUsers,
+-		Columns: []string{testColID, testColAge},
++		Columns: []string{testColID, testColName},
+ 		schema: []ColumnDef{
+ 			{Name: testColID, Type: common.TypeInt64},
+-			{Name: testColAge, Type: common.TypeInt64},
++			{Name: testColName, Type: common.TypeString},
+ 		},
+ 	}
+ 
+-	limit := &LimitNode{Child: scan, Count: 10}
+-
+-	filter := &FilterNode{
+-		Child: limit,
+-		Condition: &BinaryExpr{
+-			Op:    OpGt,
+-			Left:  &ColumnExpr{Name: testColAge},
+-			Right: &LiteralExpr{Value: common.NewInt64(20)},
++	proj := &ProjectNode{
++		Child:       scan,
++		Expressions: []Expression{&ColumnExpr{Name: testColID}},
++		Aliases:     []string{""},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
+ 		},
+ 	}
+ 
+-	result := rule.Apply(filter)
+-
+-	resultFilter, ok := result.(*FilterNode)
+-	if !ok {
+-		t.Fatalf("expected FilterNode (cannot push through limit), got %T", result)
+-	}
+-	if resultFilter.Condition == nil {
+-		t.Error("expected filter condition to remain above limit")
+-	}
+-}
+-
+-// --- pushDown with unknown node type ---
+-
+-// TestPushDown_UnknownNodeType tests that pushDown returns the node unchanged
+-// when it encounters an unknown node type.
+-func TestPushDown_UnknownNodeType(t *testing.T) {
+-	rule := &PredicatePushdownRule{}
+-
+-	// Create a custom PlanNode that is not one of the known types
+-	unknownNode := &testUnknownPlanNode{
+-		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
+-	}
+-
+-	result := rule.Apply(unknownNode)
+-	if result != unknownNode {
+-		t.Error("expected unknown node to be returned unchanged")
+-	}
+-}
+-
+-// testUnknownPlanNode is a PlanNode implementation not recognized by the optimizer.
+-type testUnknownPlanNode struct {
+-	schema []ColumnDef
+-}
+-
+-func (n *testUnknownPlanNode) planNode()            {}
+-func (n *testUnknownPlanNode) Schema() []ColumnDef  { return n.schema }
+-func (n *testUnknownPlanNode) Children() []PlanNode { return nil }
+-func (n *testUnknownPlanNode) String() string       { return "UnknownNode" }
+-
+-// --- pushFilterDown with unknown child type ---
+-
+-// TestPushFilterDown_UnknownChild tests pushFilterDown when the child is
+-// an unknown PlanNode type (not Scan, Filter, Project, Aggregate).
+-func TestPushFilterDown_UnknownChild(t *testing.T) {
+-	rule := &PredicatePushdownRule{}
+-
+-	unknownChild := &testUnknownPlanNode{
+-		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
+-	}
+-
++	// Filter references "age" which is NOT in the project's child schema
+ 	filter := &FilterNode{
+-		Child: unknownChild,
++		Child: proj,
+ 		Condition: &BinaryExpr{
+ 			Op:    OpGt,
+-			Left:  &ColumnExpr{Name: testColID},
+-			Right: &LiteralExpr{Value: common.NewInt64(0)},
++			Left:  &ColumnExpr{Name: testColAge},
++			Right: &LiteralExpr{Value: common.NewInt64(20)},
+ 		},
+ 	}
+ 
+ 	result := rule.Apply(filter)
+ 
+-	// Filter should remain above the unknown child
++	// The filter should remain above the project since "age" is not in the project schema
+ 	resultFilter, ok := result.(*FilterNode)
+ 	if !ok {
+-		t.Fatalf("expected FilterNode, got %T", result)
++		t.Fatalf("expected FilterNode (cannot push through project), got %T", result)
+ 	}
+ 	if resultFilter.Condition == nil {
+-		t.Error("expected filter condition to remain")
+-	}
+-}
+-
+-// --- PlanNode String methods for additional coverage ---
+-
+-// TestLimitNodeString tests LimitNode.String().
+-func TestLimitNodeString(t *testing.T) {
+-	scan := &ScanNode{
+-		Table:   testTableUsers,
+-		Columns: []string{testColID},
+-		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
+-	}
+-	limit := &LimitNode{Child: scan, Offset: 5, Count: 10}
+-	s := limit.String()
+-	if s == "" {
+-		t.Error("expected non-empty string representation")
+-	}
+-}
+-
+-// TestFilterNodeString tests FilterNode.String().
+-func TestFilterNodeString(t *testing.T) {
+-	scan := &ScanNode{
+-		Table:   testTableUsers,
+-		Columns: []string{testColID},
+-		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
+-	}
+-	filter := &FilterNode{
+-		Child: scan,
+-		Condition: &BinaryExpr{
+-			Op:    OpGt,
+-			Left:  &ColumnExpr{Name: testColID},
+-			Right: &LiteralExpr{Value: common.NewInt64(0)},
+-		},
+-	}
+-	s := filter.String()
+-	if s == "" {
+-		t.Error("expected non-empty string representation")
+-	}
+-}
+-
+-// TestAggregateNodeString_WithGroupBy tests AggregateNode.String() with GROUP BY.
+-func TestAggregateNodeString_WithGroupBy(t *testing.T) {
+-	scan := &ScanNode{
+-		Table:   testTableUsers,
+-		Columns: []string{testColID, testColAge},
+-		schema: []ColumnDef{
+-			{Name: testColID, Type: common.TypeInt64},
+-			{Name: testColAge, Type: common.TypeInt64},
+-		},
+-	}
+-	agg := &AggregateNode{
+-		Child:      scan,
+-		GroupBy:    []Expression{&ColumnExpr{Name: testColAge}},
+-		Aggregates: []AggregateExpr{{Func: AggCount, Arg: &StarExpr{}}},
+-		schema:     []ColumnDef{{Name: testColAge, Type: common.TypeInt64}, {Name: testAggCountStar, Type: common.TypeInt64}},
+-	}
+-	s := agg.String()
+-	if s == "" {
+-		t.Error("expected non-empty string representation")
++		t.Error("expected filter condition to remain above project")
+ 	}
+ }
+diff --git a/pkg/query/coverage_low_optimizer_v3_test.go b/pkg/query/coverage_low_optimizer_v3_test.go
+new file mode 100644
+index 0000000..0b911a6
+--- /dev/null
++++ b/pkg/query/coverage_low_optimizer_v3_test.go
+@@ -0,0 +1,345 @@
++package query
++
++import (
++	"strings"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// --- pushFilterDown with nested FilterNode (merge case) ---
++
++// TestPushFilterDown_NestedFilterMerge tests that nested FilterNodes are merged
++// when the inner filter cannot be pushed down (e.g., above a LimitNode).
++func TestPushFilterDown_NestedFilterMerge(t *testing.T) {
++	rule := &PredicatePushdownRule{}
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColAge},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
++			{Name: testColAge, Type: common.TypeInt64},
++		},
++	}
++
++	limit := &LimitNode{Child: scan, Count: 10}
++
++	// Inner filter above limit - cannot be pushed down
++	innerFilter := &FilterNode{
++		Child: limit,
++		Condition: &BinaryExpr{
++			Op:    OpGt,
++			Left:  &ColumnExpr{Name: testColAge},
++			Right: &LiteralExpr{Value: common.NewInt64(20)},
++		},
++	}
++
++	// Outer filter above inner filter
++	outerFilter := &FilterNode{
++		Child: innerFilter,
++		Condition: &BinaryExpr{
++			Op:    OpLt,
++			Left:  &ColumnExpr{Name: testColID},
++			Right: &LiteralExpr{Value: common.NewInt64(100)},
++		},
++	}
++
++	result := rule.Apply(outerFilter)
++
++	// The outer filter should be merged with the inner filter
++	// (both remain above the limit since they can't be pushed through)
++	resultFilter, ok := result.(*FilterNode)
++	if !ok {
++		t.Fatalf("expected FilterNode (merged filters), got %T", result)
++	}
++	if resultFilter.Condition == nil {
++		t.Error("expected merged filter condition")
++	}
++}
++
++// --- pushFilterDown with LimitNode child ---
++
++// TestPushFilterDown_LimitChild tests that a filter above a LimitNode cannot
++// be pushed through and remains as a FilterNode.
++func TestPushFilterDown_LimitChild(t *testing.T) {
++	rule := &PredicatePushdownRule{}
++
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColAge},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
++			{Name: testColAge, Type: common.TypeInt64},
++		},
++	}
++
++	limit := &LimitNode{Child: scan, Count: 10}
++
++	filter := &FilterNode{
++		Child: limit,
++		Condition: &BinaryExpr{
++			Op:    OpGt,
++			Left:  &ColumnExpr{Name: testColAge},
++			Right: &LiteralExpr{Value: common.NewInt64(20)},
++		},
++	}
++
++	result := rule.Apply(filter)
++
++	resultFilter, ok := result.(*FilterNode)
++	if !ok {
++		t.Fatalf("expected FilterNode (cannot push through limit), got %T", result)
++	}
++	if resultFilter.Condition == nil {
++		t.Error("expected filter condition to remain above limit")
++	}
++}
++
++// --- pushDown with unknown node type ---
++
++// TestPushDown_UnknownNodeType tests that pushDown returns the node unchanged
++// when it encounters an unknown node type.
++func TestPushDown_UnknownNodeType(t *testing.T) {
++	rule := &PredicatePushdownRule{}
++
++	// Create a custom PlanNode that is not one of the known types
++	unknownNode := &testUnknownPlanNode{
++		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++
++	result := rule.Apply(unknownNode)
++	if result != unknownNode {
++		t.Error("expected unknown node to be returned unchanged")
++	}
++}
++
++// testUnknownPlanNode is a PlanNode implementation not recognized by the optimizer.
++type testUnknownPlanNode struct {
++	schema []ColumnDef
++}
++
++func (n *testUnknownPlanNode) planNode()            {}
++func (n *testUnknownPlanNode) Schema() []ColumnDef  { return n.schema }
++func (n *testUnknownPlanNode) Children() []PlanNode { return nil }
++func (n *testUnknownPlanNode) String() string       { return "UnknownNode" }
++
++// --- pushFilterDown with unknown child type ---
++
++// TestPushFilterDown_UnknownChild tests pushFilterDown when the child is
++// an unknown PlanNode type (not Scan, Filter, Project, Aggregate).
++func TestPushFilterDown_UnknownChild(t *testing.T) {
++	rule := &PredicatePushdownRule{}
++
++	unknownChild := &testUnknownPlanNode{
++		schema: []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++
++	filter := &FilterNode{
++		Child: unknownChild,
++		Condition: &BinaryExpr{
++			Op:    OpGt,
++			Left:  &ColumnExpr{Name: testColID},
++			Right: &LiteralExpr{Value: common.NewInt64(0)},
++		},
++	}
++
++	result := rule.Apply(filter)
++
++	// Filter should remain above the unknown child
++	resultFilter, ok := result.(*FilterNode)
++	if !ok {
++		t.Fatalf("expected FilterNode, got %T", result)
++	}
++	if resultFilter.Condition == nil {
++		t.Error("expected filter condition to remain")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// PlanNode.String() methods: ScanNode with/without predicate, FilterNode,
++// ProjectNode, AggregateNode, LimitNode
++// ---------------------------------------------------------------------------
++
++func TestScanNodeString_WithPredicate(t *testing.T) {
++	scan := &ScanNode{
++		Table:     testTableUsers,
++		Columns:   []string{testColID, testColAge},
++		schema:    []ColumnDef{{Name: testColID, Type: common.TypeInt64}, {Name: testColAge, Type: common.TypeInt64}},
++		Predicate: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColAge}, Right: &LiteralExpr{Value: common.NewInt64(20)}},
++	}
++	s := scan.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++	if !strings.Contains(s, "Predicate") {
++		t.Errorf("expected string to contain 'Predicate', got %q", s)
++	}
++	if !strings.Contains(s, testTableUsers) {
++		t.Errorf("expected string to contain table name %q, got %q", testTableUsers, s)
++	}
++}
++
++func TestScanNodeString_WithoutPredicate_V2(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID},
++		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++	s := scan.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++	if strings.Contains(s, "Predicate") {
++		t.Errorf("expected string NOT to contain 'Predicate' when no predicate, got %q", s)
++	}
++}
++
++func TestFilterNodeString_V2(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID},
++		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++	filter := &FilterNode{
++		Child:     scan,
++		Condition: &BinaryExpr{Op: OpGt, Left: &ColumnExpr{Name: testColID}, Right: &LiteralExpr{Value: common.NewInt64(0)}},
++	}
++	s := filter.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++	if !strings.Contains(s, "Filter") {
++		t.Errorf("expected string to contain 'Filter', got %q", s)
++	}
++}
++
++func TestProjectNodeString_V2(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID},
++		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++	proj := &ProjectNode{
++		Child:       scan,
++		Expressions: []Expression{&ColumnExpr{Name: testColID}},
++		Aliases:     []string{testColUserID},
++		schema:      []ColumnDef{{Name: testColUserID, Type: common.TypeInt64}},
++	}
++	s := proj.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++	if !strings.Contains(s, "Project") {
++		t.Errorf("expected string to contain 'Project', got %q", s)
++	}
++	if !strings.Contains(s, "AS") {
++		t.Errorf("expected string to contain 'AS' for alias, got %q", s)
++	}
++}
++
++func TestAggregateNodeString_V2(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColAge},
++		schema:  []ColumnDef{{Name: testColAge, Type: common.TypeInt64}},
++	}
++	agg := &AggregateNode{
++		Child:      scan,
++		GroupBy:    []Expression{&ColumnExpr{Name: testColAge}},
++		Aggregates: []AggregateExpr{{Func: AggCount, Arg: &StarExpr{}}},
++		schema:     []ColumnDef{{Name: testColAge, Type: common.TypeInt64}, {Name: testAggCountStar, Type: common.TypeInt64}},
++	}
++	s := agg.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++	if !strings.Contains(s, "Aggregate") {
++		t.Errorf("expected string to contain 'Aggregate', got %q", s)
++	}
++	if !strings.Contains(s, "GroupBy") {
++		t.Errorf("expected string to contain 'GroupBy', got %q", s)
++	}
++}
++
++func TestLimitNodeString_V2(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID},
++		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++	limit := &LimitNode{
++		Child:  scan,
++		Offset: 5,
++		Count:  10,
++	}
++	s := limit.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++	if !strings.Contains(s, "Limit") {
++		t.Errorf("expected string to contain 'Limit', got %q", s)
++	}
++	if !strings.Contains(s, "5") || !strings.Contains(s, "10") {
++		t.Errorf("expected string to contain offset 5 and count 10, got %q", s)
++	}
++}
++
++// --- PlanNode String methods for additional coverage ---
++
++// TestLimitNodeString tests LimitNode.String().
++func TestLimitNodeString(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID},
++		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++	limit := &LimitNode{Child: scan, Offset: 5, Count: 10}
++	s := limit.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++}
++
++// TestFilterNodeString tests FilterNode.String().
++func TestFilterNodeString(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID},
++		schema:  []ColumnDef{{Name: testColID, Type: common.TypeInt64}},
++	}
++	filter := &FilterNode{
++		Child: scan,
++		Condition: &BinaryExpr{
++			Op:    OpGt,
++			Left:  &ColumnExpr{Name: testColID},
++			Right: &LiteralExpr{Value: common.NewInt64(0)},
++		},
++	}
++	s := filter.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++}
++
++// TestAggregateNodeString_WithGroupBy tests AggregateNode.String() with GROUP BY.
++func TestAggregateNodeString_WithGroupBy(t *testing.T) {
++	scan := &ScanNode{
++		Table:   testTableUsers,
++		Columns: []string{testColID, testColAge},
++		schema: []ColumnDef{
++			{Name: testColID, Type: common.TypeInt64},
++			{Name: testColAge, Type: common.TypeInt64},
++		},
++	}
++	agg := &AggregateNode{
++		Child:      scan,
++		GroupBy:    []Expression{&ColumnExpr{Name: testColAge}},
++		Aggregates: []AggregateExpr{{Func: AggCount, Arg: &StarExpr{}}},
++		schema:     []ColumnDef{{Name: testColAge, Type: common.TypeInt64}, {Name: testAggCountStar, Type: common.TypeInt64}},
++	}
++	s := agg.String()
++	if s == "" {
++		t.Error("expected non-empty string representation")
++	}
++}
+diff --git a/pkg/query/optimizer.go b/pkg/query/optimizer.go
+index e0611d7..bd7ad95 100644
+--- a/pkg/query/optimizer.go
++++ b/pkg/query/optimizer.go
+@@ -233,7 +233,6 @@ func (r *ConstantFoldingRule) foldBinaryExpr(e *BinaryExpr) Expression {
+ 	if result, ok := r.foldLogical(e.Op, leftLit.Value, rightLit.Value); ok {
+ 		return &LiteralExpr{Value: common.NewBool(result)}
+ 	}
+-
+ 	return e
+ }
+ 
+diff --git a/pkg/query/parser.go b/pkg/query/parser.go
+index f120c8f..368800a 100644
+--- a/pkg/query/parser.go
++++ b/pkg/query/parser.go
+@@ -3,12 +3,9 @@ package query
+ import (
+ 	"fmt"
+ 	"regexp"
+-	"strconv"
+ 	"strings"
+ 
+ 	"github.com/xwb1989/sqlparser"
+-
+-	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ )
+ 
+ const mysqlTinyint = "TINYINT"
+@@ -225,258 +222,3 @@ func (p *Parser) convertTableExprs(tableExprs sqlparser.TableExprs) (*TableRef,
+ 		Alias: alias,
+ 	}, nil
+ }
+-
+-// convertExpr 转换表达式。
+-func (p *Parser) convertExpr(expr sqlparser.Expr) (Expression, error) {
+-	if expr == nil {
+-		return nil, nil
+-	}
+-
+-	switch e := expr.(type) {
+-	case *sqlparser.ColName:
+-		return &ColumnExpr{Name: sqlparser.String(e)}, nil
+-	case *sqlparser.SQLVal:
+-		return p.convertSQLVal(e)
+-	case *sqlparser.NullVal:
+-		return &LiteralExpr{Value: common.NewNull()}, nil
+-	case *sqlparser.ComparisonExpr:
+-		return p.convertComparisonExpr(e)
+-	case *sqlparser.AndExpr:
+-		return p.convertBinaryExpr(e.Left, e.Right, OpAnd)
+-	case *sqlparser.OrExpr:
+-		return p.convertBinaryExpr(e.Left, e.Right, OpOr)
+-	case *sqlparser.NotExpr:
+-		inner, err := p.convertExpr(e.Expr)
+-		if err != nil {
+-			return nil, err
+-		}
+-		return &UnaryExpr{Op: OpNot, Expr: inner}, nil
+-	case *sqlparser.ParenExpr:
+-		return p.convertExpr(e.Expr)
+-	case *sqlparser.FuncExpr:
+-		return p.convertFuncExpr(e)
+-	default:
+-		return nil, fmt.Errorf("query parse: unsupported expr type %T", expr)
+-	}
+-}
+-
+-// convertBinaryExpr 转换二元逻辑表达式（AND/OR）。
+-func (p *Parser) convertBinaryExpr(left, right sqlparser.Expr, op BinaryOp) (*BinaryExpr, error) {
+-	l, err := p.convertExpr(left)
+-	if err != nil {
+-		return nil, err
+-	}
+-	r, err := p.convertExpr(right)
+-	if err != nil {
+-		return nil, err
+-	}
+-	return &BinaryExpr{Op: op, Left: l, Right: r}, nil
+-}
+-
+-// convertSQLVal 转换 SQL 字面量值。
+-func (p *Parser) convertSQLVal(val *sqlparser.SQLVal) (*LiteralExpr, error) {
+-	switch val.Type {
+-	case sqlparser.IntVal:
+-		n, err := strconv.ParseInt(string(val.Val), 10, 64)
+-		if err != nil {
+-			return nil, fmt.Errorf("query parse: invalid int value %q: %w", string(val.Val), err)
+-		}
+-		return &LiteralExpr{Value: common.NewInt64(n)}, nil
+-	case sqlparser.FloatVal:
+-		f, err := strconv.ParseFloat(string(val.Val), 64)
+-		if err != nil {
+-			return nil, fmt.Errorf("query parse: invalid float value %q: %w", string(val.Val), err)
+-		}
+-		return &LiteralExpr{Value: common.NewFloat64(f)}, nil
+-	case sqlparser.StrVal:
+-		return &LiteralExpr{Value: common.NewString(string(val.Val))}, nil
+-	default:
+-		return nil, fmt.Errorf("query parse: unsupported SQLVal type %d", val.Type)
+-	}
+-}
+-
+-// convertComparisonExpr 转换比较表达式。
+-func (p *Parser) convertComparisonExpr(expr *sqlparser.ComparisonExpr) (*BinaryExpr, error) {
+-	left, err := p.convertExpr(expr.Left)
+-	if err != nil {
+-		return nil, err
+-	}
+-	right, err := p.convertExpr(expr.Right)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	op, err := p.convertComparisonOp(expr.Operator)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	return &BinaryExpr{Op: op, Left: left, Right: right}, nil
+-}
+-
+-// convertComparisonOp 转换比较运算符。
+-func (p *Parser) convertComparisonOp(op string) (BinaryOp, error) {
+-	switch op {
+-	case sqlparser.EqualStr:
+-		return OpEq, nil
+-	case sqlparser.NotEqualStr:
+-		return OpNe, nil
+-	case sqlparser.LessThanStr:
+-		return OpLt, nil
+-	case sqlparser.LessEqualStr:
+-		return OpLe, nil
+-	case sqlparser.GreaterThanStr:
+-		return OpGt, nil
+-	case sqlparser.GreaterEqualStr:
+-		return OpGe, nil
+-	case sqlparser.LikeStr:
+-		return OpLike, nil
+-	default:
+-		return 0, fmt.Errorf("query parse: unsupported comparison operator %q", op)
+-	}
+-}
+-
+-// convertFuncExpr 转换函数调用表达式。
+-func (p *Parser) convertFuncExpr(fn *sqlparser.FuncExpr) (*FuncExpr, error) {
+-	name := strings.ToLower(fn.Name.String())
+-
+-	args := make([]Expression, 0, len(fn.Exprs))
+-	for _, selExpr := range fn.Exprs {
+-		aliased, ok := selExpr.(*sqlparser.AliasedExpr)
+-		if !ok {
+-			if _, starOk := selExpr.(*sqlparser.StarExpr); starOk {
+-				args = append(args, &StarExpr{})
+-				continue
+-			}
+-			return nil, fmt.Errorf("query parse: unsupported func arg type %T", selExpr)
+-		}
+-		arg, err := p.convertExpr(aliased.Expr)
+-		if err != nil {
+-			return nil, err
+-		}
+-		args = append(args, arg)
+-	}
+-
+-	return &FuncExpr{Name: name, Args: args}, nil
+-}
+-
+-// convertGroupBy 转换 GROUP BY 子句。
+-func (p *Parser) convertGroupBy(groupBy sqlparser.GroupBy) ([]Expression, error) {
+-	result := make([]Expression, len(groupBy))
+-	for i, expr := range groupBy {
+-		converted, err := p.convertExpr(expr)
+-		if err != nil {
+-			return nil, err
+-		}
+-		result[i] = converted
+-	}
+-	return result, nil
+-}
+-
+-// convertLimit 转换 LIMIT 子句。
+-func (p *Parser) convertLimit(limit *sqlparser.Limit) (*LimitClause, error) {
+-	var offset, count uint64
+-
+-	if limit.Offset != nil {
+-		o, err := p.parseUint64(limit.Offset)
+-		if err != nil {
+-			return nil, fmt.Errorf("query parse: limit offset: %w", err)
+-		}
+-		offset = o
+-	}
+-
+-	c, err := p.parseUint64(limit.Rowcount)
+-	if err != nil {
+-		return nil, fmt.Errorf("query parse: limit count: %w", err)
+-	}
+-	count = c
+-
+-	return &LimitClause{Offset: offset, Count: count}, nil
+-}
+-
+-// parseUint64 从 SQL 表达式解析 uint64 值。
+-func (p *Parser) parseUint64(expr sqlparser.Expr) (uint64, error) {
+-	sqlVal, ok := expr.(*sqlparser.SQLVal)
+-	if !ok {
+-		return 0, fmt.Errorf("expected integer literal, got %T", expr)
+-	}
+-	n, err := strconv.ParseUint(string(sqlVal.Val), 10, 64)
+-	if err != nil {
+-		return 0, fmt.Errorf("invalid integer %q: %w", string(sqlVal.Val), err)
+-	}
+-	return n, nil
+-}
+-
+-// convertTableSpec 转换 CREATE TABLE 的表定义。
+-func (p *Parser) convertTableSpec(spec *sqlparser.TableSpec) ([]ColumnDef, []string, error) {
+-	colDefs := make([]ColumnDef, 0, len(spec.Columns))
+-	var primaryKeys []string
+-
+-	for _, col := range spec.Columns {
+-		dataType, err := p.convertColumnType(&col.Type)
+-		if err != nil {
+-			return nil, nil, err
+-		}
+-
+-		nullable := !bool(col.Type.NotNull)
+-
+-		colDefs = append(colDefs, ColumnDef{
+-			Name:     col.Name.String(),
+-			Type:     dataType,
+-			Nullable: nullable,
+-		})
+-
+-		if col.Type.KeyOpt == colKeyPrimary {
+-			primaryKeys = append(primaryKeys, col.Name.String())
+-		}
+-	}
+-
+-	for _, idx := range spec.Indexes {
+-		if idx.Info.Primary {
+-			for _, ic := range idx.Columns {
+-				primaryKeys = append(primaryKeys, ic.Column.String())
+-			}
+-		}
+-	}
+-
+-	return colDefs, primaryKeys, nil
+-}
+-
+-// convertColumnType 将 sqlparser 的列类型转换为 common.DataType。
+-func (p *Parser) convertColumnType(ct *sqlparser.ColumnType) (common.DataType, error) {
+-	typ := strings.ToUpper(ct.Type)
+-
+-	switch typ {
+-	case "BIGINT", "INT":
+-		return common.TypeInt64, nil
+-	case "DOUBLE", "FLOAT":
+-		return common.TypeFloat64, nil
+-	case "TEXT", "VARCHAR", "CHAR":
+-		return common.TypeString, nil
+-	case "BOOLEAN", "TINYINT":
+-		return common.TypeBool, nil
+-	case "TIMESTAMP", "DATETIME":
+-		return common.TypeTimestamp, nil
+-	default:
+-		return common.TypeNull, fmt.Errorf("query parse: unsupported column type %q", ct.Type)
+-	}
+-}
+-
+-const colKeyPrimary = 1
+-
+-// convertValues 转换 INSERT VALUES 子句。
+-func (p *Parser) convertValues(values sqlparser.Values) ([][]Expression, error) {
+-	rows := make([][]Expression, len(values))
+-	for i, valTuple := range values {
+-		row := make([]Expression, len(valTuple))
+-		for j, expr := range valTuple {
+-			converted, err := p.convertExpr(expr)
+-			if err != nil {
+-				return nil, err
+-			}
+-			row[j] = converted
+-		}
+-		rows[i] = row
+-	}
+-	return rows, nil
+-}
+diff --git a/pkg/query/parser_convert.go b/pkg/query/parser_convert.go
+new file mode 100644
+index 0000000..c5af1d3
+--- /dev/null
++++ b/pkg/query/parser_convert.go
+@@ -0,0 +1,266 @@
++package query
++
++import (
++	"fmt"
++	"strconv"
++	"strings"
++
++	"github.com/xwb1989/sqlparser"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// convertExpr 转换表达式。
++func (p *Parser) convertExpr(expr sqlparser.Expr) (Expression, error) {
++	if expr == nil {
++		return nil, nil
++	}
++
++	switch e := expr.(type) {
++	case *sqlparser.ColName:
++		return &ColumnExpr{Name: sqlparser.String(e)}, nil
++	case *sqlparser.SQLVal:
++		return p.convertSQLVal(e)
++	case *sqlparser.NullVal:
++		return &LiteralExpr{Value: common.NewNull()}, nil
++	case *sqlparser.ComparisonExpr:
++		return p.convertComparisonExpr(e)
++	case *sqlparser.AndExpr:
++		return p.convertBinaryExpr(e.Left, e.Right, OpAnd)
++	case *sqlparser.OrExpr:
++		return p.convertBinaryExpr(e.Left, e.Right, OpOr)
++	case *sqlparser.NotExpr:
++		inner, err := p.convertExpr(e.Expr)
++		if err != nil {
++			return nil, err
++		}
++		return &UnaryExpr{Op: OpNot, Expr: inner}, nil
++	case *sqlparser.ParenExpr:
++		return p.convertExpr(e.Expr)
++	case *sqlparser.FuncExpr:
++		return p.convertFuncExpr(e)
++	default:
++		return nil, fmt.Errorf("query parse: unsupported expr type %T", expr)
++	}
++}
++
++// convertBinaryExpr 转换二元逻辑表达式（AND/OR）。
++func (p *Parser) convertBinaryExpr(left, right sqlparser.Expr, op BinaryOp) (*BinaryExpr, error) {
++	l, err := p.convertExpr(left)
++	if err != nil {
++		return nil, err
++	}
++	r, err := p.convertExpr(right)
++	if err != nil {
++		return nil, err
++	}
++	return &BinaryExpr{Op: op, Left: l, Right: r}, nil
++}
++
++// convertSQLVal 转换 SQL 字面量值。
++func (p *Parser) convertSQLVal(val *sqlparser.SQLVal) (*LiteralExpr, error) {
++	switch val.Type {
++	case sqlparser.IntVal:
++		n, err := strconv.ParseInt(string(val.Val), 10, 64)
++		if err != nil {
++			return nil, fmt.Errorf("query parse: invalid int value %q: %w", string(val.Val), err)
++		}
++		return &LiteralExpr{Value: common.NewInt64(n)}, nil
++	case sqlparser.FloatVal:
++		f, err := strconv.ParseFloat(string(val.Val), 64)
++		if err != nil {
++			return nil, fmt.Errorf("query parse: invalid float value %q: %w", string(val.Val), err)
++		}
++		return &LiteralExpr{Value: common.NewFloat64(f)}, nil
++	case sqlparser.StrVal:
++		return &LiteralExpr{Value: common.NewString(string(val.Val))}, nil
++	default:
++		return nil, fmt.Errorf("query parse: unsupported SQLVal type %d", val.Type)
++	}
++}
++
++// convertComparisonExpr 转换比较表达式。
++func (p *Parser) convertComparisonExpr(expr *sqlparser.ComparisonExpr) (*BinaryExpr, error) {
++	left, err := p.convertExpr(expr.Left)
++	if err != nil {
++		return nil, err
++	}
++	right, err := p.convertExpr(expr.Right)
++	if err != nil {
++		return nil, err
++	}
++
++	op, err := p.convertComparisonOp(expr.Operator)
++	if err != nil {
++		return nil, err
++	}
++
++	return &BinaryExpr{Op: op, Left: left, Right: right}, nil
++}
++
++// convertComparisonOp 转换比较运算符。
++func (p *Parser) convertComparisonOp(op string) (BinaryOp, error) {
++	switch op {
++	case sqlparser.EqualStr:
++		return OpEq, nil
++	case sqlparser.NotEqualStr:
++		return OpNe, nil
++	case sqlparser.LessThanStr:
++		return OpLt, nil
++	case sqlparser.LessEqualStr:
++		return OpLe, nil
++	case sqlparser.GreaterThanStr:
++		return OpGt, nil
++	case sqlparser.GreaterEqualStr:
++		return OpGe, nil
++	case sqlparser.LikeStr:
++		return OpLike, nil
++	default:
++		return 0, fmt.Errorf("query parse: unsupported comparison operator %q", op)
++	}
++}
++
++// convertFuncExpr 转换函数调用表达式。
++func (p *Parser) convertFuncExpr(fn *sqlparser.FuncExpr) (*FuncExpr, error) {
++	name := strings.ToLower(fn.Name.String())
++
++	args := make([]Expression, 0, len(fn.Exprs))
++	for _, selExpr := range fn.Exprs {
++		aliased, ok := selExpr.(*sqlparser.AliasedExpr)
++		if !ok {
++			if _, starOk := selExpr.(*sqlparser.StarExpr); starOk {
++				args = append(args, &StarExpr{})
++				continue
++			}
++			return nil, fmt.Errorf("query parse: unsupported func arg type %T", selExpr)
++		}
++		arg, err := p.convertExpr(aliased.Expr)
++		if err != nil {
++			return nil, err
++		}
++		args = append(args, arg)
++	}
++
++	return &FuncExpr{Name: name, Args: args}, nil
++}
++
++// convertGroupBy 转换 GROUP BY 子句。
++func (p *Parser) convertGroupBy(groupBy sqlparser.GroupBy) ([]Expression, error) {
++	result := make([]Expression, len(groupBy))
++	for i, expr := range groupBy {
++		converted, err := p.convertExpr(expr)
++		if err != nil {
++			return nil, err
++		}
++		result[i] = converted
++	}
++	return result, nil
++}
++
++// convertLimit 转换 LIMIT 子句。
++func (p *Parser) convertLimit(limit *sqlparser.Limit) (*LimitClause, error) {
++	var offset, count uint64
++
++	if limit.Offset != nil {
++		o, err := p.parseUint64(limit.Offset)
++		if err != nil {
++			return nil, fmt.Errorf("query parse: limit offset: %w", err)
++		}
++		offset = o
++	}
++
++	c, err := p.parseUint64(limit.Rowcount)
++	if err != nil {
++		return nil, fmt.Errorf("query parse: limit count: %w", err)
++	}
++	count = c
++
++	return &LimitClause{Offset: offset, Count: count}, nil
++}
++
++// parseUint64 从 SQL 表达式解析 uint64 值。
++func (p *Parser) parseUint64(expr sqlparser.Expr) (uint64, error) {
++	sqlVal, ok := expr.(*sqlparser.SQLVal)
++	if !ok {
++		return 0, fmt.Errorf("expected integer literal, got %T", expr)
++	}
++	n, err := strconv.ParseUint(string(sqlVal.Val), 10, 64)
++	if err != nil {
++		return 0, fmt.Errorf("invalid integer %q: %w", string(sqlVal.Val), err)
++	}
++	return n, nil
++}
++
++// convertTableSpec 转换 CREATE TABLE 的表定义。
++func (p *Parser) convertTableSpec(spec *sqlparser.TableSpec) ([]ColumnDef, []string, error) {
++	colDefs := make([]ColumnDef, 0, len(spec.Columns))
++	var primaryKeys []string
++
++	for _, col := range spec.Columns {
++		dataType, err := p.convertColumnType(&col.Type)
++		if err != nil {
++			return nil, nil, err
++		}
++
++		nullable := !bool(col.Type.NotNull)
++
++		colDefs = append(colDefs, ColumnDef{
++			Name:     col.Name.String(),
++			Type:     dataType,
++			Nullable: nullable,
++		})
++
++		if col.Type.KeyOpt == colKeyPrimary {
++			primaryKeys = append(primaryKeys, col.Name.String())
++		}
++	}
++
++	for _, idx := range spec.Indexes {
++		if idx.Info.Primary {
++			for _, ic := range idx.Columns {
++				primaryKeys = append(primaryKeys, ic.Column.String())
++			}
++		}
++	}
++
++	return colDefs, primaryKeys, nil
++}
++
++// convertColumnType 将 sqlparser 的列类型转换为 common.DataType。
++func (p *Parser) convertColumnType(ct *sqlparser.ColumnType) (common.DataType, error) {
++	typ := strings.ToUpper(ct.Type)
++
++	switch typ {
++	case "BIGINT", "INT":
++		return common.TypeInt64, nil
++	case "DOUBLE", "FLOAT":
++		return common.TypeFloat64, nil
++	case "TEXT", "VARCHAR", "CHAR":
++		return common.TypeString, nil
++	case "BOOLEAN", "TINYINT":
++		return common.TypeBool, nil
++	case "TIMESTAMP", "DATETIME":
++		return common.TypeTimestamp, nil
++	default:
++		return common.TypeNull, fmt.Errorf("query parse: unsupported column type %q", ct.Type)
++	}
++}
++
++const colKeyPrimary = 1
++
++// convertValues 转换 INSERT VALUES 子句。
++func (p *Parser) convertValues(values sqlparser.Values) ([][]Expression, error) {
++	rows := make([][]Expression, len(values))
++	for i, valTuple := range values {
++		row := make([]Expression, len(valTuple))
++		for j, expr := range valTuple {
++			converted, err := p.convertExpr(expr)
++			if err != nil {
++				return nil, err
++			}
++			row[j] = converted
++		}
++		rows[i] = row
++	}
++	return rows, nil
++}
+diff --git a/pkg/server/coverage_low_stability_test.go b/pkg/server/coverage_low_stability_test.go
+index 501e76b..08dbc1e 100644
+--- a/pkg/server/coverage_low_stability_test.go
++++ b/pkg/server/coverage_low_stability_test.go
+@@ -345,7 +345,7 @@ func TestIsClosedConnErr完整覆盖(t *testing.T) {
+ 		err  error
+ 		want bool
+ 	}{
+-		{"io.EOF", io.EOF, true},
++		{testNameIOEOF, io.EOF, true},
+ 		{"普通错误", fmt.Errorf("some error"), false},
+ 		{"wrapped io.EOF", fmt.Errorf("wrapped: %w", io.EOF), false}, // isClosedConnErr 用 == 而非 errors.Is 检查 io.EOF
+ 	}
+diff --git a/pkg/server/coverage_low_tcp_handler_test.go b/pkg/server/coverage_low_tcp_handler_test.go
+index c076793..24e641d 100644
+--- a/pkg/server/coverage_low_tcp_handler_test.go
++++ b/pkg/server/coverage_low_tcp_handler_test.go
+@@ -13,6 +13,8 @@ const (
+ 	v14OpAccept    = "accept"
+ 	v14OpRead      = "read"
+ 	v14Nonexistent = "nonexistent"
++	testNameIOEOF  = "io.EOF"
++	testNameNilErr = "nil error"
+ )
+ 
+ // ---------------------------------------------------------------------------
+@@ -26,7 +28,7 @@ func TestIsTransientAcceptErr(t *testing.T) {
+ 		want bool
+ 	}{
+ 		{"non-OpError", errors.New("some error"), false},
+-		{"nil error", nil, false},
++		{testNameNilErr, nil, false},
+ 		{"OpError with timeout", &net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: timeoutError{}}, true},
+ 		{"OpError resource temporarily unavailable", &net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: errors.New("resource temporarily unavailable")}, true},
+ 		{"OpError too many open files", &net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: errors.New("too many open files")}, true},
+@@ -54,14 +56,14 @@ func TestIsClosedConnErr_Table(t *testing.T) {
+ 		err  error
+ 		want bool
+ 	}{
+-		{"io.EOF", io.EOF, true},
++		{testNameIOEOF, io.EOF, true},
+ 		{"net.ErrClosed", net.ErrClosed, true},
+ 		{"wrapped net.ErrClosed", fmt.Errorf("wrapped: %w", net.ErrClosed), true},
+ 		{"double-wrapped net.ErrClosed", fmt.Errorf("outer: %w", fmt.Errorf("inner: %w", net.ErrClosed)), true},
+ 		{"timeout OpError", &net.OpError{Op: v14OpRead, Net: testNetTCP, Err: timeoutError{}}, true},
+ 		{"non-timeout OpError", &net.OpError{Op: v14OpRead, Net: testNetTCP, Err: errors.New("connection reset")}, false},
+ 		{"arbitrary error", errors.New("some error"), false},
+-		{"nil error", nil, false},
++		{testNameNilErr, nil, false},
+ 		{"OpError empty Err", &net.OpError{Op: v14OpRead, Net: testNetTCP, Err: errors.New("")}, false},
+ 	}
+ 	for _, tt := range tests {
+diff --git a/pkg/server/coverage_low_tcp_handler_v4_test.go b/pkg/server/coverage_low_tcp_handler_v4_test.go
+new file mode 100644
+index 0000000..49669da
+--- /dev/null
++++ b/pkg/server/coverage_low_tcp_handler_v4_test.go
+@@ -0,0 +1,159 @@
++package server
++
++import (
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"testing"
++	"time"
++)
++
++// ---------------------------------------------------------------------------
++// handlePing: verify via handlePacket that PacketPing produces a valid response
++// ---------------------------------------------------------------------------
++
++func TestHandlePing_ViaHandlePacket(t *testing.T) {
++	srv := newTestServer(t)
++	defer func() { _ = srv.Stop() }()
++
++	pkt := NewPacket(PacketPing, nil)
++	resp, err := srv.handlePacket(pkt)
++	if err != nil {
++		t.Fatalf("handlePacket(PacketPing) returned error: %v", err)
++	}
++	if resp == nil {
++		t.Fatal("handlePacket(PacketPing) returned nil response")
++	}
++	if resp.Type != PacketResponse {
++		t.Errorf("response type = %d, want %d", resp.Type, PacketResponse)
++	}
++	if resp.Magic != Magic {
++		t.Errorf("response Magic = 0x%08x, want 0x%08x", resp.Magic, Magic)
++	}
++	if resp.Version != ProtocolVersion {
++		t.Errorf("response Version = %d, want %d", resp.Version, ProtocolVersion)
++	}
++
++	var response Response
++	if err := json.Unmarshal(resp.Payload, &response); err != nil {
++		t.Fatalf("unmarshal ping response: %v", err)
++	}
++	if response.Code != 0 {
++		t.Errorf("response Code = %d, want 0", response.Code)
++	}
++	if response.Message != msgPong {
++		t.Errorf("response Message = %q, want %q", response.Message, msgPong)
++	}
++}
++
++// ---------------------------------------------------------------------------
++// handleTCPConn: exits cleanly when server is shutting down (s.done closed)
++// ---------------------------------------------------------------------------
++
++func TestHandleTCPConn_ServerShutdown_V4(t *testing.T) {
++	srv := newTestServer(t)
++	// Do NOT defer srv.Stop() because we close srv.done ourselves below,
++	// and Stop() would try to close it again causing a panic.
++
++	// Close the done channel to simulate server shutdown
++	close(srv.done)
++
++	serverConn, clientConn := net.Pipe()
++	defer func() { _ = clientConn.Close() }()
++
++	// handleTCPConn should detect the closed done channel and exit immediately
++	done := make(chan struct{})
++	srv.wg.Add(1)
++	go func() {
++		srv.handleTCPConn(serverConn)
++		close(done)
++	}()
++
++	select {
++	case <-done:
++		// handleTCPConn exited as expected
++	case <-time.After(2 * time.Second):
++		t.Fatal("handleTCPConn did not exit after server shutdown")
++	}
++
++	// Clean up: close storage manually since we're not calling Stop()
++	_ = srv.storage.Close()
++}
++
++// ---------------------------------------------------------------------------
++// isClosedConnErr: test with io.EOF, net.ErrClosed, and a regular error
++// ---------------------------------------------------------------------------
++
++func TestIsClosedConnErr_V4(t *testing.T) {
++	tests := []struct {
++		name string
++		err  error
++		want bool
++	}{
++		{testNameIOEOF, io.EOF, true},
++		{"net.ErrClosed", net.ErrClosed, true},
++		{"wrapped net.ErrClosed", fmt.Errorf("wrap: %w", net.ErrClosed), true},
++		{"regular error", errors.New("something else"), false},
++		{testNameNilErr, nil, false},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := isClosedConnErr(tt.err); got != tt.want {
++				t.Errorf("isClosedConnErr() = %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
++
++// ---------------------------------------------------------------------------
++// isTransientAcceptErr: timeout OpError, non-timeout OpError with
++// "resource temporarily unavailable", and regular error
++// ---------------------------------------------------------------------------
++
++func TestIsTransientAcceptErr_V4(t *testing.T) {
++	tests := []struct {
++		name string
++		err  error
++		want bool
++	}{
++		{
++			"timeout OpError",
++			&net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: timeoutError{}},
++			true,
++		},
++		{
++			"non-timeout OpError with resource temporarily unavailable",
++			&net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: errors.New("resource temporarily unavailable")},
++			true,
++		},
++		{
++			"non-timeout OpError with too many open files",
++			&net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: errors.New("too many open files")},
++			true,
++		},
++		{
++			"non-timeout OpError with other message",
++			&net.OpError{Op: v14OpAccept, Net: testNetTCP, Err: errors.New("connection refused")},
++			false,
++		},
++		{
++			"regular error",
++			errors.New("some error"),
++			false,
++		},
++		{
++			testNameNilErr,
++			nil,
++			false,
++		},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := isTransientAcceptErr(tt.err); got != tt.want {
++				t.Errorf("isTransientAcceptErr() = %v, want %v", got, tt.want)
++			}
++		})
++	}
++}
+diff --git a/pkg/storage/compaction.go b/pkg/storage/compaction.go
+index 30c4cfc..b5fefdc 100644
+--- a/pkg/storage/compaction.go
++++ b/pkg/storage/compaction.go
+@@ -7,6 +7,7 @@ import (
+ 	"path/filepath"
+ 	"sort"
+ 	"sync"
++	"sync/atomic"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ )
+@@ -20,23 +21,25 @@ const (
+ type Compactor struct {
+ 	mu      sync.Mutex
+ 	dataDir string
+-	nextID  uint64
++	nextID  atomic.Uint64 // 无锁读取 segment ID
+ }
+ 
+ // SetNextID updates the compactor's nextID if the given id is larger.
+ func (c *Compactor) SetNextID(id uint64) {
+-	c.mu.Lock()
+-	defer c.mu.Unlock()
+-	if id > c.nextID {
+-		c.nextID = id
++	for {
++		current := c.nextID.Load()
++		if id <= current {
++			return
++		}
++		if c.nextID.CompareAndSwap(current, id) {
++			return
++		}
+ 	}
+ }
+ 
+-// NextID returns the compactor's current nextID.
++// NextID 无锁读取 compactor 的当前 nextID。
+ func (c *Compactor) NextID() uint64 {
+-	c.mu.Lock()
+-	defer c.mu.Unlock()
+-	return c.nextID
++	return c.nextID.Load()
+ }
+ 
+ // NewCompactor 创建一个 Compactor 实例。
+@@ -262,8 +265,8 @@ func (c *Compactor) buildSegment(rows []memRow, cols []ColumnMeta) (*Segment, er
+ 	minKey := rows[0].Key
+ 	maxKey := rows[len(rows)-1].Key
+ 
+-	c.nextID++
+-	builder := NewSegmentBuilder(c.nextID, minKey, maxKey)
++	c.nextID.Add(1)
++	builder := NewSegmentBuilder(c.nextID.Load(), minKey, maxKey)
+ 
+ 	keys := make([]string, len(rows))
+ 	for i, row := range rows {
+@@ -284,7 +287,7 @@ func (c *Compactor) buildSegment(rows []memRow, cols []ColumnMeta) (*Segment, er
+ 		return nil, fmt.Errorf("compactor: build segment: %w", err)
+ 	}
+ 
+-	fileName := filepath.Join(c.dataDir, fmt.Sprintf("segment_%d.widb", c.nextID))
++	fileName := filepath.Join(c.dataDir, fmt.Sprintf("segment_%d.widb", c.nextID.Load()))
+ 	data, err := seg.Serialize()
+ 	if err != nil {
+ 		return nil, fmt.Errorf("compactor: serialize segment: %w", err)
+diff --git a/pkg/storage/coverage_atomic_and_perf_test.go b/pkg/storage/coverage_atomic_and_perf_test.go
+new file mode 100644
+index 0000000..92ecd72
+--- /dev/null
++++ b/pkg/storage/coverage_atomic_and_perf_test.go
+@@ -0,0 +1,250 @@
++package storage
++
++import (
++	"path/filepath"
++	"sync"
++	"sync/atomic"
++	"testing"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// ---------------------------------------------------------------------------
++// 1. WAL.Size() with atomic — concurrent reads without locks
++// ---------------------------------------------------------------------------
++
++func TestWALSizeAtomicConcurrent(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(path)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++	defer func() { _ = w.Close() }()
++
++	if s := w.Size(); s != 0 {
++		t.Fatalf("expected initial size 0, got %d", s)
++	}
++
++	if err := w.AppendWrite([]byte("hello")); err != nil {
++		t.Fatalf("AppendWrite failed: %v", err)
++	}
++	sizeAfterOne := w.Size()
++	if sizeAfterOne == 0 {
++		t.Fatal("expected non-zero size after write")
++	}
++
++	if err := w.AppendWrite([]byte("world")); err != nil {
++		t.Fatalf("AppendWrite failed: %v", err)
++	}
++	sizeAfterTwo := w.Size()
++	if sizeAfterTwo <= sizeAfterOne {
++		t.Fatalf("expected size to increase after second write: before=%d after=%d", sizeAfterOne, sizeAfterTwo)
++	}
++
++	const readers = 50
++	var wg sync.WaitGroup
++	var sizeErrors atomic.Int64
++	for i := 0; i < readers; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			s := w.Size()
++			if s < sizeAfterTwo {
++				sizeErrors.Add(1)
++			}
++		}()
++	}
++	wg.Wait()
++
++	if sizeErrors.Load() > 0 {
++		t.Errorf("got %d size errors during concurrent reads", sizeErrors.Load())
++	}
++}
++
++func TestWALSizeAtomicDuringWrites(t *testing.T) {
++	dir := t.TempDir()
++	path := filepath.Join(dir, "test.wal")
++
++	w, err := CreateWAL(path)
++	if err != nil {
++		t.Fatalf("CreateWAL failed: %v", err)
++	}
++	defer func() { _ = w.Close() }()
++
++	const writers = 4
++	const writesPer = 50
++	const readers = 4
++
++	var wg sync.WaitGroup
++
++	for i := 0; i < writers; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for j := 0; j < writesPer; j++ {
++				_ = w.AppendWrite([]byte("concurrent-size-test"))
++			}
++		}()
++	}
++
++	for i := 0; i < readers; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for j := 0; j < writesPer*10; j++ {
++				_ = w.Size()
++			}
++		}()
++	}
++
++	wg.Wait()
++
++	finalSize := w.Size()
++	if finalSize == 0 {
++		t.Fatal("expected non-zero final size after concurrent writes")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// 2. Flusher.NextID() with atomic / SetNextID() with CAS
++// ---------------------------------------------------------------------------
++
++func TestFlusherNextIDBasic(t *testing.T) {
++	dir := t.TempDir()
++	f := NewFlusher(dir)
++
++	if id := f.NextID(); id != 0 {
++		t.Fatalf("expected initial NextID 0, got %d", id)
++	}
++}
++
++func TestFlusherSetNextIDCAS(t *testing.T) {
++	dir := t.TempDir()
++	f := NewFlusher(dir)
++
++	f.SetNextID(10)
++	if id := f.NextID(); id != 10 {
++		t.Fatalf("expected NextID 10 after SetNextID(10), got %d", id)
++	}
++
++	f.SetNextID(5)
++	if id := f.NextID(); id != 10 {
++		t.Fatalf("expected NextID 10 after SetNextID(5) (smaller), got %d", id)
++	}
++
++	f.SetNextID(10)
++	if id := f.NextID(); id != 10 {
++		t.Fatalf("expected NextID 10 after SetNextID(10) (same), got %d", id)
++	}
++
++	f.SetNextID(20)
++	if id := f.NextID(); id != 20 {
++		t.Fatalf("expected NextID 20 after SetNextID(20), got %d", id)
++	}
++}
++
++func TestFlusherSetNextIDConcurrent(t *testing.T) {
++	dir := t.TempDir()
++	f := NewFlusher(dir)
++
++	const goroutines = 20
++	var wg sync.WaitGroup
++
++	for i := 0; i < goroutines; i++ {
++		wg.Add(1)
++		go func(val uint64) {
++			defer wg.Done()
++			f.SetNextID(val)
++		}(uint64(i + 1))
++	}
++	wg.Wait()
++
++	if id := f.NextID(); id != goroutines {
++		t.Fatalf("expected NextID %d after concurrent SetNextID, got %d", goroutines, id)
++	}
++}
++
++func TestFlusherNextIDAfterFlush(t *testing.T) {
++	dir := t.TempDir()
++	f := NewFlusher(dir)
++
++	mem := NewMemTable()
++	_, _, _ = mem.Put("k1", Row{Version: 1, Columns: map[string]common.Value{
++		colVal: common.NewInt64(1),
++	}})
++	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
++
++	_, err := f.Flush(mem, cols)
++	if err != nil {
++		t.Fatalf("Flush failed: %v", err)
++	}
++	if id := f.NextID(); id != 1 {
++		t.Fatalf("expected NextID 1 after first flush, got %d", id)
++	}
++
++	mem2 := NewMemTable()
++	_, _, _ = mem2.Put("k2", Row{Version: 1, Columns: map[string]common.Value{
++		colVal: common.NewInt64(2),
++	}})
++	_, err = f.Flush(mem2, cols)
++	if err != nil {
++		t.Fatalf("Flush failed: %v", err)
++	}
++	if id := f.NextID(); id != 2 {
++		t.Fatalf("expected NextID 2 after second flush, got %d", id)
++	}
++}
++
++// ---------------------------------------------------------------------------
++// 3. Compress/Decompress edge cases
++// ---------------------------------------------------------------------------
++
++func TestCompressEmptyDataReturnsNilNil(t *testing.T) {
++	compressed, err := Compress(nil)
++	if err != nil {
++		t.Fatalf("Compress(nil) returned error: %v", err)
++	}
++	if compressed != nil {
++		t.Errorf("Compress(nil) = %v, want nil", compressed)
++	}
++
++	compressed, err = Compress([]byte{})
++	if err != nil {
++		t.Fatalf("Compress([]byte{}) returned error: %v", err)
++	}
++	if compressed != nil {
++		t.Errorf("Compress([]byte{}) = %v, want nil", compressed)
++	}
++}
++
++func TestCompressColumnNilInput(t *testing.T) {
++	err := CompressColumn(nil)
++	if err == nil {
++		t.Fatal("expected error for CompressColumn(nil), got nil")
++	}
++}
++
++func TestDecompressColumnNilInput(t *testing.T) {
++	err := DecompressColumn(nil)
++	if err == nil {
++		t.Fatal("expected error for DecompressColumn(nil), got nil")
++	}
++}
++
++func TestCompressColumnWithEmptyData(t *testing.T) {
++	enc := &EncodedColumn{
++		Encoding: EncodingPlain,
++		Type:     common.TypeInt64,
++		RowCount: 0,
++		Data:     nil,
++	}
++	err := CompressColumn(enc)
++	if err != nil {
++		t.Fatalf("CompressColumn with nil Data: %v", err)
++	}
++	if enc.Data != nil {
++		t.Errorf("expected nil Data after CompressColumn with nil input, got %d bytes", len(enc.Data))
++	}
++}
+diff --git a/pkg/storage/coverage_encoding_and_scan_test.go b/pkg/storage/coverage_encoding_and_scan_test.go
+new file mode 100644
+index 0000000..98254c9
+--- /dev/null
++++ b/pkg/storage/coverage_encoding_and_scan_test.go
+@@ -0,0 +1,327 @@
++package storage
++
++import (
++	"os"
++	"testing"
++	"time"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++)
++
++// ---------------------------------------------------------------------------
++// EncodeColumn additional types — TypeBool and TypeTimestamp
++// ---------------------------------------------------------------------------
++
++func TestEncodeColumnBoolRoundTrip(t *testing.T) {
++	bools := []uint64{1, 0, 1, 1, 0}
++	rowCount := uint32(len(bools))
++
++	enc, err := EncodeColumn(common.TypeBool, bools, rowCount, nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn TypeBool failed: %v", err)
++	}
++	if enc.Encoding != EncodingBitmap {
++		t.Fatalf("expected Bitmap encoding for TypeBool, got %v", enc.Encoding)
++	}
++	if enc.Type != common.TypeBool {
++		t.Fatalf("expected TypeBool, got %v", enc.Type)
++	}
++	if enc.RowCount != rowCount {
++		t.Fatalf("expected RowCount %d, got %d", rowCount, enc.RowCount)
++	}
++
++	decoded, nulls, err := DecodeColumn(enc)
++	if err != nil {
++		t.Fatalf("DecodeColumn TypeBool failed: %v", err)
++	}
++	decodedBools, ok := decoded.([]uint64)
++	if !ok {
++		t.Fatalf("expected []uint64, got %T", decoded)
++	}
++	if nulls != nil {
++		t.Fatalf("expected nil nulls, got non-nil")
++	}
++	for i, v := range decodedBools {
++		if v != bools[i] {
++			t.Errorf("row %d: got %d, want %d", i, v, bools[i])
++		}
++	}
++}
++
++func TestEncodeColumnBoolWithNulls(t *testing.T) {
++	bools := []uint64{1, 0, 1}
++	rowCount := uint32(3)
++	nulls := common.NewBitmap(3)
++	nulls.Set(1)
++
++	enc, err := EncodeColumn(common.TypeBool, bools, rowCount, nulls)
++	if err != nil {
++		t.Fatalf("EncodeColumn TypeBool with nulls failed: %v", err)
++	}
++
++	decoded, decodedNulls, err := DecodeColumn(enc)
++	if err != nil {
++		t.Fatalf("DecodeColumn TypeBool with nulls failed: %v", err)
++	}
++
++	decodedBools := decoded.([]uint64)
++	if decodedNulls == nil || !decodedNulls.Get(1) {
++		t.Error("expected row 1 to be null")
++	}
++	if decodedBools[0] != 1 || decodedBools[2] != 1 {
++		t.Errorf("unexpected decoded values: %v", decodedBools)
++	}
++}
++
++func TestEncodeColumnTimestampRoundTrip(t *testing.T) {
++	now := time.Now()
++	times := []int64{
++		now.UnixNano(),
++		now.Add(time.Hour).UnixNano(),
++		now.Add(2 * time.Hour).UnixNano(),
++	}
++	rowCount := uint32(len(times))
++
++	enc, err := EncodeColumn(common.TypeTimestamp, times, rowCount, nil)
++	if err != nil {
++		t.Fatalf("EncodeColumn TypeTimestamp failed: %v", err)
++	}
++	if enc.Encoding != EncodingPlain {
++		t.Fatalf("expected Plain encoding for TypeTimestamp, got %v", enc.Encoding)
++	}
++	if enc.Type != common.TypeTimestamp {
++		t.Fatalf("expected TypeTimestamp, got %v", enc.Type)
++	}
++
++	decoded, _, err := DecodeColumn(enc)
++	if err != nil {
++		t.Fatalf("DecodeColumn TypeTimestamp failed: %v", err)
++	}
++	decodedTimes, ok := decoded.([]int64)
++	if !ok {
++		t.Fatalf("expected []int64, got %T", decoded)
++	}
++	for i, v := range decodedTimes {
++		if v != times[i] {
++			t.Errorf("row %d: got %d, want %d", i, v, times[i])
++		}
++	}
++}
++
++func TestEncodeColumnTimestampWithNulls(t *testing.T) {
++	times := []int64{1000, 2000, 3000}
++	rowCount := uint32(3)
++	nulls := common.NewBitmap(3)
++	nulls.Set(0)
++	nulls.Set(2)
++
++	enc, err := EncodeColumn(common.TypeTimestamp, times, rowCount, nulls)
++	if err != nil {
++		t.Fatalf("EncodeColumn TypeTimestamp with nulls failed: %v", err)
++	}
++
++	decoded, decodedNulls, err := DecodeColumn(enc)
++	if err != nil {
++		t.Fatalf("DecodeColumn TypeTimestamp with nulls failed: %v", err)
++	}
++
++	decodedTimes := decoded.([]int64)
++	if decodedNulls == nil {
++		t.Fatal("expected non-nil nulls bitmap")
++	}
++	if !decodedNulls.Get(0) || !decodedNulls.Get(2) {
++		t.Error("expected rows 0 and 2 to be null")
++	}
++	if decodedNulls.Get(1) {
++		t.Error("expected row 1 to not be null")
++	}
++	if decodedTimes[1] != 2000 {
++		t.Errorf("row 1: got %d, want 2000", decodedTimes[1])
++	}
++}
++
++// ---------------------------------------------------------------------------
++// writeSegment error path
++// ---------------------------------------------------------------------------
++
++func TestWriteSegmentDirCreationFails(t *testing.T) {
++	tmpFile, err := os.CreateTemp("", "flusher-blockdir-*")
++	if err != nil {
++		t.Fatalf("create temp file: %v", err)
++	}
++	tmpPath := tmpFile.Name()
++	_ = tmpFile.Close()
++	defer func() { _ = os.Remove(tmpPath) }()
++
++	flusher := NewFlusher(tmpPath + "/subdir/segment")
++	seg := &Segment{ID: 1}
++	_, err = flusher.writeSegment(seg)
++	if err == nil {
++		t.Fatal("expected error when writeSegment cannot create directory")
++	}
++}
++
++func TestWriteSegmentWriteFileFails(t *testing.T) {
++	dir := t.TempDir()
++	flusher := NewFlusher(dir)
++
++	seg := &Segment{
++		ID:       1,
++		MinKey:   "a",
++		MaxKey:   "b",
++		RowCount: 1,
++		Columns: []EncodedColumn{{
++			Encoding: EncodingPlain,
++			Type:     common.TypeInt64,
++			RowCount: 1,
++			Data:     make([]byte, 8),
++		}},
++	}
++
++	fileName, err := flusher.writeSegment(seg)
++	if err != nil {
++		t.Fatalf("writeSegment to writable dir failed: %v", err)
++	}
++	if fileName == "" {
++		t.Fatal("expected non-empty file name")
++	}
++
++	tmpFile, err := os.CreateTemp("", "write-blocker-*")
++	if err != nil {
++		t.Fatalf("create temp file: %v", err)
++	}
++	tmpPath := tmpFile.Name()
++	_ = tmpFile.Close()
++	defer func() { _ = os.Remove(tmpPath) }()
++
++	blockedFlusher := NewFlusher(tmpPath + "/subdir")
++	_, err = blockedFlusher.writeSegment(seg)
++	if err == nil {
++		t.Fatal("expected error when writeSegment cannot create directory")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// Segment Build with no columns
++// ---------------------------------------------------------------------------
++
++func TestSegmentBuildNoColumns(t *testing.T) {
++	builder := NewSegmentBuilder(1, "a", "z")
++	_, err := builder.Build()
++	if err == nil {
++		t.Fatal("expected error when building segment with no columns")
++	}
++}
++
++func TestSegmentBuildOnlyNilColumns(t *testing.T) {
++	builder := NewSegmentBuilder(1, "a", "z")
++	builder.AddEncodedColumn(nil)
++	builder.AddEncodedColumn(nil)
++
++	_, err := builder.Build()
++	if err == nil {
++		t.Fatal("expected error when building segment with only nil columns")
++	}
++}
++
++// ---------------------------------------------------------------------------
++// ScanRange with empty result
++// ---------------------------------------------------------------------------
++
++func TestScanRangeNoMatchingKeys(t *testing.T) {
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
++	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
++	_ = eng.Write("c", map[string]common.Value{colVal: common.NewInt64(3)})
++
++	eng.mu.RLock()
++	results := eng.ScanRange("m", "z")
++	eng.mu.RUnlock()
++
++	if len(results) != 0 {
++		t.Fatalf("expected 0 results for non-overlapping range, got %d", len(results))
++	}
++}
++
++func TestScanRangeEmptyEngine(t *testing.T) {
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	eng.mu.RLock()
++	results := eng.ScanRange("a", "z")
++	eng.mu.RUnlock()
++
++	if len(results) != 0 {
++		t.Fatalf("expected 0 results from empty engine, got %d", len(results))
++	}
++}
++
++func TestScanRangeAfterFlushNoMatch(t *testing.T) {
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
++	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
++
++	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
++	if err := eng.Flush(cols); err != nil {
++		t.Fatalf("Flush failed: %v", err)
++	}
++
++	eng.mu.RLock()
++	results := eng.ScanRange("x", "z")
++	eng.mu.RUnlock()
++
++	if len(results) != 0 {
++		t.Fatalf("expected 0 results for non-overlapping range after flush, got %d", len(results))
++	}
++}
++
++func TestScanRangeStartAfterAllKeys(t *testing.T) {
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	_ = eng.Write("a", map[string]common.Value{colVal: common.NewInt64(1)})
++	_ = eng.Write("b", map[string]common.Value{colVal: common.NewInt64(2)})
++
++	eng.mu.RLock()
++	results := eng.ScanRange("c", "z")
++	eng.mu.RUnlock()
++
++	if len(results) != 0 {
++		t.Fatalf("expected 0 results when start > all keys, got %d", len(results))
++	}
++}
++
++func TestScanRangeEndBeforeAllKeys(t *testing.T) {
++	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
++	if err != nil {
++		t.Fatalf("NewEngine failed: %v", err)
++	}
++	defer func() { _ = eng.Close() }()
++
++	_ = eng.Write("m", map[string]common.Value{colVal: common.NewInt64(1)})
++	_ = eng.Write("z", map[string]common.Value{colVal: common.NewInt64(2)})
++
++	eng.mu.RLock()
++	results := eng.ScanRange("a", "b")
++	eng.mu.RUnlock()
++
++	if len(results) != 0 {
++		t.Fatalf("expected 0 results when end < all keys, got %d", len(results))
++	}
++}
+diff --git a/pkg/storage/coverage_improvement_v19_test.go b/pkg/storage/coverage_improvement_v19_test.go
+index 20c2f4d..0b3efc8 100644
+--- a/pkg/storage/coverage_improvement_v19_test.go
++++ b/pkg/storage/coverage_improvement_v19_test.go
+@@ -58,16 +58,16 @@ func TestDecompressEmptyDataV19(t *testing.T) {
+ 	}
+ }
+ 
+-// TestCompressColumnNilInput 测试 CompressColumn 在输入为 nil 时返回错误。
+-func TestCompressColumnNilInput(t *testing.T) {
++// TestCompressColumnNilInput_V19 测试 CompressColumn 在输入为 nil 时返回错误。
++func TestCompressColumnNilInput_V19(t *testing.T) {
+ 	err := CompressColumn(nil)
+ 	if err == nil {
+ 		t.Error("expected error for nil EncodedColumn, got nil")
+ 	}
+ }
+ 
+-// TestDecompressColumnNilInput 测试 DecompressColumn 在输入为 nil 时返回错误。
+-func TestDecompressColumnNilInput(t *testing.T) {
++// TestDecompressColumnNilInput_V19 测试 DecompressColumn 在输入为 nil 时返回错误。
++func TestDecompressColumnNilInput_V19(t *testing.T) {
+ 	err := DecompressColumn(nil)
+ 	if err == nil {
+ 		t.Error("expected error for nil EncodedColumn, got nil")
+diff --git a/pkg/storage/coverage_low_segment_test.go b/pkg/storage/coverage_low_segment_test.go
+index 3ff1513..64170ed 100644
+--- a/pkg/storage/coverage_low_segment_test.go
++++ b/pkg/storage/coverage_low_segment_test.go
+@@ -420,7 +420,7 @@ func TestFlusherFlushEmptyMemTableLowCov(t *testing.T) {
+ func TestCompactorBuildSegmentColIndexOutOfRange(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	compactor := NewCompactor(tmpDir)
+-	compactor.nextID = 1
++	compactor.nextID.Store(1)
+ 
+ 	// Row with fewer values than columns
+ 	rows := []memRow{
+diff --git a/pkg/storage/coverage_stability_v13_engine_test.go b/pkg/storage/coverage_stability_v13_engine_test.go
+index 491669d..ad85051 100644
+--- a/pkg/storage/coverage_stability_v13_engine_test.go
++++ b/pkg/storage/coverage_stability_v13_engine_test.go
+@@ -123,7 +123,7 @@ func TestFlushV13_RegisterSegmentIndexesFailure(t *testing.T) {
+ 	eng.immutable = append(eng.immutable, eng.activeMem)
+ 	eng.activeMem = NewMemTableWithSize(eng.activeMem.maxSize)
+ 	// 设置 flusher.nextID 为 uint64 最大值，下次 Flush 会产生 ID=0 的 segment
+-	eng.flusher.nextID = ^uint64(0)
++	eng.flusher.nextID.Store(^uint64(0))
+ 	eng.mu.Unlock()
+ 
+ 	err = eng.Flush(cols)
+@@ -142,7 +142,7 @@ func TestFlushV13_RegisterSegmentIndexesFailure(t *testing.T) {
+ 
+ 	// 恢复以便 Close 成功
+ 	eng.mu.Lock()
+-	eng.flusher.nextID = 0
++	eng.flusher.nextID.Store(0)
+ 	eng.immutable = nil
+ 	eng.mu.Unlock()
+ 	_ = eng.Close()
+diff --git a/pkg/storage/coverage_stability_v13_wal_test.go b/pkg/storage/coverage_stability_v13_wal_test.go
+index 1438868..b0ffe04 100644
+--- a/pkg/storage/coverage_stability_v13_wal_test.go
++++ b/pkg/storage/coverage_stability_v13_wal_test.go
+@@ -156,7 +156,7 @@ func TestOpenWALV13_SuccessWithRecords(t *testing.T) {
+ 	}
+ 
+ 	// 验证 WAL 偏移量正确
+-	if w2.offset == 0 {
++	if w2.Size() == 0 {
+ 		t.Error("期望 WAL 偏移量大于 0")
+ 	}
+ 
+diff --git a/pkg/storage/coverage_stability_v18_test.go b/pkg/storage/coverage_stability_v18_test.go
+index f12f234..cd80bb3 100644
+--- a/pkg/storage/coverage_stability_v18_test.go
++++ b/pkg/storage/coverage_stability_v18_test.go
+@@ -156,7 +156,7 @@ func TestMaybeRotate_CloseOldFileError(t *testing.T) {
+ 	if err := w.file.Close(); err != nil {
+ 		t.Fatalf("file Close failed: %v", err)
+ 	}
+-	w.offset = w.maxSize + 1
++	w.offset.Store(w.maxSize + 1)
+ 	err = w.maybeRotate()
+ 	if err == nil {
+ 		t.Error("expected error when closing old file fails during rotate, got nil")
+diff --git a/pkg/storage/doc.go b/pkg/storage/doc.go
+deleted file mode 100644
+index d47ec03..0000000
+--- a/pkg/storage/doc.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-// Package storage 实现存储引擎核心，包括 WAL、MemTable、Segment、Compaction。
+-// 可依赖 pkg/common 与 pkg/catalog。
+-package storage
+diff --git a/pkg/storage/engine.go b/pkg/storage/engine.go
+index 32073a7..0084196 100644
+--- a/pkg/storage/engine.go
++++ b/pkg/storage/engine.go
+@@ -1,3 +1,5 @@
++// Package storage 实现存储引擎核心，包括 WAL、MemTable、Segment、Compaction。
++// 可依赖 pkg/common 与 pkg/catalog。
+ package storage
+ 
+ import (
+@@ -5,6 +7,7 @@ import (
+ 	"log"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -315,178 +318,97 @@ func (e *Engine) Close() error {
+ 	return nil
+ }
+ 
+-// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
+-// 如果调度器已在运行，则不做任何操作。
+-func (e *Engine) StartScheduler(cfg SchedulerConfig) {
+-	e.mu.Lock()
+-	if e.scheduler != nil {
+-		e.mu.Unlock()
+-		return
++// parseSegmentEntry parses a directory entry into a Segment, returning the segment,
++// its ID, whether the entry was a segment file, and an error if it was a segment file
++// that failed to load.
++func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool, error) {
++	if entry.IsDir() {
++		return nil, 0, false, nil
+ 	}
+-	e.mu.Unlock()
+-
+-	sched := NewScheduler(e, cfg)
+-	sched.Start()
+-
+-	e.mu.Lock()
+-	e.scheduler = sched
+-	e.mu.Unlock()
+-}
+-
+-// SchedulerStats 返回后台调度器的运行统计信息。
+-// 如果调度器未启动，ok 为 false。
+-func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
+-	e.mu.RLock()
+-	sched := e.scheduler
+-	e.mu.RUnlock()
+-
+-	if sched == nil {
+-		return SchedulerStats{}, false
++	name := entry.Name()
++	if !strings.HasPrefix(name, "segment_") || !strings.HasSuffix(name, ".widb") {
++		return nil, 0, false, nil
+ 	}
+-	return sched.Stats(), true
+-}
+ 
+-// registerSegmentIndexes 将 Segment 注册到所有索引（主键、布隆、稀疏），
+-// 并将列统计信息缓存到 IndexCache。
+-func (e *Engine) registerSegmentIndexes(seg *Segment, level int) error {
+-	segMeta := index.SegmentMeta{
+-		ID:     seg.ID,
+-		MinKey: seg.MinKey,
+-		MaxKey: seg.MaxKey,
+-		Level:  level,
+-	}
+-	if err := e.primaryIndex.RegisterSegment(segMeta); err != nil {
+-		return fmt.Errorf("engine: register primary index for segment %d: %w", seg.ID, err)
++	filePath := filepath.Join(e.flusher.dataDir, name)
++	data, err := os.ReadFile(filePath)
++	if err != nil {
++		return nil, 0, true, fmt.Errorf("failed to read segment file %s: %w", name, err)
+ 	}
+ 
+-	if len(seg.Footer.BloomFilter) > 0 {
+-		if err := e.bloomIndex.RegisterFromBytes(seg.ID, seg.Footer.BloomFilter); err != nil {
+-			return fmt.Errorf("engine: register bloom index for segment %d: %w", seg.ID, err)
+-		}
++	seg, err := DeserializeSegment(data)
++	if err != nil {
++		return nil, 0, true, fmt.Errorf("failed to deserialize segment file %s: %w", name, err)
+ 	}
++	seg.FilePath = filePath
+ 
+-	e.sparseIndex.LoadFromSegment(seg, seg.MinKey, seg.MaxKey, level)
+-
+-	// 缓存列统计信息到 IndexCache
+-	if len(seg.Footer.ColumnStats) > 0 {
+-		stats := make([]ColumnStat, len(seg.Footer.ColumnStats))
+-		copy(stats, seg.Footer.ColumnStats)
+-		e.indexCache.PutColumnStats(seg.ID, stats)
++	// Extract segment ID from filename: segment_<id>.widb
++	idStr := name[len("segment_") : len(name)-len(".widb")]
++	var segID uint64
++	if _, err := fmt.Sscanf(idStr, "%d", &segID); err == nil {
++		seg.ID = segID
+ 	}
+ 
+-	return nil
+-}
+-
+-// unregisterSegmentIndexes 从所有索引中注销 Segment，并清除相关缓存。
+-func (e *Engine) unregisterSegmentIndexes(segID uint64) {
+-	_ = e.primaryIndex.UnregisterSegment(segID) // 注销失败不影响后续清理
+-	e.bloomIndex.Unregister(segID)
+-	e.sparseIndex.UnregisterSegment(segID)
+-	e.blockCache.Invalidate(segID)
+-	e.indexCache.Invalidate(segID)
+-}
+-
+-// Segments 返回所有 Segment 的副本。
+-func (e *Engine) Segments() []*Segment {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-
+-	result := make([]*Segment, len(e.segments))
+-	copy(result, e.segments)
+-	return result
+-}
++	// Derive MinKey/MaxKey from sorted keys
++	if len(seg.Keys) > 0 {
++		seg.MinKey = seg.Keys[0]
++		seg.MaxKey = seg.Keys[len(seg.Keys)-1]
++	}
+ 
+-// SegmentCount 返回 Segment 的数量。
+-func (e *Engine) SegmentCount() int {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	return len(e.segments)
++	return seg, segID, true, nil
+ }
+ 
+-// L0SegmentCount 返回 L0 层 Segment 的数量。
+-func (e *Engine) L0SegmentCount() int {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	count := 0
+-	for _, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			count++
++// loadSegments 从磁盘加载已有的 Segment 文件。
++func (e *Engine) loadSegments() error {
++	entries, err := os.ReadDir(e.flusher.dataDir)
++	if err != nil {
++		if os.IsNotExist(err) {
++			return nil
+ 		}
++		return fmt.Errorf("engine: read data dir: %w", err)
+ 	}
+-	return count
+-}
+ 
+-// MemTableSize 返回当前活跃 MemTable 的大小。
+-func (e *Engine) MemTableSize() int64 {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	return e.activeMem.Size()
+-}
+-
+-// PrimaryIndex 返回主键索引实例。
+-func (e *Engine) PrimaryIndex() *index.PrimaryIndex {
+-	return e.primaryIndex
+-}
+-
+-// BloomIndex 返回布隆过滤器索引实例。
+-func (e *Engine) BloomIndex() *index.BloomIndex {
+-	return e.bloomIndex
+-}
+-
+-// SparseIndex 返回稀疏索引实例。
+-func (e *Engine) SparseIndex() *index.SparseIndex {
+-	return e.sparseIndex
+-}
+-
+-// ColumnMeta 返回列元数据的副本。
+-func (e *Engine) ColumnMeta() []ColumnMeta {
+-	e.mu.RLock()
+-	defer e.mu.RUnlock()
+-	result := make([]ColumnMeta, len(e.columnMeta))
+-	copy(result, e.columnMeta)
+-	return result
+-}
+-
+-func (e *Engine) rotateMemTable() error {
+-	if e.activeMem.Len() == 0 {
+-		return nil
++	var maxSegID uint64
++	var segFileCount int
++	var failedCount int
++	for _, entry := range entries {
++		seg, segID, isSegFile, parseErr := e.parseSegmentEntry(entry)
++		if !isSegFile {
++			continue
++		}
++		segFileCount++
++		if parseErr != nil {
++			log.Printf("engine: %v", parseErr)
++			failedCount++
++			continue
++		}
++		e.segments = append(e.segments, seg)
++		e.segmentMap[seg.ID] = seg
++		e.segmentLevels = append(e.segmentLevels, 0)
++		if segID > maxSegID {
++			maxSegID = segID
++		}
+ 	}
+-	e.activeMem.Freeze()
+-	e.immutable = append(e.immutable, e.activeMem)
+-	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
+-	return nil
+-}
+ 
+-func (e *Engine) l0Count() int {
+-	count := 0
+-	for _, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			count++
++	if failedCount > 0 {
++		log.Printf("engine: warning: %d of %d segment files failed to load during recovery", failedCount, segFileCount)
++		if failedCount == segFileCount {
++			return fmt.Errorf("engine: all %d segment files failed to load during recovery", segFileCount)
+ 		}
+ 	}
+-	return count
+-}
+ 
+-func (e *Engine) collectL0Segments() ([]*Segment, []int) {
+-	var segments []*Segment
+-	var indices []int
+-	for i, lvl := range e.segmentLevels {
+-		if lvl == 0 {
+-			segments = append(segments, e.segments[i])
+-			indices = append(indices, i)
++	// Register indexes for loaded segments
++	for i, seg := range e.segments {
++		if err := e.registerSegmentIndexes(seg, e.segmentLevels[i]); err != nil {
++			return fmt.Errorf("engine: register segment %d indexes: %w", seg.ID, err)
+ 		}
+ 	}
+-	return segments, indices
+-}
+ 
+-func (e *Engine) collectL1Segments() ([]*Segment, []int) {
+-	var segments []*Segment
+-	var indices []int
+-	for i, lvl := range e.segmentLevels {
+-		if lvl == 1 {
+-			segments = append(segments, e.segments[i])
+-			indices = append(indices, i)
+-		}
++	// Update flusher and compactor nextID to avoid ID collisions
++	if maxSegID > 0 {
++		e.flusher.SetNextID(maxSegID)
++		e.compactor.SetNextID(maxSegID)
+ 	}
+-	return segments, indices
++
++	return nil
+ }
+diff --git a/pkg/storage/engine_accessor.go b/pkg/storage/engine_accessor.go
+new file mode 100644
+index 0000000..86dfbac
+--- /dev/null
++++ b/pkg/storage/engine_accessor.go
+@@ -0,0 +1,97 @@
++package storage
++
++import (
++	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
++)
++
++// Segments 返回所有 Segment 的副本。
++func (e *Engine) Segments() []*Segment {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++
++	result := make([]*Segment, len(e.segments))
++	copy(result, e.segments)
++	return result
++}
++
++// SegmentCount 返回 Segment 的数量。
++func (e *Engine) SegmentCount() int {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	return len(e.segments)
++}
++
++// L0SegmentCount 返回 L0 层 Segment 的数量。
++func (e *Engine) L0SegmentCount() int {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	count := 0
++	for _, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			count++
++		}
++	}
++	return count
++}
++
++// MemTableSize 返回当前活跃 MemTable 的大小。
++func (e *Engine) MemTableSize() int64 {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	return e.activeMem.Size()
++}
++
++// PrimaryIndex 返回主键索引实例。
++func (e *Engine) PrimaryIndex() *index.PrimaryIndex {
++	return e.primaryIndex
++}
++
++// BloomIndex 返回布隆过滤器索引实例。
++func (e *Engine) BloomIndex() *index.BloomIndex {
++	return e.bloomIndex
++}
++
++// SparseIndex 返回稀疏索引实例。
++func (e *Engine) SparseIndex() *index.SparseIndex {
++	return e.sparseIndex
++}
++
++// ColumnMeta 返回列元数据的副本。
++func (e *Engine) ColumnMeta() []ColumnMeta {
++	e.mu.RLock()
++	defer e.mu.RUnlock()
++	result := make([]ColumnMeta, len(e.columnMeta))
++	copy(result, e.columnMeta)
++	return result
++}
++
++// SchedulerStats 返回后台调度器的运行统计信息。
++// 如果调度器未启动，ok 为 false。
++func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
++	e.mu.RLock()
++	sched := e.scheduler
++	e.mu.RUnlock()
++
++	if sched == nil {
++		return SchedulerStats{}, false
++	}
++	return sched.Stats(), true
++}
++
++// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
++// 如果调度器已在运行，则不做任何操作。
++func (e *Engine) StartScheduler(cfg SchedulerConfig) {
++	e.mu.Lock()
++	if e.scheduler != nil {
++		e.mu.Unlock()
++		return
++	}
++	e.mu.Unlock()
++
++	sched := NewScheduler(e, cfg)
++	sched.Start()
++
++	e.mu.Lock()
++	e.scheduler = sched
++	e.mu.Unlock()
++}
+diff --git a/pkg/storage/engine_batch.go b/pkg/storage/engine_batch.go
+deleted file mode 100644
+index 952f591..0000000
+--- a/pkg/storage/engine_batch.go
++++ /dev/null
+@@ -1,46 +0,0 @@
+-package storage
+-
+-import (
+-	"fmt"
+-
+-	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+-)
+-
+-// WriteRow 是批量写入的单行数据。
+-type WriteRow struct {
+-	Key    string
+-	Values map[string]common.Value
+-}
+-
+-// WriteBatch 批量写入多行数据，所有行共享一次 WAL sync，大幅提升批量写入吞吐。
+-func (e *Engine) WriteBatch(rows []WriteRow) error {
+-	if len(rows) == 0 {
+-		return nil
+-	}
+-	e.mu.Lock()
+-	defer e.mu.Unlock()
+-	payload, err := serializeBatchWriteRecord(rows, e.nextVersion)
+-	if err != nil {
+-		return fmt.Errorf("engine write batch: serialize: %w", err)
+-	}
+-	if err := e.wal.AppendBatch([]BatchRecord{{Type: walTypeBatchWrite, Payload: payload}}); err != nil {
+-		return fmt.Errorf("engine write batch: wal: %w", err)
+-	}
+-	if err := e.wal.Sync(); err != nil {
+-		return fmt.Errorf("engine write batch: sync: %w", err)
+-	}
+-	// 先写入所有行到 MemTable，全部成功后再递增版本号，避免部分失败导致版本号跳跃
+-	baseVersion := e.nextVersion
+-	for i := range rows {
+-		if _, _, err := e.activeMem.Put(rows[i].Key, Row{Version: baseVersion + uint64(i), Columns: rows[i].Values}); err != nil {
+-			return fmt.Errorf("engine write batch: %w", err)
+-		}
+-	}
+-	e.nextVersion += uint64(len(rows))
+-	if e.activeMem.ShouldFlush() {
+-		if err := e.rotateMemTable(); err != nil {
+-			return fmt.Errorf("engine write batch: rotate: %w", err)
+-		}
+-	}
+-	return nil
+-}
+diff --git a/pkg/storage/engine_ops.go b/pkg/storage/engine_ops.go
+new file mode 100644
+index 0000000..6212464
+--- /dev/null
++++ b/pkg/storage/engine_ops.go
+@@ -0,0 +1,137 @@
++package storage
++
++import (
++	"fmt"
++
++	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
++	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
++)
++
++// --- Engine Helpers ---
++
++func (e *Engine) rotateMemTable() error {
++	if e.activeMem.Len() == 0 {
++		return nil
++	}
++	e.activeMem.Freeze()
++	e.immutable = append(e.immutable, e.activeMem)
++	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
++	return nil
++}
++
++func (e *Engine) l0Count() int {
++	count := 0
++	for _, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			count++
++		}
++	}
++	return count
++}
++
++func (e *Engine) collectL0Segments() ([]*Segment, []int) {
++	var segments []*Segment
++	var indices []int
++	for i, lvl := range e.segmentLevels {
++		if lvl == 0 {
++			segments = append(segments, e.segments[i])
++			indices = append(indices, i)
++		}
++	}
++	return segments, indices
++}
++
++func (e *Engine) collectL1Segments() ([]*Segment, []int) {
++	var segments []*Segment
++	var indices []int
++	for i, lvl := range e.segmentLevels {
++		if lvl == 1 {
++			segments = append(segments, e.segments[i])
++			indices = append(indices, i)
++		}
++	}
++	return segments, indices
++}
++
++// --- Engine Batch ---
++
++// WriteRow 是批量写入的单行数据。
++type WriteRow struct {
++	Key    string
++	Values map[string]common.Value
++}
++
++// WriteBatch 批量写入多行数据，所有行共享一次 WAL sync，大幅提升批量写入吞吐。
++func (e *Engine) WriteBatch(rows []WriteRow) error {
++	if len(rows) == 0 {
++		return nil
++	}
++	e.mu.Lock()
++	defer e.mu.Unlock()
++	payload, err := serializeBatchWriteRecord(rows, e.nextVersion)
++	if err != nil {
++		return fmt.Errorf("engine write batch: serialize: %w", err)
++	}
++	if err := e.wal.AppendBatch([]BatchRecord{{Type: walTypeBatchWrite, Payload: payload}}); err != nil {
++		return fmt.Errorf("engine write batch: wal: %w", err)
++	}
++	if err := e.wal.Sync(); err != nil {
++		return fmt.Errorf("engine write batch: sync: %w", err)
++	}
++	// 先写入所有行到 MemTable，全部成功后再递增版本号，避免部分失败导致版本号跳跃
++	baseVersion := e.nextVersion
++	for i := range rows {
++		if _, _, err := e.activeMem.Put(rows[i].Key, Row{Version: baseVersion + uint64(i), Columns: rows[i].Values}); err != nil {
++			return fmt.Errorf("engine write batch: %w", err)
++		}
++	}
++	e.nextVersion += uint64(len(rows))
++	if e.activeMem.ShouldFlush() {
++		if err := e.rotateMemTable(); err != nil {
++			return fmt.Errorf("engine write batch: rotate: %w", err)
++		}
++	}
++	return nil
++}
++
++// --- Engine Index ---
++
++// registerSegmentIndexes 将 Segment 注册到所有索引（主键、布隆、稀疏），
++// 并将列统计信息缓存到 IndexCache。
++func (e *Engine) registerSegmentIndexes(seg *Segment, level int) error {
++	segMeta := index.SegmentMeta{
++		ID:     seg.ID,
++		MinKey: seg.MinKey,
++		MaxKey: seg.MaxKey,
++		Level:  level,
++	}
++	if err := e.primaryIndex.RegisterSegment(segMeta); err != nil {
++		return fmt.Errorf("engine: register primary index for segment %d: %w", seg.ID, err)
++	}
++
++	if len(seg.Footer.BloomFilter) > 0 {
++		if err := e.bloomIndex.RegisterFromBytes(seg.ID, seg.Footer.BloomFilter); err != nil {
++			return fmt.Errorf("engine: register bloom index for segment %d: %w", seg.ID, err)
++		}
++	}
++
++	e.sparseIndex.LoadFromSegment(seg, seg.MinKey, seg.MaxKey, level)
++
++	// 缓存列统计信息到 IndexCache
++	if len(seg.Footer.ColumnStats) > 0 {
++		stats := make([]ColumnStat, len(seg.Footer.ColumnStats))
++		copy(stats, seg.Footer.ColumnStats)
++		e.indexCache.PutColumnStats(seg.ID, stats)
++	}
++
++	return nil
++}
++
++// unregisterSegmentIndexes 从所有索引中注销 Segment，并清除相关缓存。
++func (e *Engine) unregisterSegmentIndexes(segID uint64) {
++	_ = e.primaryIndex.UnregisterSegment(segID) // 注销失败不影响后续清理
++	e.bloomIndex.Unregister(segID)
++	e.sparseIndex.UnregisterSegment(segID)
++	e.blockCache.Invalidate(segID)
++	e.indexCache.Invalidate(segID)
++}
+diff --git a/pkg/storage/flusher.go b/pkg/storage/flusher.go
+index 7936a98..3cf0d58 100644
+--- a/pkg/storage/flusher.go
++++ b/pkg/storage/flusher.go
+@@ -5,6 +5,7 @@ import (
+ 	"os"
+ 	"path/filepath"
+ 	"sync"
++	"sync/atomic"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ )
+@@ -26,22 +27,24 @@ type ColumnMeta struct {
+ type Flusher struct {
+ 	mu      sync.Mutex
+ 	dataDir string
+-	nextID  uint64
++	nextID  atomic.Uint64 // 无锁读取 segment ID
+ }
+ 
+-// NextID returns the next segment ID under the flusher's mutex.
++// NextID 无锁读取下一个 segment ID，适合监控和统计场景。
+ func (f *Flusher) NextID() uint64 {
+-	f.mu.Lock()
+-	defer f.mu.Unlock()
+-	return f.nextID
++	return f.nextID.Load()
+ }
+ 
+ // SetNextID updates the flusher's nextID if the given id is larger.
+ func (f *Flusher) SetNextID(id uint64) {
+-	f.mu.Lock()
+-	defer f.mu.Unlock()
+-	if id > f.nextID {
+-		f.nextID = id
++	for {
++		current := f.nextID.Load()
++		if id <= current {
++			return
++		}
++		if f.nextID.CompareAndSwap(current, id) {
++			return
++		}
+ 	}
+ }
+ 
+@@ -60,8 +63,8 @@ func (f *Flusher) Flush(mem *MemTable, cols []ColumnMeta) (*Segment, error) {
+ 		return nil, fmt.Errorf("flusher: empty memtable")
+ 	}
+ 
+-	f.nextID++
+-	seg, err := f.buildSegment(f.nextID, rows, cols)
++	f.nextID.Add(1)
++	seg, err := f.buildSegment(f.nextID.Load(), rows, cols)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/pkg/storage/flusher_compaction_error_test.go b/pkg/storage/flusher_compaction_error_test.go
+index e4f80e6..884ed56 100644
+--- a/pkg/storage/flusher_compaction_error_test.go
++++ b/pkg/storage/flusher_compaction_error_test.go
+@@ -121,7 +121,7 @@ func TestCompactorBuildSegmentMkdirAllError(t *testing.T) {
+ 	defer func() { _ = os.Remove(tmpPath) }()
+ 
+ 	compactor := NewCompactor(tmpPath + "/subdir/data")
+-	compactor.nextID = 1
++	compactor.nextID.Store(1)
+ 
+ 	rows := []memRow{
+ 		{Key: "k1", Values: []common.Value{
+@@ -141,7 +141,7 @@ func TestCompactorBuildSegmentMkdirAllError(t *testing.T) {
+ func TestCompactorBuildSegmentWriteFileError(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	compactor := NewCompactor(tmpDir)
+-	compactor.nextID = 1
++	compactor.nextID.Store(1)
+ 
+ 	// 预先创建一个目录，路径与 buildSegment 将要写入的文件路径相同
+ 	// buildSegment 会先执行 c.nextID++，所以 nextID 从 1 变为 2，文件名为 segment_2.widb
+@@ -236,7 +236,7 @@ func TestCompactorCleanupSegmentsRemoveError(t *testing.T) {
+ func TestCompactorBuildSegmentTypeMismatch(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	compactor := NewCompactor(tmpDir)
+-	compactor.nextID = 1
++	compactor.nextID.Store(1)
+ 
+ 	// 列定义是 INT64，但行数据中是 STRING
+ 	rows := []memRow{
+@@ -256,7 +256,7 @@ func TestCompactorBuildSegmentTypeMismatch(t *testing.T) {
+ func TestCompactorBuildSegmentNullTypeMismatch(t *testing.T) {
+ 	tmpDir := t.TempDir()
+ 	compactor := NewCompactor(tmpDir)
+-	compactor.nextID = 1
++	compactor.nextID.Store(1)
+ 
+ 	// 列定义是 STRING，但行数据中是 INT64（非 null，类型不匹配）
+ 	rows := []memRow{
+diff --git a/pkg/storage/group_committer.go b/pkg/storage/group_committer.go
+new file mode 100644
+index 0000000..6cecf62
+--- /dev/null
++++ b/pkg/storage/group_committer.go
+@@ -0,0 +1,135 @@
++package storage
++
++import (
++	"sync"
++	"time"
++)
++
++// SyncMode 控制 WAL 的同步模式。
++type SyncMode int
++
++const (
++	// SyncEveryWrite 每次写入后立即同步 WAL 到磁盘（默认，最安全）。
++	SyncEveryWrite SyncMode = iota
++
++	// SyncGroupCommit 使用组提交，多个写入共享一次 fsync。
++	// 后台 goroutine 在有写入时立即触发 sync，同时合并并发写入的 sync 请求，
++	// 从而将 N 次 fsync 降低为 1 次。崩溃时可能丢失最近 SyncInterval 内的数据。
++	SyncGroupCommit
++)
++
++// defaultSyncInterval 是 GroupCommit 模式下的最大同步间隔。
++const defaultSyncInterval = 1 * time.Millisecond
++
++// GroupCommitter 批量合并 WAL sync 操作，将多次 fsync 摊销为一次。
++// 工作原理：
++//   - 写入者通过 Submit 提交 sync 请求并等待通知
++//   - 后台 goroutine 在有写入时立即触发 sync（按需模式）
++//   - 在 sync 执行期间到达的新写入会合并到下一批
++//   - 同时有定时器兜底，确保写入不会等待太久
++type GroupCommitter struct {
++	wal          *WAL
++	mu           sync.Mutex
++	pending      []chan struct{}
++	closed       bool
++	closeCh      chan struct{}
++	doneCh       chan struct{}
++	notify       chan struct{} // 通知后台 goroutine 有新的 sync 请求
++	syncInterval time.Duration
++}
++
++// NewGroupCommitter 创建并启动 GroupCommitter。
++func NewGroupCommitter(wal *WAL, syncInterval time.Duration) *GroupCommitter {
++	if syncInterval <= 0 {
++		syncInterval = defaultSyncInterval
++	}
++	gc := &GroupCommitter{
++		wal:          wal,
++		closeCh:      make(chan struct{}),
++		doneCh:       make(chan struct{}),
++		notify:       make(chan struct{}, 1),
++		syncInterval: syncInterval,
++	}
++	go gc.run()
++	return gc
++}
++
++// Submit 提交一个 sync 请求，返回一个 channel，当 WAL 数据已同步到磁盘时该 channel 会被关闭。
++// 调用者应等待该 channel 后再认为写入已持久化。
++func (gc *GroupCommitter) Submit() <-chan struct{} {
++	gc.mu.Lock()
++	defer gc.mu.Unlock()
++
++	ch := make(chan struct{}, 1)
++	gc.pending = append(gc.pending, ch)
++
++	// 非阻塞通知后台 goroutine
++	select {
++	case gc.notify <- struct{}{}:
++	default:
++	}
++
++	return ch
++}
++
++// SyncNow 立即触发一次同步，用于 Flush/Close 等需要确保数据持久化的场景。
++func (gc *GroupCommitter) SyncNow() {
++	gc.doSync()
++}
++
++// Close 停止 GroupCommitter，执行最后一次同步。
++func (gc *GroupCommitter) Close() {
++	gc.mu.Lock()
++	if gc.closed {
++		gc.mu.Unlock()
++		return
++	}
++	gc.closed = true
++	gc.mu.Unlock()
++
++	close(gc.closeCh)
++	<-gc.doneCh
++}
++
++// run 是后台 goroutine，按需同步 WAL。
++// 当有写入时立即触发 sync，同时用定时器兜底确保不会等待太久。
++func (gc *GroupCommitter) run() {
++	defer close(gc.doneCh)
++
++	ticker := time.NewTicker(gc.syncInterval)
++	defer ticker.Stop()
++
++	for {
++		select {
++		case <-gc.notify:
++			// 有新写入，立即 sync
++			gc.doSync()
++		case <-ticker.C:
++			// 定时兜底 sync
++			gc.doSync()
++		case <-gc.closeCh:
++			gc.doSync() // 最终同步
++			return
++		}
++	}
++}
++
++// doSync 执行一次 WAL sync 并通知所有等待的写入者。
++func (gc *GroupCommitter) doSync() {
++	gc.mu.Lock()
++	pending := gc.pending
++	gc.pending = nil
++	gc.mu.Unlock()
++
++	if len(pending) == 0 {
++		return
++	}
++
++	// 忽略 sync 错误：与 Engine.Write 中原行为一致，
++	// sync 失败时数据仍在 OS 缓冲区，后续 sync 可能成功。
++	_ = gc.wal.Sync()
++
++	for _, ch := range pending {
++		close(ch)
++	}
++}
+diff --git a/pkg/storage/segment_decode.go b/pkg/storage/segment_codec.go
+similarity index 52%
+rename from pkg/storage/segment_decode.go
+rename to pkg/storage/segment_codec.go
+index d99844f..77d6217 100644
+--- a/pkg/storage/segment_decode.go
++++ b/pkg/storage/segment_codec.go
+@@ -1,12 +1,15 @@
+ package storage
+ 
+ import (
++	"encoding/binary"
+ 	"fmt"
+ 	"time"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ )
+ 
++// --- Segment Decode ---
++
+ // decodedColumn 缓存已解码的列数据，避免重复解压和解码。
+ type decodedColumn struct {
+ 	data   any
+@@ -164,3 +167,173 @@ func (s *Segment) GetAllColumnValues(rowIdx uint32, colMeta []ColumnMeta) (map[s
+ 	}
+ 	return values, nil
+ }
++
++// --- Segment Footer Serialize ---
++
++// serializeFooter 将 SegmentFooter 序列化为字节流。
++func serializeFooter(footer *SegmentFooter) []byte {
++	var buf []byte
++
++	colCount := make([]byte, 4)
++	binary.LittleEndian.PutUint32(colCount, uint32(len(footer.ColumnStats)))
++	buf = append(buf, colCount...)
++
++	for _, stat := range footer.ColumnStats {
++		colID := make([]byte, 4)
++		binary.LittleEndian.PutUint32(colID, stat.ColumnID)
++		buf = append(buf, colID...)
++
++		minLen := make([]byte, 4)
++		binary.LittleEndian.PutUint32(minLen, uint32(len(stat.Min)))
++		buf = append(buf, minLen...)
++		buf = append(buf, stat.Min...)
++
++		maxLen := make([]byte, 4)
++		binary.LittleEndian.PutUint32(maxLen, uint32(len(stat.Max)))
++		buf = append(buf, maxLen...)
++		buf = append(buf, stat.Max...)
++
++		nullCount := make([]byte, 4)
++		binary.LittleEndian.PutUint32(nullCount, stat.NullCount)
++		buf = append(buf, nullCount...)
++	}
++
++	bloomLen := make([]byte, 4)
++	binary.LittleEndian.PutUint32(bloomLen, uint32(len(footer.BloomFilter)))
++	buf = append(buf, bloomLen...)
++	buf = append(buf, footer.BloomFilter...)
++
++	rawKeysLen := make([]byte, 4)
++	binary.LittleEndian.PutUint32(rawKeysLen, uint32(len(footer.RawKeys)))
++	buf = append(buf, rawKeysLen...)
++	buf = append(buf, footer.RawKeys...)
++
++	indexOffset := make([]byte, 8)
++	binary.LittleEndian.PutUint64(indexOffset, uint64(footer.IndexOffset))
++	buf = append(buf, indexOffset...)
++
++	return buf
++}
++
++// deserializeFooter 从字节流反序列化 SegmentFooter。
++func deserializeFooter(data []byte) (*SegmentFooter, error) {
++	if len(data) < 4 {
++		return nil, fmt.Errorf("segment: footer too short: %d bytes", len(data))
++	}
++
++	pos := 0
++	colCount := binary.LittleEndian.Uint32(data[pos:])
++	pos += 4
++
++	footer := &SegmentFooter{
++		ColumnStats: make([]ColumnStat, 0, colCount),
++	}
++
++	for i := uint32(0); i < colCount; i++ {
++		stat, newPos, err := readColumnStat(data, pos, i)
++		if err != nil {
++			return nil, err
++		}
++		pos = newPos
++		footer.ColumnStats = append(footer.ColumnStats, stat)
++	}
++
++	var err error
++	pos, footer.BloomFilter, err = readBloomFilter(data, pos)
++	if err != nil {
++		return nil, err
++	}
++
++	pos, footer.RawKeys, err = readRawKeys(data, pos)
++	if err != nil {
++		return nil, err
++	}
++
++	if pos+8 > len(data) {
++		return nil, fmt.Errorf("segment: footer truncated at index offset")
++	}
++	footer.IndexOffset = int64(binary.LittleEndian.Uint64(data[pos:]))
++
++	return footer, nil
++}
++
++func readColumnStat(data []byte, pos int, idx uint32) (ColumnStat, int, error) {
++	if pos+4 > len(data) {
++		return ColumnStat{}, pos, fmt.Errorf("segment: footer truncated at column %d", idx)
++	}
++	stat := ColumnStat{}
++	stat.ColumnID = binary.LittleEndian.Uint32(data[pos:])
++	pos += 4
++
++	var err error
++	pos, stat.Min, err = readStatBytes(data, pos, "min", idx)
++	if err != nil {
++		return ColumnStat{}, pos, err
++	}
++	pos, stat.Max, err = readStatBytes(data, pos, "max", idx)
++	if err != nil {
++		return ColumnStat{}, pos, err
++	}
++
++	if pos+4 > len(data) {
++		return ColumnStat{}, pos, fmt.Errorf("segment: footer truncated at null count for column %d", idx)
++	}
++	stat.NullCount = binary.LittleEndian.Uint32(data[pos:])
++	pos += 4
++
++	return stat, pos, nil
++}
++
++func readStatBytes(data []byte, pos int, field string, idx uint32) (int, []byte, error) {
++	if pos+4 > len(data) {
++		return pos, nil, fmt.Errorf("segment: footer truncated at %s length for column %d", field, idx)
++	}
++	byteLen := binary.LittleEndian.Uint32(data[pos:])
++	pos += 4
++	if byteLen > 0 {
++		if pos+int(byteLen) > len(data) {
++			return pos, nil, fmt.Errorf("segment: footer truncated at %s data for column %d", field, idx)
++		}
++		b := make([]byte, byteLen)
++		copy(b, data[pos:pos+int(byteLen)])
++		pos += int(byteLen)
++		return pos, b, nil
++	}
++	return pos, nil, nil
++}
++
++func readBloomFilter(data []byte, pos int) (int, []byte, error) {
++	if pos+4 > len(data) {
++		return pos, nil, fmt.Errorf("segment: footer truncated at bloom length")
++	}
++	bloomLen := binary.LittleEndian.Uint32(data[pos:])
++	pos += 4
++	if bloomLen > 0 {
++		if pos+int(bloomLen) > len(data) {
++			return pos, nil, fmt.Errorf("segment: footer truncated at bloom data")
++		}
++		b := make([]byte, bloomLen)
++		copy(b, data[pos:pos+int(bloomLen)])
++		pos += int(bloomLen)
++		return pos, b, nil
++	}
++	return pos, nil, nil
++}
++
++func readRawKeys(data []byte, pos int) (int, []byte, error) {
++	if pos+4 > len(data) {
++		return pos, nil, nil
++	}
++	rawKeysLen := binary.LittleEndian.Uint32(data[pos:])
++	pos += 4
++	if rawKeysLen > 0 {
++		if pos+int(rawKeysLen) > len(data) {
++			return pos, nil, fmt.Errorf("segment: footer truncated at raw keys data")
++		}
++		b := make([]byte, rawKeysLen)
++		copy(b, data[pos:pos+int(rawKeysLen)])
++		pos += int(rawKeysLen)
++		return pos, b, nil
++	}
++	return pos, nil, nil
++}
+diff --git a/pkg/storage/segment_serialize.go b/pkg/storage/segment_serialize.go
+index 08c1e74..f9e4f2a 100644
+--- a/pkg/storage/segment_serialize.go
++++ b/pkg/storage/segment_serialize.go
+@@ -178,175 +178,6 @@ func readDict(data []byte, pos int, enc *EncodedColumn) (int, error) {
+ 	return pos, nil
+ }
+ 
+-// serializeFooter 将 SegmentFooter 序列化为字节流。
+-func serializeFooter(footer *SegmentFooter) []byte {
+-	// 预估大小：4(colCount) + 每列(4+4+len(min)+4+len(max)+4) + 4+bloom + 4+rawKeys + 8
+-	estimatedSize := 4 + 8 + 4 + 4
+-	for _, stat := range footer.ColumnStats {
+-		estimatedSize += 4 + 4 + len(stat.Min) + 4 + len(stat.Max) + 4
+-	}
+-	estimatedSize += len(footer.BloomFilter) + len(footer.RawKeys)
+-	buf := make([]byte, 0, estimatedSize)
+-
+-	var tmp4 [4]byte
+-	var tmp8 [8]byte
+-
+-	binary.LittleEndian.PutUint32(tmp4[:], uint32(len(footer.ColumnStats)))
+-	buf = append(buf, tmp4[:]...)
+-
+-	for _, stat := range footer.ColumnStats {
+-		binary.LittleEndian.PutUint32(tmp4[:], stat.ColumnID)
+-		buf = append(buf, tmp4[:]...)
+-
+-		binary.LittleEndian.PutUint32(tmp4[:], uint32(len(stat.Min)))
+-		buf = append(buf, tmp4[:]...)
+-		buf = append(buf, stat.Min...)
+-
+-		binary.LittleEndian.PutUint32(tmp4[:], uint32(len(stat.Max)))
+-		buf = append(buf, tmp4[:]...)
+-		buf = append(buf, stat.Max...)
+-
+-		binary.LittleEndian.PutUint32(tmp4[:], stat.NullCount)
+-		buf = append(buf, tmp4[:]...)
+-	}
+-
+-	binary.LittleEndian.PutUint32(tmp4[:], uint32(len(footer.BloomFilter)))
+-	buf = append(buf, tmp4[:]...)
+-	buf = append(buf, footer.BloomFilter...)
+-
+-	binary.LittleEndian.PutUint32(tmp4[:], uint32(len(footer.RawKeys)))
+-	buf = append(buf, tmp4[:]...)
+-	buf = append(buf, footer.RawKeys...)
+-
+-	binary.LittleEndian.PutUint64(tmp8[:], uint64(footer.IndexOffset))
+-	buf = append(buf, tmp8[:]...)
+-
+-	return buf
+-}
+-
+-// deserializeFooter 从字节流反序列化 SegmentFooter。
+-func deserializeFooter(data []byte) (*SegmentFooter, error) {
+-	if len(data) < 4 {
+-		return nil, fmt.Errorf("segment: footer too short: %d bytes", len(data))
+-	}
+-
+-	pos := 0
+-	colCount := binary.LittleEndian.Uint32(data[pos:])
+-	pos += 4
+-
+-	footer := &SegmentFooter{
+-		ColumnStats: make([]ColumnStat, 0, colCount),
+-	}
+-
+-	for i := uint32(0); i < colCount; i++ {
+-		stat, newPos, err := readColumnStat(data, pos, i)
+-		if err != nil {
+-			return nil, err
+-		}
+-		pos = newPos
+-		footer.ColumnStats = append(footer.ColumnStats, stat)
+-	}
+-
+-	var err error
+-	pos, footer.BloomFilter, err = readBloomFilter(data, pos)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	pos, footer.RawKeys, err = readRawKeys(data, pos)
+-	if err != nil {
+-		return nil, err
+-	}
+-
+-	if pos+8 > len(data) {
+-		return nil, fmt.Errorf("segment: footer truncated at index offset")
+-	}
+-	footer.IndexOffset = int64(binary.LittleEndian.Uint64(data[pos:]))
+-
+-	return footer, nil
+-}
+-
+-func readColumnStat(data []byte, pos int, idx uint32) (ColumnStat, int, error) {
+-	if pos+4 > len(data) {
+-		return ColumnStat{}, pos, fmt.Errorf("segment: footer truncated at column %d", idx)
+-	}
+-	stat := ColumnStat{}
+-	stat.ColumnID = binary.LittleEndian.Uint32(data[pos:])
+-	pos += 4
+-
+-	var err error
+-	pos, stat.Min, err = readStatBytes(data, pos, "min", idx)
+-	if err != nil {
+-		return ColumnStat{}, pos, err
+-	}
+-	pos, stat.Max, err = readStatBytes(data, pos, "max", idx)
+-	if err != nil {
+-		return ColumnStat{}, pos, err
+-	}
+-
+-	if pos+4 > len(data) {
+-		return ColumnStat{}, pos, fmt.Errorf("segment: footer truncated at null count for column %d", idx)
+-	}
+-	stat.NullCount = binary.LittleEndian.Uint32(data[pos:])
+-	pos += 4
+-
+-	return stat, pos, nil
+-}
+-
+-func readStatBytes(data []byte, pos int, field string, idx uint32) (int, []byte, error) {
+-	if pos+4 > len(data) {
+-		return pos, nil, fmt.Errorf("segment: footer truncated at %s length for column %d", field, idx)
+-	}
+-	byteLen := binary.LittleEndian.Uint32(data[pos:])
+-	pos += 4
+-	if byteLen > 0 {
+-		if pos+int(byteLen) > len(data) {
+-			return pos, nil, fmt.Errorf("segment: footer truncated at %s data for column %d", field, idx)
+-		}
+-		b := make([]byte, byteLen)
+-		copy(b, data[pos:pos+int(byteLen)])
+-		pos += int(byteLen)
+-		return pos, b, nil
+-	}
+-	return pos, nil, nil
+-}
+-
+-func readBloomFilter(data []byte, pos int) (int, []byte, error) {
+-	if pos+4 > len(data) {
+-		return pos, nil, fmt.Errorf("segment: footer truncated at bloom length")
+-	}
+-	bloomLen := binary.LittleEndian.Uint32(data[pos:])
+-	pos += 4
+-	if bloomLen > 0 {
+-		if pos+int(bloomLen) > len(data) {
+-			return pos, nil, fmt.Errorf("segment: footer truncated at bloom data")
+-		}
+-		b := make([]byte, bloomLen)
+-		copy(b, data[pos:pos+int(bloomLen)])
+-		pos += int(bloomLen)
+-		return pos, b, nil
+-	}
+-	return pos, nil, nil
+-}
+-
+-func readRawKeys(data []byte, pos int) (int, []byte, error) {
+-	if pos+4 > len(data) {
+-		return pos, nil, nil
+-	}
+-	rawKeysLen := binary.LittleEndian.Uint32(data[pos:])
+-	pos += 4
+-	if rawKeysLen > 0 {
+-		if pos+int(rawKeysLen) > len(data) {
+-			return pos, nil, fmt.Errorf("segment: footer truncated at raw keys data")
+-		}
+-		b := make([]byte, rawKeysLen)
+-		copy(b, data[pos:pos+int(rawKeysLen)])
+-		pos += int(rawKeysLen)
+-		return pos, b, nil
+-	}
+-	return pos, nil, nil
+-}
+-
+ // Serialize 将 Segment 序列化为完整的文件字节流。
+ func (s *Segment) Serialize() ([]byte, error) {
+ 	var tmp4 [4]byte
+diff --git a/pkg/storage/stress_memleak_test.go b/pkg/storage/stress_memleak_test.go
+index 5d0ea37..e705612 100644
+--- a/pkg/storage/stress_memleak_test.go
++++ b/pkg/storage/stress_memleak_test.go
+@@ -11,7 +11,9 @@ import (
+ )
+ 
+ // readHeapInUse forces GC and returns HeapInuse bytes.
++// Calls GC twice to ensure finalizers and deferred cleanup are fully processed.
+ func readHeapInUse() uint64 {
++	runtime.GC()
+ 	runtime.GC()
+ 	var m runtime.MemStats
+ 	runtime.ReadMemStats(&m)
+diff --git a/pkg/storage/wal.go b/pkg/storage/wal.go
+index 009f095..d581b70 100644
+--- a/pkg/storage/wal.go
++++ b/pkg/storage/wal.go
+@@ -7,7 +7,7 @@ import (
+ 	"io"
+ 	"os"
+ 	"sync"
+-	"time"
++	"sync/atomic"
+ )
+ 
+ const (
+@@ -32,7 +32,7 @@ var crcTable = crc32.MakeTable(crc32.Castagnoli)
+ type WAL struct {
+ 	file    *os.File
+ 	path    string
+-	offset  int64
++	offset  atomic.Int64 // 无锁读取当前偏移量
+ 	maxSize int64
+ 	mu      sync.Mutex
+ }
+@@ -58,7 +58,6 @@ func CreateWAL(path string) (*WAL, error) {
+ 	return &WAL{
+ 		file:    f,
+ 		path:    path,
+-		offset:  0,
+ 		maxSize: walDefaultMaxSize,
+ 	}, nil
+ }
+@@ -93,9 +92,9 @@ func OpenWAL(path string) (*WAL, []RawRecord, error) {
+ 	w := &WAL{
+ 		file:    f,
+ 		path:    path,
+-		offset:  validOffset,
+ 		maxSize: walDefaultMaxSize,
+ 	}
++	w.offset.Store(validOffset)
+ 
+ 	return w, records, nil
+ }
+@@ -119,7 +118,7 @@ func (w *WAL) Append(tp byte, payload []byte) error {
+ 	if err != nil {
+ 		return fmt.Errorf("wal write: %w", err)
+ 	}
+-	w.offset += int64(n)
++	w.offset.Add(int64(n))
+ 	return nil
+ }
+ 
+@@ -142,7 +141,7 @@ func (w *WAL) AppendBatch(records []BatchRecord) error {
+ 		if err != nil {
+ 			return fmt.Errorf("wal write batch: %w", err)
+ 		}
+-		w.offset += int64(n)
++		w.offset.Add(int64(n))
+ 	}
+ 	return nil
+ }
+@@ -170,10 +169,9 @@ func (w *WAL) Sync() error {
+ }
+ 
+ // Size 返回当前 WAL 文件的字节偏移量。
++// 使用 atomic 读取，无需获取互斥锁，适合高频监控调用。
+ func (w *WAL) Size() int64 {
+-	w.mu.Lock()
+-	defer w.mu.Unlock()
+-	return w.offset
++	return w.offset.Load()
+ }
+ 
+ // Close 同步并关闭 WAL 文件。
+@@ -207,7 +205,7 @@ func (w *WAL) Truncate() error {
+ 	}
+ 
+ 	w.file = f
+-	w.offset = 0
++	w.offset.Store(0)
+ 	return nil
+ }
+ 
+@@ -215,7 +213,7 @@ func (w *WAL) Truncate() error {
+ // 采用"先建后删"策略：先创建新文件，再重命名旧文件，
+ // 避免在 Rename 成功但 Create 失败时导致 WAL 不可用。
+ func (w *WAL) maybeRotate() error {
+-	if w.offset < w.maxSize {
++	if w.offset.Load() < w.maxSize {
+ 		return nil
+ 	}
+ 
+@@ -259,7 +257,7 @@ func (w *WAL) maybeRotate() error {
+ 	}
+ 
+ 	w.file = newF
+-	w.offset = 0
++	w.offset.Store(0)
+ 	return nil
+ }
+ 
+@@ -349,132 +347,3 @@ func replayWAL(f *os.File) ([]RawRecord, int64, error) {
+ 
+ 	return records, lastValidOffset, nil
+ }
+-
+-// SyncMode 控制 WAL 的同步模式。
+-type SyncMode int
+-
+-const (
+-	// SyncEveryWrite 每次写入后立即同步 WAL 到磁盘（默认，最安全）。
+-	SyncEveryWrite SyncMode = iota
+-
+-	// SyncGroupCommit 使用组提交，多个写入共享一次 fsync。
+-	// 后台 goroutine 在有写入时立即触发 sync，同时合并并发写入的 sync 请求，
+-	// 从而将 N 次 fsync 降低为 1 次。崩溃时可能丢失最近 SyncInterval 内的数据。
+-	SyncGroupCommit
+-)
+-
+-// defaultSyncInterval 是 GroupCommit 模式下的最大同步间隔。
+-const defaultSyncInterval = 1 * time.Millisecond
+-
+-// GroupCommitter 批量合并 WAL sync 操作，将多次 fsync 摊销为一次。
+-// 工作原理：
+-//   - 写入者通过 Submit 提交 sync 请求并等待通知
+-//   - 后台 goroutine 在有写入时立即触发 sync（按需模式）
+-//   - 在 sync 执行期间到达的新写入会合并到下一批
+-//   - 同时有定时器兜底，确保写入不会等待太久
+-type GroupCommitter struct {
+-	wal          *WAL
+-	mu           sync.Mutex
+-	pending      []chan struct{}
+-	closed       bool
+-	closeCh      chan struct{}
+-	doneCh       chan struct{}
+-	notify       chan struct{} // 通知后台 goroutine 有新的 sync 请求
+-	syncInterval time.Duration
+-}
+-
+-// NewGroupCommitter 创建并启动 GroupCommitter。
+-func NewGroupCommitter(wal *WAL, syncInterval time.Duration) *GroupCommitter {
+-	if syncInterval <= 0 {
+-		syncInterval = defaultSyncInterval
+-	}
+-	gc := &GroupCommitter{
+-		wal:          wal,
+-		closeCh:      make(chan struct{}),
+-		doneCh:       make(chan struct{}),
+-		notify:       make(chan struct{}, 1),
+-		syncInterval: syncInterval,
+-	}
+-	go gc.run()
+-	return gc
+-}
+-
+-// Submit 提交一个 sync 请求，返回一个 channel，当 WAL 数据已同步到磁盘时该 channel 会被关闭。
+-// 调用者应等待该 channel 后再认为写入已持久化。
+-func (gc *GroupCommitter) Submit() <-chan struct{} {
+-	gc.mu.Lock()
+-	defer gc.mu.Unlock()
+-
+-	ch := make(chan struct{}, 1)
+-	gc.pending = append(gc.pending, ch)
+-
+-	// 非阻塞通知后台 goroutine
+-	select {
+-	case gc.notify <- struct{}{}:
+-	default:
+-	}
+-
+-	return ch
+-}
+-
+-// SyncNow 立即触发一次同步，用于 Flush/Close 等需要确保数据持久化的场景。
+-func (gc *GroupCommitter) SyncNow() {
+-	gc.doSync()
+-}
+-
+-// Close 停止 GroupCommitter，执行最后一次同步。
+-func (gc *GroupCommitter) Close() {
+-	gc.mu.Lock()
+-	if gc.closed {
+-		gc.mu.Unlock()
+-		return
+-	}
+-	gc.closed = true
+-	gc.mu.Unlock()
+-
+-	close(gc.closeCh)
+-	<-gc.doneCh
+-}
+-
+-// run 是后台 goroutine，按需同步 WAL。
+-// 当有写入时立即触发 sync，同时用定时器兜底确保不会等待太久。
+-func (gc *GroupCommitter) run() {
+-	defer close(gc.doneCh)
+-
+-	ticker := time.NewTicker(gc.syncInterval)
+-	defer ticker.Stop()
+-
+-	for {
+-		select {
+-		case <-gc.notify:
+-			// 有新写入，立即 sync
+-			gc.doSync()
+-		case <-ticker.C:
+-			// 定时兜底 sync
+-			gc.doSync()
+-		case <-gc.closeCh:
+-			gc.doSync() // 最终同步
+-			return
+-		}
+-	}
+-}
+-
+-// doSync 执行一次 WAL sync 并通知所有等待的写入者。
+-func (gc *GroupCommitter) doSync() {
+-	gc.mu.Lock()
+-	pending := gc.pending
+-	gc.pending = nil
+-	gc.mu.Unlock()
+-
+-	if len(pending) == 0 {
+-		return
+-	}
+-
+-	// 忽略 sync 错误：与 Engine.Write 中原行为一致，
+-	// sync 失败时数据仍在 OS 缓冲区，后续 sync 可能成功。
+-	_ = gc.wal.Sync()
+-
+-	for _, ch := range pending {
+-		close(ch)
+-	}
+-}
+diff --git a/pkg/storage/wal_record.go b/pkg/storage/wal_record.go
+index 5e801f4..f0618b3 100644
+--- a/pkg/storage/wal_record.go
++++ b/pkg/storage/wal_record.go
+@@ -5,9 +5,8 @@ import (
+ 	"encoding/json"
+ 	"fmt"
+ 	"log"
+-	"os"
+-	"path/filepath"
+-	"strings"
++	"math"
++	"time"
+ 
+ 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+ )
+@@ -214,97 +213,215 @@ func (e *Engine) replayWALRecords(records []RawRecord) error {
+ 	return nil
+ }
+ 
+-// parseSegmentEntry parses a directory entry into a Segment, returning the segment,
+-// its ID, whether the entry was a segment file, and an error if it was a segment file
+-// that failed to load.
+-func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool, error) {
+-	if entry.IsDir() {
+-		return nil, 0, false, nil
+-	}
+-	name := entry.Name()
+-	if !strings.HasPrefix(name, "segment_") || !strings.HasSuffix(name, ".widb") {
+-		return nil, 0, false, nil
+-	}
++// --- 二进制批量写入序列化 ---
+ 
+-	filePath := filepath.Join(e.flusher.dataDir, name)
+-	data, err := os.ReadFile(filePath)
+-	if err != nil {
+-		return nil, 0, true, fmt.Errorf("failed to read segment file %s: %w", name, err)
++// serializeBatchWriteRecord 将多行数据序列化为二进制格式。
++// 格式：uint16(行数) + 每行[keyLen(uint16)+key+version(uint64)+colCount(uint16)+每列...]
++func serializeBatchWriteRecord(rows []WriteRow, nextVersion uint64) ([]byte, error) {
++	// 预估大小
++	size := 2 // uint16 行数
++	for _, row := range rows {
++		size += 2 + len(row.Key) + 8 + 2 // keyLen + key + version + colCount
++		for colName, v := range row.Values {
++			size += 2 + len(colName) + 1 + 1 + valueBinarySize(v)
++		}
+ 	}
+-
+-	seg, err := DeserializeSegment(data)
+-	if err != nil {
+-		return nil, 0, true, fmt.Errorf("failed to deserialize segment file %s: %w", name, err)
++	buf := make([]byte, 0, size)
++	// 行数
++	b := make([]byte, 8)
++	binary.LittleEndian.PutUint16(b, uint16(len(rows)))
++	buf = append(buf, b[:2]...)
++	for _, row := range rows {
++		// key
++		binary.LittleEndian.PutUint16(b, uint16(len(row.Key)))
++		buf = append(buf, b[:2]...)
++		buf = append(buf, row.Key...)
++		// version
++		binary.LittleEndian.PutUint64(b, nextVersion)
++		buf = append(buf, b[:8]...)
++		nextVersion++
++		// 列数
++		binary.LittleEndian.PutUint16(b, uint16(len(row.Values)))
++		buf = append(buf, b[:2]...)
++		// 每列
++		for colName, v := range row.Values {
++			buf = appendValueBinary(buf, b, colName, v)
++		}
+ 	}
+-	seg.FilePath = filePath
++	return buf, nil
++}
++
++// batchWriteRow 是反序列化后的单行数据。
++type batchWriteRow struct {
++	Key     string
++	Version uint64
++	Values  map[string]common.Value
++}
+ 
+-	// Extract segment ID from filename: segment_<id>.widb
+-	idStr := name[len("segment_") : len(name)-len(".widb")]
+-	var segID uint64
+-	if _, err := fmt.Sscanf(idStr, "%d", &segID); err == nil {
+-		seg.ID = segID
++// deserializeBatchWriteRecord 从二进制格式反序列化多行数据。
++func deserializeBatchWriteRecord(data []byte) ([]batchWriteRow, error) {
++	if len(data) < 2 {
++		return nil, fmt.Errorf("engine: batch write record too short")
++	}
++	off := 0
++	rowCount := int(binary.LittleEndian.Uint16(data[off:]))
++	off += 2
++	rows := make([]batchWriteRow, 0, rowCount)
++	b8 := make([]byte, 8)
++	for i := 0; i < rowCount; i++ {
++		if off+2 > len(data) {
++			return nil, fmt.Errorf("engine: batch write record truncated at row %d key len", i)
++		}
++		keyLen := int(binary.LittleEndian.Uint16(data[off:]))
++		off += 2
++		if off+keyLen > len(data) {
++			return nil, fmt.Errorf("engine: batch write record truncated at row %d key", i)
++		}
++		key := string(data[off : off+keyLen])
++		off += keyLen
++		if off+8 > len(data) {
++			return nil, fmt.Errorf("engine: batch write record truncated at row %d version", i)
++		}
++		copy(b8, data[off:off+8])
++		version := binary.LittleEndian.Uint64(b8)
++		off += 8
++		if off+2 > len(data) {
++			return nil, fmt.Errorf("engine: batch write record truncated at row %d col count", i)
++		}
++		colCount := int(binary.LittleEndian.Uint16(data[off:]))
++		off += 2
++		values := make(map[string]common.Value, colCount)
++		for j := 0; j < colCount; j++ {
++			colName, val, n, err := readValueBinary(data[off:])
++			if err != nil {
++				return nil, fmt.Errorf("engine: batch write record col %d: %w", j, err)
++			}
++			off += n
++			values[colName] = val
++		}
++		rows = append(rows, batchWriteRow{Key: key, Version: version, Values: values})
+ 	}
++	return rows, nil
++}
+ 
+-	// Derive MinKey/MaxKey from sorted keys
+-	if len(seg.Keys) > 0 {
+-		seg.MinKey = seg.Keys[0]
+-		seg.MaxKey = seg.Keys[len(seg.Keys)-1]
++// valueBinarySize 返回 Value 的二进制编码大小（不含列名）。
++func valueBinarySize(v common.Value) int {
++	switch v.Typ {
++	case common.TypeBool:
++		return 1
++	case common.TypeInt64, common.TypeFloat64, common.TypeTimestamp:
++		return 8
++	case common.TypeString:
++		return 2 + len(v.Str)
++	default:
++		return 0
+ 	}
++}
+ 
+-	return seg, segID, true, nil
++// appendValueBinary 将一列数据追加到 buf，b 为临时缓冲区。
++func appendValueBinary(buf, b []byte, colName string, v common.Value) []byte {
++	// 列名
++	binary.LittleEndian.PutUint16(b, uint16(len(colName)))
++	buf = append(buf, b[:2]...)
++	buf = append(buf, colName...)
++	// 数据类型
++	buf = append(buf, byte(v.Typ))
++	// valid 标志
++	if v.Valid {
++		buf = append(buf, 1)
++	} else {
++		buf = append(buf, 0)
++	}
++	// 值
++	switch v.Typ {
++	case common.TypeBool:
++		if v.Int64 != 0 {
++			buf = append(buf, 1)
++		} else {
++			buf = append(buf, 0)
++		}
++	case common.TypeInt64:
++		binary.LittleEndian.PutUint64(b, uint64(v.Int64))
++		buf = append(buf, b[:8]...)
++	case common.TypeFloat64:
++		binary.LittleEndian.PutUint64(b, math.Float64bits(v.Float64))
++		buf = append(buf, b[:8]...)
++	case common.TypeString:
++		binary.LittleEndian.PutUint16(b, uint16(len(v.Str)))
++		buf = append(buf, b[:2]...)
++		buf = append(buf, v.Str...)
++	case common.TypeTimestamp:
++		binary.LittleEndian.PutUint64(b, uint64(v.Time.UnixNano()))
++		buf = append(buf, b[:8]...)
++	}
++	return buf
+ }
+ 
+-// loadSegments 从磁盘加载已有的 Segment 文件。
+-func (e *Engine) loadSegments() error {
+-	entries, err := os.ReadDir(e.flusher.dataDir)
++// readValueBinary 从 data 读取一列数据，返回列名、值、读取字节数和错误。
++func readValueBinary(data []byte) (string, common.Value, int, error) {
++	off := 0
++	if off+2 > len(data) {
++		return "", common.Value{}, 0, fmt.Errorf("truncated col name len")
++	}
++	nameLen := int(binary.LittleEndian.Uint16(data[off:]))
++	off += 2
++	if off+nameLen > len(data) {
++		return "", common.Value{}, 0, fmt.Errorf("truncated col name")
++	}
++	colName := string(data[off : off+nameLen])
++	off += nameLen
++	if off+2 > len(data) {
++		return "", common.Value{}, 0, fmt.Errorf("truncated type/valid")
++	}
++	typ := common.DataType(data[off])
++	off++
++	valid := data[off] != 0
++	off++
++	val, n, err := readTypedValue(data[off:], typ)
+ 	if err != nil {
+-		if os.IsNotExist(err) {
+-			return nil
+-		}
+-		return fmt.Errorf("engine: read data dir: %w", err)
++		return "", common.Value{}, 0, err
+ 	}
++	val.Valid = valid
++	return colName, val, off + n, nil
++}
+ 
+-	var maxSegID uint64
+-	var segFileCount int
+-	var failedCount int
+-	for _, entry := range entries {
+-		seg, segID, isSegFile, parseErr := e.parseSegmentEntry(entry)
+-		if !isSegFile {
+-			continue
++// readTypedValue 根据类型从 data 读取值，返回值、读取字节数和错误。
++func readTypedValue(data []byte, typ common.DataType) (common.Value, int, error) {
++	switch typ {
++	case common.TypeBool:
++		if len(data) < 1 {
++			return common.Value{}, 0, fmt.Errorf("truncated bool value")
+ 		}
+-		segFileCount++
+-		if parseErr != nil {
+-			log.Printf("engine: %v", parseErr)
+-			failedCount++
+-			continue
++		val := common.Value{Typ: typ}
++		if data[0] != 0 {
++			val.Int64 = 1
+ 		}
+-		e.segments = append(e.segments, seg)
+-		e.segmentMap[seg.ID] = seg
+-		e.segmentLevels = append(e.segmentLevels, 0)
+-		if segID > maxSegID {
+-			maxSegID = segID
++		return val, 1, nil
++	case common.TypeInt64:
++		if len(data) < 8 {
++			return common.Value{}, 0, fmt.Errorf("truncated int64 value")
+ 		}
+-	}
+-
+-	if failedCount > 0 {
+-		log.Printf("engine: warning: %d of %d segment files failed to load during recovery", failedCount, segFileCount)
+-		if failedCount == segFileCount {
+-			return fmt.Errorf("engine: all %d segment files failed to load during recovery", segFileCount)
++		return common.Value{Typ: typ, Int64: int64(binary.LittleEndian.Uint64(data[:8]))}, 8, nil
++	case common.TypeFloat64:
++		if len(data) < 8 {
++			return common.Value{}, 0, fmt.Errorf("truncated float64 value")
+ 		}
+-	}
+-
+-	// Register indexes for loaded segments
+-	for i, seg := range e.segments {
+-		if err := e.registerSegmentIndexes(seg, e.segmentLevels[i]); err != nil {
+-			return fmt.Errorf("engine: register segment %d indexes: %w", seg.ID, err)
++		return common.Value{Typ: typ, Float64: math.Float64frombits(binary.LittleEndian.Uint64(data[:8]))}, 8, nil
++	case common.TypeString:
++		if len(data) < 2 {
++			return common.Value{}, 0, fmt.Errorf("truncated string len")
+ 		}
++		strLen := int(binary.LittleEndian.Uint16(data[:2]))
++		if len(data) < 2+strLen {
++			return common.Value{}, 0, fmt.Errorf("truncated string value")
++		}
++		return common.Value{Typ: typ, Str: string(data[2 : 2+strLen])}, 2 + strLen, nil
++	case common.TypeTimestamp:
++		if len(data) < 8 {
++			return common.Value{}, 0, fmt.Errorf("truncated timestamp value")
++		}
++		return common.Value{Typ: typ, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(data[:8])))}, 8, nil
++	default:
++		return common.Value{}, 0, fmt.Errorf("unknown value type: %d", typ)
+ 	}
+-
+-	// Update flusher and compactor nextID to avoid ID collisions
+-	if maxSegID > 0 {
+-		e.flusher.nextID = maxSegID
+-		e.compactor.nextID = maxSegID
+-	}
+-
+-	return nil
+ }
+diff --git a/pkg/storage/wal_record_binary.go b/pkg/storage/wal_record_binary.go
+deleted file mode 100644
+index 144dc42..0000000
+--- a/pkg/storage/wal_record_binary.go
++++ /dev/null
+@@ -1,223 +0,0 @@
+-package storage
+-
+-import (
+-	"encoding/binary"
+-	"fmt"
+-	"math"
+-	"time"
+-
+-	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+-)
+-
+-// --- 二进制批量写入序列化 ---
+-
+-// serializeBatchWriteRecord 将多行数据序列化为二进制格式。
+-// 格式：uint16(行数) + 每行[keyLen(uint16)+key+version(uint64)+colCount(uint16)+每列...]
+-func serializeBatchWriteRecord(rows []WriteRow, nextVersion uint64) ([]byte, error) {
+-	// 预估大小
+-	size := 2 // uint16 行数
+-	for _, row := range rows {
+-		size += 2 + len(row.Key) + 8 + 2 // keyLen + key + version + colCount
+-		for colName, v := range row.Values {
+-			size += 2 + len(colName) + 1 + 1 + valueBinarySize(v)
+-		}
+-	}
+-	buf := make([]byte, 0, size)
+-	// 行数
+-	b := make([]byte, 8)
+-	binary.LittleEndian.PutUint16(b, uint16(len(rows)))
+-	buf = append(buf, b[:2]...)
+-	for _, row := range rows {
+-		// key
+-		binary.LittleEndian.PutUint16(b, uint16(len(row.Key)))
+-		buf = append(buf, b[:2]...)
+-		buf = append(buf, row.Key...)
+-		// version
+-		binary.LittleEndian.PutUint64(b, nextVersion)
+-		buf = append(buf, b[:8]...)
+-		nextVersion++
+-		// 列数
+-		binary.LittleEndian.PutUint16(b, uint16(len(row.Values)))
+-		buf = append(buf, b[:2]...)
+-		// 每列
+-		for colName, v := range row.Values {
+-			buf = appendValueBinary(buf, b, colName, v)
+-		}
+-	}
+-	return buf, nil
+-}
+-
+-// batchWriteRow 是反序列化后的单行数据。
+-type batchWriteRow struct {
+-	Key     string
+-	Version uint64
+-	Values  map[string]common.Value
+-}
+-
+-// deserializeBatchWriteRecord 从二进制格式反序列化多行数据。
+-func deserializeBatchWriteRecord(data []byte) ([]batchWriteRow, error) {
+-	if len(data) < 2 {
+-		return nil, fmt.Errorf("engine: batch write record too short")
+-	}
+-	off := 0
+-	rowCount := int(binary.LittleEndian.Uint16(data[off:]))
+-	off += 2
+-	rows := make([]batchWriteRow, 0, rowCount)
+-	b8 := make([]byte, 8)
+-	for i := 0; i < rowCount; i++ {
+-		if off+2 > len(data) {
+-			return nil, fmt.Errorf("engine: batch write record truncated at row %d key len", i)
+-		}
+-		keyLen := int(binary.LittleEndian.Uint16(data[off:]))
+-		off += 2
+-		if off+keyLen > len(data) {
+-			return nil, fmt.Errorf("engine: batch write record truncated at row %d key", i)
+-		}
+-		key := string(data[off : off+keyLen])
+-		off += keyLen
+-		if off+8 > len(data) {
+-			return nil, fmt.Errorf("engine: batch write record truncated at row %d version", i)
+-		}
+-		copy(b8, data[off:off+8])
+-		version := binary.LittleEndian.Uint64(b8)
+-		off += 8
+-		if off+2 > len(data) {
+-			return nil, fmt.Errorf("engine: batch write record truncated at row %d col count", i)
+-		}
+-		colCount := int(binary.LittleEndian.Uint16(data[off:]))
+-		off += 2
+-		values := make(map[string]common.Value, colCount)
+-		for j := 0; j < colCount; j++ {
+-			colName, val, n, err := readValueBinary(data[off:])
+-			if err != nil {
+-				return nil, fmt.Errorf("engine: batch write record col %d: %w", j, err)
+-			}
+-			off += n
+-			values[colName] = val
+-		}
+-		rows = append(rows, batchWriteRow{Key: key, Version: version, Values: values})
+-	}
+-	return rows, nil
+-}
+-
+-// valueBinarySize 返回 Value 的二进制编码大小（不含列名）。
+-func valueBinarySize(v common.Value) int {
+-	switch v.Typ {
+-	case common.TypeBool:
+-		return 1
+-	case common.TypeInt64, common.TypeFloat64, common.TypeTimestamp:
+-		return 8
+-	case common.TypeString:
+-		return 2 + len(v.Str)
+-	default:
+-		return 0
+-	}
+-}
+-
+-// appendValueBinary 将一列数据追加到 buf，b 为临时缓冲区。
+-func appendValueBinary(buf, b []byte, colName string, v common.Value) []byte {
+-	// 列名
+-	binary.LittleEndian.PutUint16(b, uint16(len(colName)))
+-	buf = append(buf, b[:2]...)
+-	buf = append(buf, colName...)
+-	// 数据类型
+-	buf = append(buf, byte(v.Typ))
+-	// valid 标志
+-	if v.Valid {
+-		buf = append(buf, 1)
+-	} else {
+-		buf = append(buf, 0)
+-	}
+-	// 值
+-	switch v.Typ {
+-	case common.TypeBool:
+-		if v.Int64 != 0 {
+-			buf = append(buf, 1)
+-		} else {
+-			buf = append(buf, 0)
+-		}
+-	case common.TypeInt64:
+-		binary.LittleEndian.PutUint64(b, uint64(v.Int64))
+-		buf = append(buf, b[:8]...)
+-	case common.TypeFloat64:
+-		binary.LittleEndian.PutUint64(b, math.Float64bits(v.Float64))
+-		buf = append(buf, b[:8]...)
+-	case common.TypeString:
+-		binary.LittleEndian.PutUint16(b, uint16(len(v.Str)))
+-		buf = append(buf, b[:2]...)
+-		buf = append(buf, v.Str...)
+-	case common.TypeTimestamp:
+-		binary.LittleEndian.PutUint64(b, uint64(v.Time.UnixNano()))
+-		buf = append(buf, b[:8]...)
+-	}
+-	return buf
+-}
+-
+-// readValueBinary 从 data 读取一列数据，返回列名、值、读取字节数和错误。
+-func readValueBinary(data []byte) (string, common.Value, int, error) {
+-	off := 0
+-	if off+2 > len(data) {
+-		return "", common.Value{}, 0, fmt.Errorf("truncated col name len")
+-	}
+-	nameLen := int(binary.LittleEndian.Uint16(data[off:]))
+-	off += 2
+-	if off+nameLen > len(data) {
+-		return "", common.Value{}, 0, fmt.Errorf("truncated col name")
+-	}
+-	colName := string(data[off : off+nameLen])
+-	off += nameLen
+-	if off+2 > len(data) {
+-		return "", common.Value{}, 0, fmt.Errorf("truncated type/valid")
+-	}
+-	typ := common.DataType(data[off])
+-	off++
+-	valid := data[off] != 0
+-	off++
+-	val, n, err := readTypedValue(data[off:], typ)
+-	if err != nil {
+-		return "", common.Value{}, 0, err
+-	}
+-	val.Valid = valid
+-	return colName, val, off + n, nil
+-}
+-
+-// readTypedValue 根据类型从 data 读取值，返回值、读取字节数和错误。
+-func readTypedValue(data []byte, typ common.DataType) (common.Value, int, error) {
+-	switch typ {
+-	case common.TypeBool:
+-		if len(data) < 1 {
+-			return common.Value{}, 0, fmt.Errorf("truncated bool value")
+-		}
+-		val := common.Value{Typ: typ}
+-		if data[0] != 0 {
+-			val.Int64 = 1
+-		}
+-		return val, 1, nil
+-	case common.TypeInt64:
+-		if len(data) < 8 {
+-			return common.Value{}, 0, fmt.Errorf("truncated int64 value")
+-		}
+-		return common.Value{Typ: typ, Int64: int64(binary.LittleEndian.Uint64(data[:8]))}, 8, nil
+-	case common.TypeFloat64:
+-		if len(data) < 8 {
+-			return common.Value{}, 0, fmt.Errorf("truncated float64 value")
+-		}
+-		return common.Value{Typ: typ, Float64: math.Float64frombits(binary.LittleEndian.Uint64(data[:8]))}, 8, nil
+-	case common.TypeString:
+-		if len(data) < 2 {
+-			return common.Value{}, 0, fmt.Errorf("truncated string len")
+-		}
+-		strLen := int(binary.LittleEndian.Uint16(data[:2]))
+-		if len(data) < 2+strLen {
+-			return common.Value{}, 0, fmt.Errorf("truncated string value")
+-		}
+-		return common.Value{Typ: typ, Str: string(data[2 : 2+strLen])}, 2 + strLen, nil
+-	case common.TypeTimestamp:
+-		if len(data) < 8 {
+-			return common.Value{}, 0, fmt.Errorf("truncated timestamp value")
+-		}
+-		return common.Value{Typ: typ, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(data[:8])))}, 8, nil
+-	default:
+-		return common.Value{}, 0, fmt.Errorf("unknown value type: %d", typ)
+-	}
+-}
