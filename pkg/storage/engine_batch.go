@@ -28,18 +28,11 @@ func (e *Engine) WriteBatch(rows []WriteRow) error {
 	// Step 2: Serialize WAL record (no lock needed, CPU-bound)
 	payload, err := serializeBatchWriteRecord(rows, baseVersion)
 	if err != nil {
-		// Rollback version on serialization failure
-		e.mu.Lock()
-		e.nextVersion = baseVersion
-		e.mu.Unlock()
 		return fmt.Errorf("engine write batch: serialize: %w", err)
 	}
 
 	// Step 3: WAL append + sync (I/O-bound, no engine lock needed)
 	if err := e.wal.AppendBatch([]BatchRecord{{Type: walTypeBatchWrite, Payload: payload}}); err != nil {
-		e.mu.Lock()
-		e.nextVersion = baseVersion
-		e.mu.Unlock()
 		return fmt.Errorf("engine write batch: wal: %w", err)
 	}
 
@@ -47,9 +40,6 @@ func (e *Engine) WriteBatch(rows []WriteRow) error {
 	if e.groupCommitter != nil {
 		syncCh = e.groupCommitter.Submit()
 	} else if err := e.wal.Sync(); err != nil {
-		e.mu.Lock()
-		e.nextVersion = baseVersion
-		e.mu.Unlock()
 		return fmt.Errorf("engine write batch: sync: %w", err)
 	}
 
