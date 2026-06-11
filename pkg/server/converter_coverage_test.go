@@ -212,7 +212,7 @@ func TestValueToInterfaceBool(t *testing.T) {
 
 // TestChunksToRowsNilChunk 测试 chunksToRows 跳过 nil chunk
 func TestChunksToRowsNilChunk(t *testing.T) {
-	result := chunksToRows([]*storage.Chunk{nil})
+	result := chunksToRows([]*storage.Chunk{nil}, nil)
 	if len(result) != 0 {
 		t.Errorf("chunksToRows with nil chunk = %d rows, want 0", len(result))
 	}
@@ -228,7 +228,7 @@ func TestCountRowsNilChunk(t *testing.T) {
 
 // TestChunksToRowsEmpty 测试 chunksToRows 对空切片返回 nil
 func TestChunksToRowsEmpty(t *testing.T) {
-	result := chunksToRows([]*storage.Chunk{})
+	result := chunksToRows([]*storage.Chunk{}, nil)
 	if result != nil {
 		t.Errorf("chunksToRows(empty) = %v, want nil", result)
 	}
