@@ -124,7 +124,10 @@ func (e *Executor) executeAggregate(agg *AggregateNode) (*execResult, error) {
 	groupAccum, groupRows, groupOrder := e.aggregateRows(agg, childResult, inputSchema, colIdxMap)
 
 	schema := agg.Schema()
-	outputCols := e.buildAggregateOutput(agg, schema, groupAccum, groupRows, groupOrder, colIdxMap)
+	outputCols, err := e.buildAggregateOutput(agg, schema, groupAccum, groupRows, groupOrder, colIdxMap)
+	if err != nil {
+		return nil, err
+	}
 
 	output := storage.NewChunk(defaultChunkSize)
 	for _, col := range outputCols {
@@ -171,7 +174,7 @@ func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, in
 	return groupAccum, groupRows, groupOrder
 }
 
-func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, groupAccum map[string][]accumulator, groupRows map[string]*groupRow, groupOrder []string, colIdxMap map[string]int) []*storage.ColumnVector {
+func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, groupAccum map[string][]accumulator, groupRows map[string]*groupRow, groupOrder []string, colIdxMap map[string]int) ([]*storage.ColumnVector, error) {
 	outputCols := make([]*storage.ColumnVector, len(schema))
 	for i, colDef := range schema {
 		outputCols[i] = storage.NewColumnVector(uint32(i), colDef.Type, uint32(len(groupOrder)))
@@ -184,18 +187,22 @@ func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, 
 
 		for _, gb := range agg.GroupBy {
 			val, _ := evalExpr(gb, gr.values, colIdxMap)
-			_ = outputCols[colIdx].Append(coerceValue(val, schema[colIdx].Type))
+			if err := outputCols[colIdx].Append(coerceValue(val, schema[colIdx].Type)); err != nil {
+				return nil, fmt.Errorf("aggregate output: group-by append: %w", err)
+			}
 			colIdx++
 		}
 
 		for _, acc := range accs {
 			val := acc.result()
-			_ = outputCols[colIdx].Append(coerceValue(val, schema[colIdx].Type))
+			if err := outputCols[colIdx].Append(coerceValue(val, schema[colIdx].Type)); err != nil {
+				return nil, fmt.Errorf("aggregate output: aggregate append: %w", err)
+			}
 			colIdx++
 		}
 	}
 
-	return outputCols
+	return outputCols, nil
 }
 
 // buildGroupKey 构建分组键。
