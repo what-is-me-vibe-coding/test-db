@@ -1,5 +1,3 @@
-// Package storage 实现存储引擎核心，包括 WAL、MemTable、Segment、Compaction。
-// 可依赖 pkg/common 与 pkg/catalog。
 package storage
 
 import (
@@ -7,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,35 +14,37 @@ import (
 
 // Engine 是存储引擎的核心结构。
 type Engine struct {
-	mu             sync.RWMutex
-	activeMem      *MemTable
-	immutable      []*MemTable
-	wal            *WAL
-	flusher        *Flusher
-	compactor      *Compactor
-	segments       []*Segment
-	segmentMap     map[uint64]*Segment
-	segmentLevels  []int
-	nextVersion    uint64
-	primaryIndex   *index.PrimaryIndex
-	bloomIndex     *index.BloomIndex
-	sparseIndex    *index.SparseIndex
-	columnMeta     []ColumnMeta
-	blockCache     *BlockCache
-	indexCache     *IndexCache
-	scheduler      *Scheduler
-	groupCommitter *GroupCommitter
-	syncMode       SyncMode
+	mu                     sync.RWMutex
+	activeMem              *MemTable
+	immutable              []*MemTable
+	wal                    *WAL
+	flusher                *Flusher
+	compactor              *Compactor
+	segments               []*Segment
+	segmentMap             map[uint64]*Segment
+	segmentLevels          []int
+	nextVersion            uint64
+	primaryIndex           *index.PrimaryIndex
+	bloomIndex             *index.BloomIndex
+	sparseIndex            *index.SparseIndex
+	columnMeta             []ColumnMeta
+	blockCache             *BlockCache
+	indexCache             *IndexCache
+	scheduler              *Scheduler
+	groupCommitter         *GroupCommitter
+	syncMode               SyncMode
+	blockCacheMaxEntrySize int64 // 单个缓存条目的最大允许大小，超过此值不缓存
 }
 
 // EngineConfig 是 Engine 的配置参数。
 type EngineConfig struct {
-	DataDir         string
-	MaxMemTableSize int64
-	BlockCacheSize  int64         // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
-	IndexCacheSize  int           // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
-	SyncMode        SyncMode      // WAL 同步模式，默认 SyncEveryWrite
-	SyncInterval    time.Duration // GroupCommit 模式下的同步间隔，默认 1ms
+	DataDir                string
+	MaxMemTableSize        int64         // MemTable 最大容量（字节），默认 4MB
+	BlockCacheSize         int64         // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
+	BlockCacheMaxEntrySize int64         // 单个缓存条目的最大允许大小（字节），默认 1MB，超过此值不缓存，防止冷数据污染
+	IndexCacheSize         int           // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
+	SyncMode               SyncMode      // WAL 同步模式，默认 SyncEveryWrite
+	SyncInterval           time.Duration // GroupCommit 模式下的同步间隔，默认 1ms
 }
 
 // NewEngine 创建一个新的存储引擎实例。
@@ -64,23 +63,29 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		blockCacheSize = 256 * 1024 * 1024 // 默认 256MB
 	}
 
+	blockCacheMaxEntrySize := cfg.BlockCacheMaxEntrySize
+	if blockCacheMaxEntrySize == 0 {
+		blockCacheMaxEntrySize = 1024 * 1024 // 默认 1MB
+	}
+
 	indexCacheSize := cfg.IndexCacheSize
 	if indexCacheSize == 0 {
 		indexCacheSize = 1000 // 默认 1000 条目
 	}
 
 	eng := &Engine{
-		activeMem:    NewMemTableWithSize(maxSize),
-		flusher:      NewFlusher(cfg.DataDir),
-		compactor:    NewCompactor(cfg.DataDir),
-		segmentMap:   make(map[uint64]*Segment),
-		nextVersion:  1,
-		primaryIndex: index.NewPrimaryIndex(),
-		bloomIndex:   index.NewBloomIndex(),
-		sparseIndex:  index.NewSparseIndex(),
-		blockCache:   NewBlockCache(blockCacheSize),
-		indexCache:   NewIndexCache(indexCacheSize),
-		syncMode:     cfg.SyncMode,
+		activeMem:              NewMemTableWithSize(maxSize),
+		flusher:                NewFlusher(cfg.DataDir),
+		compactor:              NewCompactor(cfg.DataDir),
+		segmentMap:             make(map[uint64]*Segment),
+		nextVersion:            1,
+		primaryIndex:           index.NewPrimaryIndex(),
+		bloomIndex:             index.NewBloomIndex(),
+		sparseIndex:            index.NewSparseIndex(),
+		blockCache:             NewBlockCache(blockCacheSize),
+		indexCache:             NewIndexCache(indexCacheSize),
+		syncMode:               cfg.SyncMode,
+		blockCacheMaxEntrySize: blockCacheMaxEntrySize,
 	}
 
 	// Load existing segments from disk
@@ -324,97 +329,166 @@ func (e *Engine) Close() error {
 	return nil
 }
 
-// parseSegmentEntry parses a directory entry into a Segment, returning the segment,
-// its ID, whether the entry was a segment file, and an error if it was a segment file
-// that failed to load.
-func (e *Engine) parseSegmentEntry(entry os.DirEntry) (*Segment, uint64, bool, error) {
-	if entry.IsDir() {
-		return nil, 0, false, nil
+// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
+// 如果调度器已在运行，则不做任何操作。
+func (e *Engine) StartScheduler(cfg SchedulerConfig) {
+	e.mu.Lock()
+	if e.scheduler != nil {
+		e.mu.Unlock()
+		return
 	}
-	name := entry.Name()
-	if !strings.HasPrefix(name, "segment_") || !strings.HasSuffix(name, ".widb") {
-		return nil, 0, false, nil
-	}
+	e.mu.Unlock()
 
-	filePath := filepath.Join(e.flusher.dataDir, name)
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, 0, true, fmt.Errorf("failed to read segment file %s: %w", name, err)
-	}
+	sched := NewScheduler(e, cfg)
+	sched.Start()
 
-	seg, err := DeserializeSegment(data)
-	if err != nil {
-		return nil, 0, true, fmt.Errorf("failed to deserialize segment file %s: %w", name, err)
-	}
-	seg.FilePath = filePath
-
-	// Extract segment ID from filename: segment_<id>.widb
-	idStr := name[len("segment_") : len(name)-len(".widb")]
-	var segID uint64
-	if _, err := fmt.Sscanf(idStr, "%d", &segID); err == nil {
-		seg.ID = segID
-	}
-
-	// Derive MinKey/MaxKey from sorted keys
-	if len(seg.Keys) > 0 {
-		seg.MinKey = seg.Keys[0]
-		seg.MaxKey = seg.Keys[len(seg.Keys)-1]
-	}
-
-	return seg, segID, true, nil
+	e.mu.Lock()
+	e.scheduler = sched
+	e.mu.Unlock()
 }
 
-// loadSegments 从磁盘加载已有的 Segment 文件。
-func (e *Engine) loadSegments() error {
-	entries, err := os.ReadDir(e.flusher.dataDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("engine: read data dir: %w", err)
+// SchedulerStats 返回后台调度器的运行统计信息。
+// 如果调度器未启动，ok 为 false。
+func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
+	e.mu.RLock()
+	sched := e.scheduler
+	e.mu.RUnlock()
+
+	if sched == nil {
+		return SchedulerStats{}, false
+	}
+	return sched.Stats(), true
+}
+
+// registerSegmentIndexes 将 Segment 注册到所有索引（主键、布隆、稀疏），
+// 并将列统计信息缓存到 IndexCache。
+func (e *Engine) registerSegmentIndexes(seg *Segment, level int) error {
+	segMeta := index.SegmentMeta{
+		ID:     seg.ID,
+		MinKey: seg.MinKey,
+		MaxKey: seg.MaxKey,
+		Level:  level,
+	}
+	if err := e.primaryIndex.RegisterSegment(segMeta); err != nil {
+		return fmt.Errorf("engine: register primary index for segment %d: %w", seg.ID, err)
 	}
 
-	var maxSegID uint64
-	var segFileCount int
-	var failedCount int
-	for _, entry := range entries {
-		seg, segID, isSegFile, parseErr := e.parseSegmentEntry(entry)
-		if !isSegFile {
-			continue
-		}
-		segFileCount++
-		if parseErr != nil {
-			log.Printf("engine: %v", parseErr)
-			failedCount++
-			continue
-		}
-		e.segments = append(e.segments, seg)
-		e.segmentMap[seg.ID] = seg
-		e.segmentLevels = append(e.segmentLevels, 0)
-		if segID > maxSegID {
-			maxSegID = segID
-		}
-	}
-
-	if failedCount > 0 {
-		log.Printf("engine: warning: %d of %d segment files failed to load during recovery", failedCount, segFileCount)
-		if failedCount == segFileCount {
-			return fmt.Errorf("engine: all %d segment files failed to load during recovery", segFileCount)
+	if len(seg.Footer.BloomFilter) > 0 {
+		if err := e.bloomIndex.RegisterFromBytes(seg.ID, seg.Footer.BloomFilter); err != nil {
+			return fmt.Errorf("engine: register bloom index for segment %d: %w", seg.ID, err)
 		}
 	}
 
-	// Register indexes for loaded segments
-	for i, seg := range e.segments {
-		if err := e.registerSegmentIndexes(seg, e.segmentLevels[i]); err != nil {
-			return fmt.Errorf("engine: register segment %d indexes: %w", seg.ID, err)
-		}
-	}
+	e.sparseIndex.LoadFromSegment(seg, seg.MinKey, seg.MaxKey, level)
 
-	// Update flusher and compactor nextID to avoid ID collisions
-	if maxSegID > 0 {
-		e.flusher.SetNextID(maxSegID)
-		e.compactor.SetNextID(maxSegID)
+	// 缓存列统计信息到 IndexCache
+	if len(seg.Footer.ColumnStats) > 0 {
+		stats := make([]ColumnStat, len(seg.Footer.ColumnStats))
+		copy(stats, seg.Footer.ColumnStats)
+		e.indexCache.PutColumnStats(seg.ID, stats)
 	}
 
 	return nil
+}
+
+// unregisterSegmentIndexes 从所有索引中注销 Segment，并清除相关缓存。
+func (e *Engine) unregisterSegmentIndexes(segID uint64) {
+	_ = e.primaryIndex.UnregisterSegment(segID) // 注销失败不影响后续清理
+	e.bloomIndex.Unregister(segID)
+	e.sparseIndex.UnregisterSegment(segID)
+	e.blockCache.Invalidate(segID)
+	e.indexCache.Invalidate(segID)
+}
+
+// Segments 返回所有 Segment 的副本。
+func (e *Engine) Segments() []*Segment {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	result := make([]*Segment, len(e.segments))
+	copy(result, e.segments)
+	return result
+}
+
+// SegmentCount 返回 Segment 的数量。
+func (e *Engine) SegmentCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.segments)
+}
+
+// L0SegmentCount 返回 L0 层 Segment 的数量。
+func (e *Engine) L0SegmentCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	count := 0
+	for _, lvl := range e.segmentLevels {
+		if lvl == 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// MemTableSize 返回当前活跃 MemTable 的大小。
+func (e *Engine) MemTableSize() int64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.activeMem.Size()
+}
+
+// PrimaryIndex 返回主键索引实例。
+func (e *Engine) PrimaryIndex() *index.PrimaryIndex {
+	return e.primaryIndex
+}
+
+// BloomIndex 返回布隆过滤器索引实例。
+func (e *Engine) BloomIndex() *index.BloomIndex {
+	return e.bloomIndex
+}
+
+// SparseIndex 返回稀疏索引实例。
+func (e *Engine) SparseIndex() *index.SparseIndex {
+	return e.sparseIndex
+}
+
+// ColumnMeta 返回列元数据的副本。
+func (e *Engine) ColumnMeta() []ColumnMeta {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	result := make([]ColumnMeta, len(e.columnMeta))
+	copy(result, e.columnMeta)
+	return result
+}
+
+func (e *Engine) rotateMemTable() error {
+	if e.activeMem.Len() == 0 {
+		return nil
+	}
+	e.activeMem.Freeze()
+	e.immutable = append(e.immutable, e.activeMem)
+	e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
+	return nil
+}
+
+func (e *Engine) l0Count() int {
+	count := 0
+	for _, lvl := range e.segmentLevels {
+		if lvl == 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *Engine) collectSegmentsByLevel(level int) ([]*Segment, []int) {
+	var segments []*Segment
+	var indices []int
+	for i, lvl := range e.segmentLevels {
+		if lvl == level {
+			segments = append(segments, e.segments[i])
+			indices = append(indices, i)
+		}
+	}
+	return segments, indices
 }
