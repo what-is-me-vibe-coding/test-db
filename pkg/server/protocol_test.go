@@ -311,12 +311,12 @@ func TestCountRows(t *testing.T) {
 }
 
 func TestChunksToRows(t *testing.T) {
-	result := chunksToRows(nil)
+	result := chunksToRows(nil, nil)
 	if result != nil {
 		t.Errorf("chunksToRows(nil) 应返回 nil, 实际: %v", result)
 	}
 
-	result = chunksToRows([]*storage.Chunk{nil})
+	result = chunksToRows([]*storage.Chunk{nil}, nil)
 	if result != nil {
 		t.Errorf("chunksToRows([nil]) 应返回 nil, 实际: %v", result)
 	}
@@ -326,12 +326,22 @@ func TestChunksToRows(t *testing.T) {
 	_ = col.Append(common.NewInt64(42))
 	_ = chunk.AddColumn(col)
 
-	result = chunksToRows([]*storage.Chunk{chunk})
+	// 无列名时回退到 col_N 格式
+	result = chunksToRows([]*storage.Chunk{chunk}, nil)
 	if len(result) != 1 {
 		t.Fatalf("结果行数 = %d, 期望 1", len(result))
 	}
 	if result[0]["col_0"] != int64(42) {
 		t.Errorf("col_0 = %v, 期望 42", result[0]["col_0"])
+	}
+
+	// 有列名时使用列名作为 key
+	result = chunksToRows([]*storage.Chunk{chunk}, []string{"id"})
+	if len(result) != 1 {
+		t.Fatalf("结果行数 = %d, 期望 1", len(result))
+	}
+	if result[0]["id"] != int64(42) {
+		t.Errorf("id = %v, 期望 42", result[0]["id"])
 	}
 }
 

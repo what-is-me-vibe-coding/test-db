@@ -96,7 +96,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	} else {
 		// Replay WAL records to recover data
 		if err := eng.replayWALRecords(records); err != nil {
-			_ = wal.Close() // 错误路径，忽略关闭错误
+			if closeErr := wal.Close(); closeErr != nil {
+				log.Printf("engine: close wal after replay failure: %v", closeErr)
+			}
 			return nil, fmt.Errorf("engine: replay wal: %w", err)
 		}
 	}
@@ -112,37 +114,33 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 // Write 向引擎写入一行数据。
 func (e *Engine) Write(key string, values map[string]common.Value) error {
+	// Step 1: Allocate version under lock (brief hold)
 	e.mu.Lock()
-
 	version := e.nextVersion
+	e.nextVersion++
+	e.mu.Unlock()
 
-	// Write to WAL first (write-ahead logging)
+	// Step 2: Serialize WAL record (no lock needed, CPU-bound)
 	payload, err := serializeWriteRecord(key, version, values)
 	if err != nil {
-		e.mu.Unlock()
 		return fmt.Errorf("engine write: serialize wal: %w", err)
 	}
+
+	// Step 3: WAL append + sync (I/O-bound, no engine lock needed)
+	// WAL has its own internal serialization for concurrent appends.
 	if err := e.wal.AppendWrite(payload); err != nil {
-		e.mu.Unlock()
 		return fmt.Errorf("engine write: wal append: %w", err)
 	}
 
-	// 根据同步模式选择同步策略
 	var syncCh <-chan struct{}
 	if e.groupCommitter != nil {
 		syncCh = e.groupCommitter.Submit()
 	} else if err := e.wal.Sync(); err != nil {
-		e.mu.Unlock()
 		return fmt.Errorf("engine write: wal sync: %w", err)
 	}
 
-	e.nextVersion++
-
-	row := Row{
-		Version: version,
-		Columns: values,
-	}
-
+	// Step 4: Put to memtable under lock (brief hold)
+	e.mu.Lock()
 	if e.activeMem.ShouldFlush() {
 		if err := e.rotateMemTable(); err != nil {
 			e.mu.Unlock()
@@ -150,16 +148,14 @@ func (e *Engine) Write(key string, values map[string]common.Value) error {
 		}
 	}
 
-	_, _, err = e.activeMem.Put(key, row)
+	_, _, err = e.activeMem.Put(key, Row{Version: version, Columns: values})
+	e.mu.Unlock()
+
 	if err != nil {
-		e.mu.Unlock()
 		return fmt.Errorf("engine write: %w", err)
 	}
 
-	e.mu.Unlock()
-
-	// GroupCommit 模式下，在引擎锁外等待 WAL sync 完成
-	// 这样其他写入可以在等待期间并行进行
+	// Step 5: Wait for WAL sync completion (outside engine lock)
 	if syncCh != nil {
 		<-syncCh
 	}

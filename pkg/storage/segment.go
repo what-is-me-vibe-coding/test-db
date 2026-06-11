@@ -41,9 +41,10 @@ type Segment struct {
 	FilePath string
 	Keys     []string
 
-	// 解码缓存：首次访问时延迟解码并缓存，避免点查时重复解压整列
-	decodedCache []decodedColumn
-	decodeOnce   sync.Once
+	// 逐列延迟解码缓存：首次访问某列时解码并缓存，避免点查时解码所有列
+	colCache  []decodedColumn
+	colOnce   []sync.Once
+	cacheInit sync.Once
 }
 
 // SegmentID 返回 Segment 的唯一标识。
