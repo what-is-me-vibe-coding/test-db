@@ -14,35 +14,37 @@ import (
 
 // Engine 是存储引擎的核心结构。
 type Engine struct {
-	mu             sync.RWMutex
-	activeMem      *MemTable
-	immutable      []*MemTable
-	wal            *WAL
-	flusher        *Flusher
-	compactor      *Compactor
-	segments       []*Segment
-	segmentMap     map[uint64]*Segment
-	segmentLevels  []int
-	nextVersion    uint64
-	primaryIndex   *index.PrimaryIndex
-	bloomIndex     *index.BloomIndex
-	sparseIndex    *index.SparseIndex
-	columnMeta     []ColumnMeta
-	blockCache     *BlockCache
-	indexCache     *IndexCache
-	scheduler      *Scheduler
-	groupCommitter *GroupCommitter
-	syncMode       SyncMode
+	mu                     sync.RWMutex
+	activeMem              *MemTable
+	immutable              []*MemTable
+	wal                    *WAL
+	flusher                *Flusher
+	compactor              *Compactor
+	segments               []*Segment
+	segmentMap             map[uint64]*Segment
+	segmentLevels          []int
+	nextVersion            uint64
+	primaryIndex           *index.PrimaryIndex
+	bloomIndex             *index.BloomIndex
+	sparseIndex            *index.SparseIndex
+	columnMeta             []ColumnMeta
+	blockCache             *BlockCache
+	indexCache             *IndexCache
+	scheduler              *Scheduler
+	groupCommitter         *GroupCommitter
+	syncMode               SyncMode
+	blockCacheMaxEntrySize int64 // 单个缓存条目的最大允许大小，超过此值不缓存
 }
 
 // EngineConfig 是 Engine 的配置参数。
 type EngineConfig struct {
-	DataDir         string
-	MaxMemTableSize int64
-	BlockCacheSize  int64         // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
-	IndexCacheSize  int           // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
-	SyncMode        SyncMode      // WAL 同步模式，默认 SyncEveryWrite
-	SyncInterval    time.Duration // GroupCommit 模式下的同步间隔，默认 1ms
+	DataDir                string
+	MaxMemTableSize        int64         // MemTable 最大容量（字节），默认 4MB
+	BlockCacheSize         int64         // BlockCache 容量（字节），默认 256MB，<=0 表示不缓存
+	BlockCacheMaxEntrySize int64         // 单个缓存条目的最大允许大小（字节），默认 1MB，超过此值不缓存，防止冷数据污染
+	IndexCacheSize         int           // IndexCache 容量（条目数），默认 1000，<=0 表示不缓存
+	SyncMode               SyncMode      // WAL 同步模式，默认 SyncEveryWrite
+	SyncInterval           time.Duration // GroupCommit 模式下的同步间隔，默认 1ms
 }
 
 // NewEngine 创建一个新的存储引擎实例。
@@ -61,23 +63,29 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		blockCacheSize = 256 * 1024 * 1024 // 默认 256MB
 	}
 
+	blockCacheMaxEntrySize := cfg.BlockCacheMaxEntrySize
+	if blockCacheMaxEntrySize == 0 {
+		blockCacheMaxEntrySize = 1024 * 1024 // 默认 1MB
+	}
+
 	indexCacheSize := cfg.IndexCacheSize
 	if indexCacheSize == 0 {
 		indexCacheSize = 1000 // 默认 1000 条目
 	}
 
 	eng := &Engine{
-		activeMem:    NewMemTableWithSize(maxSize),
-		flusher:      NewFlusher(cfg.DataDir),
-		compactor:    NewCompactor(cfg.DataDir),
-		segmentMap:   make(map[uint64]*Segment),
-		nextVersion:  1,
-		primaryIndex: index.NewPrimaryIndex(),
-		bloomIndex:   index.NewBloomIndex(),
-		sparseIndex:  index.NewSparseIndex(),
-		blockCache:   NewBlockCache(blockCacheSize),
-		indexCache:   NewIndexCache(indexCacheSize),
-		syncMode:     cfg.SyncMode,
+		activeMem:              NewMemTableWithSize(maxSize),
+		flusher:                NewFlusher(cfg.DataDir),
+		compactor:              NewCompactor(cfg.DataDir),
+		segmentMap:             make(map[uint64]*Segment),
+		nextVersion:            1,
+		primaryIndex:           index.NewPrimaryIndex(),
+		bloomIndex:             index.NewBloomIndex(),
+		sparseIndex:            index.NewSparseIndex(),
+		blockCache:             NewBlockCache(blockCacheSize),
+		indexCache:             NewIndexCache(indexCacheSize),
+		syncMode:               cfg.SyncMode,
+		blockCacheMaxEntrySize: blockCacheMaxEntrySize,
 	}
 
 	// Load existing segments from disk
