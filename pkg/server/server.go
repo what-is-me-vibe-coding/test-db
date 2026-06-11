@@ -148,7 +148,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		// HTTP 监听失败，需优雅关闭已启动的 TCP goroutine
 		close(s.done)
-		_ = s.tcpListener.Close() // 错误路径，忽略关闭错误
+		if closeErr := s.tcpListener.Close(); closeErr != nil {
+			log.Printf("server: close tcp listener after http listen failure: %v", closeErr)
+		}
 		s.wg.Wait()
 		// 重置 done 通道，允许后续重试 Start
 		s.done = make(chan struct{})
@@ -199,13 +201,19 @@ func (s *Server) Stop() error {
 		close(s.done)
 
 		if s.tcpListener != nil {
-			_ = s.tcpListener.Close() // 关闭错误不影响主流程
+			if err := s.tcpListener.Close(); err != nil {
+				log.Printf("server: close tcp listener: %v", err)
+			}
 		}
 		if s.httpListener != nil {
-			_ = s.httpListener.Close() // 关闭错误不影响主流程
+			if err := s.httpListener.Close(); err != nil {
+				log.Printf("server: close http listener: %v", err)
+			}
 		}
 		if s.httpServer != nil {
-			_ = s.httpServer.Close() // 关闭错误不影响主流程
+			if err := s.httpServer.Close(); err != nil {
+				log.Printf("server: close http server: %v", err)
+			}
 		}
 
 		s.wg.Wait()
@@ -265,7 +273,15 @@ func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 执行错误: %v", err)}, nil
 	}
 
-	data := chunksToRows(chunks)
+	// 从查询计划的 Schema 中提取列名，用于 JSON 响应的 key
+	var colNames []string
+	if schema := optimized.Schema(); len(schema) > 0 {
+		colNames = make([]string, len(schema))
+		for i, col := range schema {
+			colNames[i] = col.Name
+		}
+	}
+	data := chunksToRows(chunks, colNames)
 	totalRows := countRows(chunks)
 
 	s.metrics.QueriesTotal.WithLabelValues("success").Inc()

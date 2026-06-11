@@ -3,6 +3,7 @@ package storage
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,38 +46,30 @@ func NewBlockCache(capacity int64) *BlockCache {
 
 // get 从缓存中获取指定列的已解码数据。
 // 返回 (decodedColumn, true) 表示命中，(decodedColumn{}, false) 表示未命中。
-// 使用 RLock 快速路径检查存在性，仅在命中时升级为写锁以更新 LRU 顺序。
+// 使用 RLock 读取缓存数据，减少读路径锁竞争；hits/misses 使用原子操作避免竞态。
 func (c *BlockCache) get(key CacheKey) (decodedColumn, bool) {
 	if c == nil || c.capacity <= 0 {
 		return decodedColumn{}, false
 	}
 
-	// 快速路径：读锁检查是否存在
+	// 快速路径：读锁查找（允许并发读）
 	c.mu.RLock()
-	_, ok := c.items[key]
-	c.mu.RUnlock()
-
-	if !ok {
+	if elem, ok := c.items[key]; ok {
+		data := elem.Value.(*cacheEntry).data
+		c.mu.RUnlock()
+		atomic.AddInt64(&c.hits, 1)
+		// 慢路径：短暂写锁更新 LRU 顺序
 		c.mu.Lock()
-		c.misses++
+		// 双检：在 RUnlock 和 Lock 之间可能被淘汰
+		if elem, ok = c.items[key]; ok {
+			c.order.MoveToFront(elem)
+		}
 		c.mu.Unlock()
-		return decodedColumn{}, false
+		return data, true
 	}
-
-	// 命中：写锁更新 LRU 顺序和计数
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	elem, ok := c.items[key]
-	if !ok {
-		// 双检：在 RLock 和 Lock 之间可能被淘汰
-		c.misses++
-		return decodedColumn{}, false
-	}
-
-	c.order.MoveToFront(elem)
-	c.hits++
-	return elem.Value.(*cacheEntry).data, true
+	c.mu.RUnlock()
+	atomic.AddInt64(&c.misses, 1)
+	return decodedColumn{}, false
 }
 
 // put 将已解码的列数据放入缓存。
@@ -198,26 +191,33 @@ type CacheStats struct {
 }
 
 // Stats 返回当前缓存的统计信息。
+// hits/misses 通过原子操作读取，无需持锁，避免与读路径的 RLock 竞争。
 func (c *BlockCache) Stats() CacheStats {
 	if c == nil {
 		return CacheStats{}
 	}
 
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	hits := atomic.LoadInt64(&c.hits)
+	misses := atomic.LoadInt64(&c.misses)
 
-	total := c.hits + c.misses
+	c.mu.RLock()
+	used := c.used
+	capacity := c.capacity
+	entries := len(c.items)
+	c.mu.RUnlock()
+
+	total := hits + misses
 	var hitRate float64
 	if total > 0 {
-		hitRate = float64(c.hits) / float64(total)
+		hitRate = float64(hits) / float64(total)
 	}
 
 	return CacheStats{
-		Hits:     c.hits,
-		Misses:   c.misses,
-		Size:     c.used,
-		Capacity: c.capacity,
-		Entries:  len(c.items),
+		Hits:     hits,
+		Misses:   misses,
+		Size:     used,
+		Capacity: capacity,
+		Entries:  entries,
 		HitRate:  hitRate,
 	}
 }
@@ -289,24 +289,25 @@ func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
 		return nil, false
 	}
 
+	// 快速路径：读锁查找
 	c.mu.RLock()
-	if elem, ok := c.items[segmentID]; ok {
-		stats := elem.Value.(*indexCacheEntry).stats
+	elem, ok := c.items[segmentID]
+	if !ok {
 		c.mu.RUnlock()
-
-		// LRU 移动需要写锁，单独获取
-		c.mu.Lock()
-		// 重新检查，因为期间可能被淘汰
-		if elem, ok := c.items[segmentID]; ok {
-			c.order.MoveToFront(elem)
-		}
-		c.mu.Unlock()
-
-		return stats, true
+		return nil, false
 	}
+	stats := elem.Value.(*indexCacheEntry).stats
 	c.mu.RUnlock()
 
-	return nil, false
+	// 慢路径：短暂写锁更新 LRU 顺序
+	c.mu.Lock()
+	// 双检：在 RUnlock 和 Lock 之间可能被淘汰
+	if elem, ok = c.items[segmentID]; ok {
+		c.order.MoveToFront(elem)
+	}
+	c.mu.Unlock()
+
+	return stats, true
 }
 
 // PutColumnStats 将 Segment 的列统计信息放入缓存。
