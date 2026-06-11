@@ -283,6 +283,7 @@ func NewIndexCache(capacity int) *IndexCache {
 }
 
 // GetColumnStats 从缓存中获取指定 Segment 的列统计信息。
+// 使用 RLock 快速路径检查存在性，仅在命中时升级为写锁以更新 LRU 顺序。
 func (c *IndexCache) GetColumnStats(segmentID uint64) ([]ColumnStat, bool) {
 	if c == nil || c.capacity <= 0 {
 		return nil, false
