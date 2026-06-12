@@ -32,12 +32,12 @@ func TestMaybeRotateSyncTempError(t *testing.T) {
 	if err := os.MkdirAll(tmpPath, 0755); err != nil {
 		t.Fatalf("创建目录失败: %v", err)
 	}
-	defer os.RemoveAll(tmpPath)
+	defer func() { _ = os.RemoveAll(tmpPath) }()
 
 	err = w.maybeRotate()
 	if err == nil {
 		t.Error("期望 maybeRotate 返回错误，但返回 nil")
-		w.file.Close()
+		_ = w.file.Close()
 		return
 	}
 
@@ -82,7 +82,7 @@ func TestMaybeRotateCloseOldErrorV2(t *testing.T) {
 	}
 
 	// 清理 .tmp 文件（如果存在）
-	os.Remove(walPath + ".tmp")
+	_ = os.Remove(walPath + ".tmp")
 }
 
 // TestMaybeRotateRenameOldErrorV2 测试重命名旧文件失败时的错误路径（第 245-249 行）。
@@ -113,14 +113,14 @@ func TestMaybeRotateRenameOldErrorV2(t *testing.T) {
 	if err := os.WriteFile(dummyFile, []byte("x"), 0644); err != nil {
 		t.Fatalf("创建 dummy 文件失败: %v", err)
 	}
-	defer os.RemoveAll(prevPath)
+	defer func() { _ = os.RemoveAll(prevPath) }()
 
 	// maybeRotate 应该返回 "wal rotate rename" 错误
 	err = w.maybeRotate()
 	if err == nil {
 		t.Error("期望 maybeRotate 返回错误，但返回 nil")
 		if w.file != nil {
-			w.file.Close()
+			_ = w.file.Close()
 		}
 		return
 	}
@@ -133,11 +133,11 @@ func TestMaybeRotateRenameOldErrorV2(t *testing.T) {
 	if w.file == nil {
 		t.Error("recoverOpen 后 w.file 不应为 nil")
 	} else {
-		w.file.Close()
+		_ = w.file.Close()
 	}
 
 	// 清理
-	os.Remove(walPath + ".tmp")
+	_ = os.Remove(walPath + ".tmp")
 }
 
 // TestMaybeRotateRenameTempErrorV2 测试重命名临时文件失败时的错误路径（第 252-263 行）。
@@ -161,13 +161,13 @@ func TestMaybeRotateRenameTempErrorV2(t *testing.T) {
 	}
 
 	// 删除源文件使 Rename(walPath, .prev) 失败
-	os.Remove(walPath)
+	_ = os.Remove(walPath)
 
 	err = w.maybeRotate()
 	if err == nil {
 		t.Error("期望 maybeRotate 返回错误，但返回 nil")
 		if w.file != nil {
-			w.file.Close()
+			_ = w.file.Close()
 		}
 		return
 	}
@@ -177,7 +177,7 @@ func TestMaybeRotateRenameTempErrorV2(t *testing.T) {
 	}
 
 	// 清理
-	os.Remove(walPath + ".tmp")
+	_ = os.Remove(walPath + ".tmp")
 }
 
 // TestRecoverOpenV2 测试 recoverOpen 函数能正确恢复文件句柄。
@@ -191,7 +191,7 @@ func TestRecoverOpenV2(t *testing.T) {
 	}
 
 	// 关闭文件使 w.file 无效
-	w.file.Close()
+	_ = w.file.Close()
 
 	// recoverOpen 应该能重新打开文件
 	w.recoverOpen()
@@ -204,7 +204,7 @@ func TestRecoverOpenV2(t *testing.T) {
 		t.Fatalf("恢复后写入失败: %v", err)
 	}
 
-	w.file.Close()
+	_ = w.file.Close()
 }
 
 // TestRecoverOpenNewFile 测试 recoverOpen 在文件不存在时创建新文件。
@@ -222,5 +222,5 @@ func TestRecoverOpenNewFile(t *testing.T) {
 	if w.file == nil {
 		t.Fatal("recoverOpen 后 w.file 不应为 nil（O_CREATE 应创建文件）")
 	}
-	w.file.Close()
+	_ = w.file.Close()
 }

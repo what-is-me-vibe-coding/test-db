@@ -17,7 +17,7 @@ func TestReadMultiLineSQL_SingleLineWithSemicolon(t *testing.T) {
 	scanner.Scan() // 读取第一行
 	result := c.readMultiLineSQL(scanner, &out, scanner.Text())
 
-	expected := "SELECT * FROM users"
+	expected := testSQL
 	if result != expected {
 		t.Errorf("结果 = %q, 期望 %q", result, expected)
 	}
@@ -49,7 +49,7 @@ func TestReadMultiLineSQL_NoSemicolon(t *testing.T) {
 	scanner.Scan() // 读取第一行 "SELECT * FROM users"（无分号）
 	result := c.readMultiLineSQL(scanner, &out, scanner.Text())
 
-	expected := "SELECT * FROM users"
+	expected := testSQL
 	if result != expected {
 		t.Errorf("结果 = %q, 期望 %q", result, expected)
 	}
@@ -86,7 +86,7 @@ func TestReadMultiLineSQL_MultiLineWithContinuationPrompt(t *testing.T) {
 		t.Errorf("期望输出包含续行提示符 '...>'，实际: %q", out.String())
 	}
 
-	expected := "SELECT * FROM users"
+	expected := testSQL
 	if result != expected {
 		t.Errorf("结果 = %q, 期望 %q", result, expected)
 	}
@@ -102,7 +102,7 @@ func TestReadMultiLineSQL_WhitespaceHandling(t *testing.T) {
 	scanner.Scan()
 	result := c.readMultiLineSQL(scanner, &out, scanner.Text())
 
-	expected := "SELECT * FROM users"
+	expected := testSQL
 	if result != expected {
 		t.Errorf("结果 = %q, 期望 %q", result, expected)
 	}

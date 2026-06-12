@@ -23,11 +23,11 @@ func TestOpenWALTruncateErrorReadOnly(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		if err := w.AppendWrite([]byte("test-data")); err != nil {
-			w.file.Close()
+			_ = w.file.Close()
 			t.Fatalf("AppendWrite 失败: %v", err)
 		}
 	}
-	w.file.Close()
+	_ = w.file.Close()
 
 	// 在 Linux 上，对只读文件使用 O_RDWR 打开会直接失败
 	// 所以我们需要另一种方式来触发 Truncate 错误
@@ -44,7 +44,7 @@ func TestOpenWALTruncateErrorReadOnly(t *testing.T) {
 	if len(records) != 3 {
 		t.Errorf("期望 3 条记录，实际: %d", len(records))
 	}
-	w2.file.Close()
+	_ = w2.file.Close()
 
 	t.Log("Truncate 错误路径在 Linux 上难以直接触发，代码审查确认路径正确")
 }
@@ -64,11 +64,11 @@ func TestOpenWALSeekErrorNote(t *testing.T) {
 	}
 	for i := 0; i < 3; i++ {
 		if err := w.AppendWrite([]byte("test-data")); err != nil {
-			w.file.Close()
+			_ = w.file.Close()
 			t.Fatalf("AppendWrite 失败: %v", err)
 		}
 	}
-	w.file.Close()
+	_ = w.file.Close()
 
 	// OpenWAL 在正常情况下应该成功
 	w2, records, err := OpenWAL(walPath)
@@ -78,7 +78,7 @@ func TestOpenWALSeekErrorNote(t *testing.T) {
 	if len(records) != 3 {
 		t.Errorf("期望 3 条记录，实际: %d", len(records))
 	}
-	w2.file.Close()
+	_ = w2.file.Close()
 }
 
 // TestOpenWALPartialRecordRecovery 测试打开包含部分写入记录的 WAL 文件。
@@ -93,13 +93,13 @@ func TestOpenWALPartialRecordRecovery(t *testing.T) {
 
 	// 写入有效记录
 	if err := w.AppendWrite([]byte("valid-data")); err != nil {
-		w.file.Close()
+		_ = w.file.Close()
 		t.Fatalf("AppendWrite 失败: %v", err)
 	}
 
 	// 直接写入部分数据（模拟崩溃时的部分写入）
-	w.file.Write([]byte{0x05, 0x00, 0x00, 0x00}) // 只有 header，没有 body
-	w.file.Close()
+	_, _ = w.file.Write([]byte{0x05, 0x00, 0x00, 0x00}) // 只有 header，没有 body
+	_ = w.file.Close()
 
 	// OpenWAL 应该能恢复，只回放有效记录
 	w2, records, err := OpenWAL(walPath)
@@ -109,7 +109,7 @@ func TestOpenWALPartialRecordRecovery(t *testing.T) {
 	if len(records) != 1 {
 		t.Errorf("期望 1 条有效记录，实际: %d", len(records))
 	}
-	w2.file.Close()
+	_ = w2.file.Close()
 }
 
 // TestOpenWALNotExistV2 测试打开不存在的 WAL 文件。
