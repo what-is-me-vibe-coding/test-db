@@ -124,37 +124,24 @@ func TestMaybeRotate_SyncTempFailureViaReadOnlyDir(t *testing.T) {
 // （wal.go 第 252-263 行）
 // ---------------------------------------------------------------------------
 
-// TestMaybeRotate_RenameTempFailureRecovery 测试第二次 Rename 失败后的恢复逻辑。
-// 在第一次 Rename 成功后（w.path -> .prev），在 w.path 创建非空目录，
-// 使 os.Rename(w.path+".tmp", w.path) 失败，触发恢复路径：
-// 1. 关闭 newF（可能失败）
-// 2. 将 .prev 重命名回 w.path（可能失败）
-// 3. 调用 recoverOpen()
-//
-// 此测试使用同步方式而非 goroutine 竞争，更可靠地触发目标路径。
-func TestMaybeRotate_RenameTempFailureRecovery(t *testing.T) {
-	if runtime.GOOS == skipWindows {
-		t.Skip("Windows 上重命名行为不同")
-	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.wal")
-
+// setupRenameRecoveryWAL 创建 WAL 并写入数据，设置触发轮转的小 maxSize。
+func setupRenameRecoveryWAL(t *testing.T, path string) *WAL {
+	t.Helper()
 	w, err := CreateWAL(path)
 	if err != nil {
 		t.Fatalf("CreateWAL 失败: %v", err)
 	}
-
-	// 写入数据使 offset > 0
 	if err := w.AppendWrite([]byte("data")); err != nil {
 		t.Fatalf("AppendWrite 失败: %v", err)
 	}
-
-	// 设置很小的 maxSize
 	w.maxSize = 1
+	return w
+}
 
-	// 手动执行 maybeRotate 的前置步骤，以便在正确时机插入阻塞目录
-	// 1. 先关闭旧文件
+// prepareRenameRecoveryState 手动执行 maybeRotate 的前置步骤：
+// 关闭旧文件、重命名为 .prev、创建临时文件、在 w.path 创建阻塞目录。
+func prepareRenameRecoveryState(t *testing.T, w *WAL, path string) (*os.File, func()) {
+	t.Helper()
 	w.mu.Lock()
 	old := w.file
 	if err := old.Close(); err != nil {
@@ -162,21 +149,18 @@ func TestMaybeRotate_RenameTempFailureRecovery(t *testing.T) {
 		t.Fatalf("关闭旧文件失败: %v", err)
 	}
 
-	// 2. 将 w.path 重命名为 .prev
 	rotatedPath := path + ".prev"
 	if err := os.Rename(path, rotatedPath); err != nil {
 		w.mu.Unlock()
 		t.Fatalf("重命名旧文件失败: %v", err)
 	}
 
-	// 3. 创建临时文件
 	newF, err := os.Create(path + ".tmp")
 	if err != nil {
 		w.mu.Unlock()
 		t.Fatalf("创建临时文件失败: %v", err)
 	}
 
-	// 4. 在 w.path 创建非空目录，使 Rename(.tmp, w.path) 失败
 	if err := os.Mkdir(path, 0755); err != nil {
 		w.mu.Unlock()
 		t.Fatalf("创建阻塞目录失败: %v", err)
@@ -189,7 +173,32 @@ func TestMaybeRotate_RenameTempFailureRecovery(t *testing.T) {
 	}
 	_ = blockerF.Close()
 
-	// 5. 尝试将 .tmp 重命名为 w.path - 应该失败
+	cleanup := func() {
+		_ = os.Remove(blockerPath)
+		_ = os.Remove(path)
+	}
+	return newF, cleanup
+}
+
+// TestMaybeRotate_RenameTempFailureRecovery 测试第二次 Rename 失败后的恢复逻辑。
+// 在第一次 Rename 成功后（w.path -> .prev），在 w.path 创建非空目录，
+// 使 os.Rename(w.path+".tmp", w.path) 失败，触发恢复路径：
+// 1. 关闭 newF（可能失败）
+// 2. 将 .prev 重命名回 w.path（可能失败）
+// 3. 调用 recoverOpen()
+func TestMaybeRotate_RenameTempFailureRecovery(t *testing.T) {
+	if runtime.GOOS == skipWindows {
+		t.Skip("Windows 上重命名行为不同")
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.wal")
+	w := setupRenameRecoveryWAL(t, path)
+
+	newF, cleanup := prepareRenameRecoveryState(t, w, path)
+	defer cleanup()
+
+	// 尝试将 .tmp 重命名为 w.path - 应该失败
 	_ = os.Rename(path+".tmp", newF.Name())
 
 	// 关闭 newF
@@ -198,10 +207,8 @@ func TestMaybeRotate_RenameTempFailureRecovery(t *testing.T) {
 	}
 
 	// 尝试恢复：将 .prev 重命名回 w.path
-	// 先删除阻塞目录
-	_ = os.Remove(blockerPath)
-	_ = os.Remove(path)
-
+	rotatedPath := path + ".prev"
+	cleanup()
 	if renameErr := os.Rename(rotatedPath, path); renameErr != nil {
 		t.Logf("恢复重命名失败: %v", renameErr)
 	}
