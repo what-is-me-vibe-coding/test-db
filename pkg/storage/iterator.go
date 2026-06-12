@@ -94,6 +94,7 @@ func newSegmentIterator(seg *Segment, colMeta []ColumnMeta, start, end string, b
 // On decode failure, decodedCols is set to an empty (non-nil) slice and err is recorded.
 // 优先从 BlockCache 获取已解码的列数据，未命中时解码并写入缓存。
 // decodeSegmentColumn 从 Segment 中解码单列数据，优先从 BlockCache 获取。
+// 使用共享的 prepareEncodedColumn 和 decodeColumnFromEncoded 减少重复代码。
 func (it *segmentIterator) decodeSegmentColumn(i int, decodedCols []decodedColumn) (bool, int) {
 	cacheKey := CacheKey{SegmentID: it.seg.ID, ColumnIdx: uint32(i)}
 	if dc, ok := it.blockCache.get(cacheKey); ok {
@@ -101,37 +102,12 @@ func (it *segmentIterator) decodeSegmentColumn(i int, decodedCols []decodedColum
 		return true, 1
 	}
 
-	src := &it.seg.Columns[i]
-	enc := &EncodedColumn{
-		Encoding: src.Encoding,
-		Type:     src.Type,
-		RowCount: src.RowCount,
-	}
-	if len(src.Data) > 0 {
-		enc.Data = make([]byte, len(src.Data))
-		copy(enc.Data, src.Data)
-	}
-	if len(src.Offsets) > 0 {
-		enc.Offsets = src.Offsets
-	}
-	if len(src.Dict) > 0 {
-		enc.Dict = src.Dict
-	}
-	if len(src.Nulls) > 0 {
-		enc.Nulls = src.Nulls
-	}
-	if err := DecompressColumn(enc); err != nil {
-		it.err = fmt.Errorf("segment: decompress column %d: %w", i, err)
-		it.decodedCols = make([]decodedColumn, 0)
-		return false, 0
-	}
-	decoded, nulls, err := DecodeColumn(enc)
+	dc, err := decodeColumnFromEncoded(&it.seg.Columns[i], i)
 	if err != nil {
-		it.err = fmt.Errorf("segment: decode column %d: %w", i, err)
+		it.err = fmt.Errorf("segment: %w", err)
 		it.decodedCols = make([]decodedColumn, 0)
 		return false, 0
 	}
-	dc := decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
 	decodedCols[i] = dc
 	it.blockCache.put(cacheKey, dc)
 	return true, 0

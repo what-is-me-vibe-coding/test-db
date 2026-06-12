@@ -82,8 +82,13 @@ func toTimestampValue(raw any) (common.Value, error) {
 
 // chunksToRows 将 Chunk 切片转换为可 JSON 序列化的行数据。
 // colNames 为每列的名称，按列索引顺序排列。若 colNames 为空则回退到 col_N 格式。
+// 预分配 result 切片容量，避免追加时的反复扩容。
 func chunksToRows(chunks []*storage.Chunk, colNames []string) []map[string]any {
-	var result []map[string]any
+	totalRows := countRows(chunks)
+	if totalRows == 0 {
+		return nil
+	}
+	result := make([]map[string]any, 0, totalRows)
 	for _, chunk := range chunks {
 		if chunk == nil {
 			continue

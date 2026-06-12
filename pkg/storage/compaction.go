@@ -232,32 +232,14 @@ func (c *Compactor) readSegmentRows(seg *Segment, _ []ColumnMeta) ([]memRow, err
 	return rows, nil
 }
 
-// decodeSegmentColumn copies and decodes a single segment column for compaction.
-// Only Data is deep-copied because DecompressColumn replaces enc.Data in place;
-// Offsets, Dict, and Nulls are read-only during decompress/decode and can be shared.
+// decodeSegmentColumn 解码单个 Segment 列用于 Compaction。
+// 使用共享的 decodeColumnFromEncoded 函数，避免重复的列解码逻辑。
 func decodeSegmentColumn(src *EncodedColumn, colIdx int) (decodedColumn, error) {
-	enc := &EncodedColumn{
-		Encoding: src.Encoding,
-		Type:     src.Type,
-		RowCount: src.RowCount,
-	}
-	// Data 必须深拷贝：DecompressColumn 会替换 enc.Data
-	if len(src.Data) > 0 {
-		enc.Data = make([]byte, len(src.Data))
-		copy(enc.Data, src.Data)
-	}
-	// Offsets、Dict、Nulls 在解压和解码过程中只读，无需深拷贝
-	enc.Offsets = src.Offsets
-	enc.Dict = src.Dict
-	enc.Nulls = src.Nulls
-	if err := DecompressColumn(enc); err != nil {
-		return decodedColumn{}, fmt.Errorf("compactor: decompress column %d: %w", colIdx, err)
-	}
-	data, nulls, err := DecodeColumn(enc)
+	dc, err := decodeColumnFromEncoded(src, colIdx)
 	if err != nil {
-		return decodedColumn{}, fmt.Errorf("compactor: decode column %d: %w", colIdx, err)
+		return decodedColumn{}, fmt.Errorf("compactor: %w", err)
 	}
-	return decodedColumn{data: data, nulls: nulls, typ: enc.Type, encTyp: src.Encoding}, nil
+	return dc, nil
 }
 
 func (c *Compactor) buildSegment(rows []memRow, cols []ColumnMeta) (*Segment, error) {
