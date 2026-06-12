@@ -325,8 +325,8 @@ func TestV14ParserCreateTableColumnTypes(t *testing.T) {
 		{v14TypeBigint, "CREATE TABLE t (id BIGINT PRIMARY KEY)", v14ColID, common.TypeInt64},
 		{"INT", "CREATE TABLE t (id INT PRIMARY KEY)", v14ColID, common.TypeInt64},
 		{v14TypeDouble, "CREATE TABLE t (id INT, val DOUBLE)", "val", common.TypeFloat64},
-		{v14TypeText, "CREATE TABLE t (id INT, name TEXT)", "name", common.TypeString},
-		{"VARCHAR", "CREATE TABLE t (id INT, name VARCHAR(100))", "name", common.TypeString},
+		{v14TypeText, "CREATE TABLE t (id INT, name TEXT)", benchColName, common.TypeString},
+		{"VARCHAR", "CREATE TABLE t (id INT, name VARCHAR(100))", benchColName, common.TypeString},
 		{"BOOLEAN", "CREATE TABLE t (id INT, active BOOLEAN)", "active", common.TypeBool},
 		{"TINYINT", "CREATE TABLE t (id INT, flag TINYINT)", "flag", common.TypeBool},
 	}

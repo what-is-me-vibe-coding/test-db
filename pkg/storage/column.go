@@ -94,13 +94,8 @@ func (cv *ColumnVector) grow() {
 		cv.times = newTimes
 	}
 	cv.capacity = newCap
-	newNulls := common.NewBitmap(newCap)
-	for i := uint32(0); i < cv.len; i++ {
-		if cv.nulls.Get(i) {
-			newNulls.Set(i)
-		}
-	}
-	cv.nulls = newNulls
+	// 使用 Grow 扩展位图，比 NewBitmap + 逐位复制快约 64 倍
+	cv.nulls.Grow(newCap)
 }
 
 // ensureCapacity 确保容量至少为 required 行。
@@ -277,12 +272,8 @@ func (cv *ColumnVector) Slice(startRow, endRow uint32) (*ColumnVector, error) {
 		copy(result.bools, cv.bools[startWord:endWord])
 	}
 
-	// 拷贝 null bitmap
-	for i := uint32(0); i < rowCount; i++ {
-		if cv.nulls.Get(startRow + i) {
-			result.nulls.Set(i)
-		}
-	}
+	// 拷贝 null bitmap：使用 CopyFrom 批量拷贝，比逐位 Get/Set 快约 64 倍
+	result.nulls.CopyFrom(cv.nulls, startRow, rowCount)
 
 	return result, nil
 }

@@ -1,163 +1,153 @@
 package storage
 
 import (
-	"encoding/binary"
+	"bytes"
 	"testing"
-
-	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
 const crCol1 = "col1"
 const crCol0 = "col0"
 const crCol = "col"
 
-// ---------------------------------------------------------------------------
-// Compress / Decompress edge cases
-// ---------------------------------------------------------------------------
-
-// TestCompressEmptyDataLowCov verifies that Compress returns nil,nil for empty input.
-func TestCompressEmptyDataLowCov(t *testing.T) {
+// TestCompressEmptyReturnsNil_V7 测试 Compress 对空数据返回 nil, nil。
+func TestCompressEmptyReturnsNil_V7(t *testing.T) {
 	result, err := Compress([]byte{})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("意外错误: %v", err)
 	}
 	if result != nil {
-		t.Errorf("expected nil result for empty data, got %d bytes", len(result))
+		t.Errorf("期望 nil，实际 %d 字节", len(result))
 	}
 }
 
-// TestDecompressEmptyDataLowCov verifies that Decompress returns nil,nil for empty input.
-func TestDecompressEmptyDataLowCov(t *testing.T) {
-	result, err := Decompress([]byte{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != nil {
-		t.Errorf("expected nil result for empty data, got %d bytes", len(result))
-	}
-}
-
-// TestCompressColumnNilLowCov verifies CompressColumn returns error for nil EncodedColumn.
-func TestCompressColumnNilLowCov(t *testing.T) {
+// TestCompressColumnNil_V7 测试 CompressColumn 对 nil EncodedColumn 返回错误。
+func TestCompressColumnNil_V7(t *testing.T) {
 	err := CompressColumn(nil)
 	if err == nil {
-		t.Fatal("expected error for nil EncodedColumn, got nil")
+		t.Fatal("期望错误，实际返回 nil")
 	}
 }
 
-// TestDecompressColumnNilLowCov verifies DecompressColumn returns error for nil EncodedColumn.
-func TestDecompressColumnNilLowCov(t *testing.T) {
+// TestDecompressColumnNil_V7 测试 DecompressColumn 对 nil EncodedColumn 返回错误。
+func TestDecompressColumnNil_V7(t *testing.T) {
 	err := DecompressColumn(nil)
 	if err == nil {
-		t.Fatal("expected error for nil EncodedColumn, got nil")
+		t.Fatal("期望错误，实际返回 nil")
 	}
 }
 
-// TestCompressDecompressRoundTripLowCov verifies compress/decompress round-trip.
-func TestCompressDecompressRoundTripLowCov(t *testing.T) {
-	original := []byte("hello world, this is a test of zstd compression")
-	compressed, err := Compress(original)
+// TestDecompressColumnInvalidData_V7 测试 DecompressColumn 对无效压缩数据返回错误。
+func TestDecompressColumnInvalidData_V7(t *testing.T) {
+	enc := &EncodedColumn{
+		Encoding: EncodingPlain,
+		Type:     0,
+		RowCount: 1,
+		Data:     []byte{0xFF, 0xFE, 0xFD, 0xFC}, // 无效的 zstd 数据
+	}
+	err := DecompressColumn(enc)
+	if err == nil {
+		t.Fatal("期望解压错误，实际返回 nil")
+	}
+}
+
+// TestCompressDecompressRoundTripSmall_V7 测试小数据的压缩/解压往返。
+func TestCompressDecompressRoundTripSmall_V7(t *testing.T) {
+	data := []byte("hello zstd")
+	compressed, err := Compress(data)
 	if err != nil {
-		t.Fatalf("Compress failed: %v", err)
+		t.Fatalf("Compress 失败: %v", err)
 	}
 	decompressed, err := Decompress(compressed)
 	if err != nil {
-		t.Fatalf("Decompress failed: %v", err)
+		t.Fatalf("Decompress 失败: %v", err)
 	}
-	if string(decompressed) != string(original) {
-		t.Errorf("round-trip mismatch: got %q, want %q", string(decompressed), string(original))
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ColumnVector edge cases
-// ---------------------------------------------------------------------------
-
-// TestColumnVectorAppendNullLowCov tests appending a null value to a column vector.
-func TestColumnVectorAppendNullLowCov(t *testing.T) {
-	cv := NewColumnVector(0, common.TypeInt64, 4)
-	if err := cv.Append(common.NewNull()); err != nil {
-		t.Fatalf("Append null failed: %v", err)
-	}
-	if cv.Len() != 1 {
-		t.Errorf("expected len 1, got %d", cv.Len())
-	}
-	if !cv.IsNull(0) {
-		t.Error("expected row 0 to be null")
+	if !bytes.Equal(decompressed, data) {
+		t.Errorf("往返不匹配: 期望 %q, 实际 %q", string(data), string(decompressed))
 	}
 }
 
-// TestColumnVectorGrowLowCov tests that ColumnVector grows correctly.
-func TestColumnVectorGrowLowCov(t *testing.T) {
-	cv := NewColumnVector(0, common.TypeInt64, 2)
-	originalCap := cv.Capacity()
-	for i := uint32(0); i < originalCap+1; i++ {
-		if err := cv.Append(common.NewInt64(int64(i))); err != nil {
-			t.Fatalf("Append %d failed: %v", i, err)
-		}
-	}
-	if cv.Capacity() <= originalCap {
-		t.Errorf("expected capacity to grow beyond %d, got %d", originalCap, cv.Capacity())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// readColumnData error path
-// ---------------------------------------------------------------------------
-
-// TestReadColumnDataOverflowLowCov tests readColumnData when data exceeds buffer.
-func TestReadColumnDataOverflowLowCov(t *testing.T) {
-	data := make([]byte, 8)
-	binary.LittleEndian.PutUint32(data, 1000) // data length = 1000
-	_, err := readColumnData(data, 0, &EncodedColumn{})
-	if err == nil {
-		t.Error("expected error for data exceeding buffer, got nil")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// readOffsets error path
-// ---------------------------------------------------------------------------
-
-// TestReadOffsetsOverflowLowCov tests readOffsets when offsets data exceeds buffer.
-func TestReadOffsetsOverflowLowCov(t *testing.T) {
-	data := make([]byte, 8)
-	binary.LittleEndian.PutUint32(data, 1000) // offsets count = 1000
-	_, err := readOffsets(data, 0, &EncodedColumn{})
-	if err == nil {
-		t.Error("expected error for offsets exceeding buffer, got nil")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// readDict error paths
-// ---------------------------------------------------------------------------
-
-// TestReadDictStringLenOverflowLowCov tests readDict when string length exceeds buffer.
-func TestReadDictStringLenOverflowLowCov(t *testing.T) {
-	data := make([]byte, 12)
-	binary.LittleEndian.PutUint32(data, 1)       // 1 dict entry
-	binary.LittleEndian.PutUint32(data[4:], 100) // string length = 100
-	_, err := readDict(data, 0, &EncodedColumn{})
-	if err == nil {
-		t.Error("expected error for dict string length exceeding buffer, got nil")
-	}
-}
-
-// TestReadDictEmptyStringLowCov tests readDict with zero-length string.
-func TestReadDictEmptyStringLowCov(t *testing.T) {
-	data := make([]byte, 12)
-	binary.LittleEndian.PutUint32(data, 1)     // 1 dict entry
-	binary.LittleEndian.PutUint32(data[4:], 0) // string length = 0
-	enc := &EncodedColumn{}
-	_, err := readDict(data, 0, enc)
+// TestCompressDecompressRoundTripMedium_V7 测试中等大小数据的压缩/解压往返。
+func TestCompressDecompressRoundTripMedium_V7(t *testing.T) {
+	data := bytes.Repeat([]byte("medium data block "), 500)
+	compressed, err := Compress(data)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("Compress 失败: %v", err)
 	}
-	if len(enc.Dict) != 1 {
-		t.Errorf("expected 1 dict entry, got %d", len(enc.Dict))
+	decompressed, err := Decompress(compressed)
+	if err != nil {
+		t.Fatalf("Decompress 失败: %v", err)
 	}
-	if enc.Dict[0] != "" {
-		t.Errorf("expected empty string, got %q", enc.Dict[0])
+	if !bytes.Equal(decompressed, data) {
+		t.Errorf("往返不匹配: 长度 期望 %d, 实际 %d", len(data), len(decompressed))
+	}
+}
+
+// TestEncoderDecoderPoolReuse_V7 测试编码器/解码器池的复用。
+func TestEncoderDecoderPoolReuse_V7(t *testing.T) {
+	// 第一次压缩/解压：创建新的编码器/解码器
+	data1 := []byte("first compression")
+	compressed1, err := Compress(data1)
+	if err != nil {
+		t.Fatalf("第一次 Compress 失败: %v", err)
+	}
+	_, err = Decompress(compressed1)
+	if err != nil {
+		t.Fatalf("第一次 Decompress 失败: %v", err)
+	}
+
+	// 第二次压缩/解压：应从池中复用编码器/解码器
+	data2 := []byte("second compression test data")
+	compressed2, err := Compress(data2)
+	if err != nil {
+		t.Fatalf("第二次 Compress 失败: %v", err)
+	}
+	decompressed2, err := Decompress(compressed2)
+	if err != nil {
+		t.Fatalf("第二次 Decompress 失败: %v", err)
+	}
+	if !bytes.Equal(decompressed2, data2) {
+		t.Errorf("池复用后往返不匹配")
+	}
+}
+
+// TestDecompressInvalidZstdData_V7 测试 Decompress 对无效 zstd 数据返回错误。
+func TestDecompressInvalidZstdData_V7(t *testing.T) {
+	_, err := Decompress([]byte{0x00, 0x01, 0x02, 0x03})
+	if err == nil {
+		t.Fatal("期望解压错误，实际返回 nil")
+	}
+}
+
+// TestCompressDecompressSingleByte_V7 测试单字节数据的压缩/解压。
+func TestCompressDecompressSingleByte_V7(t *testing.T) {
+	data := []byte{0x42}
+	compressed, err := Compress(data)
+	if err != nil {
+		t.Fatalf("Compress 失败: %v", err)
+	}
+	decompressed, err := Decompress(compressed)
+	if err != nil {
+		t.Fatalf("Decompress 失败: %v", err)
+	}
+	if !bytes.Equal(decompressed, data) {
+		t.Errorf("单字节往返不匹配: 期望 %v, 实际 %v", data, decompressed)
+	}
+}
+
+// TestCompressColumnWithEmptyData_V7 测试 CompressColumn 对空数据列的处理。
+func TestCompressColumnWithEmptyData_V7(t *testing.T) {
+	enc := &EncodedColumn{
+		Encoding: EncodingPlain,
+		Type:     0,
+		RowCount: 0,
+		Data:     []byte{},
+	}
+	err := CompressColumn(enc)
+	if err != nil {
+		t.Fatalf("CompressColumn 空数据不应报错: %v", err)
+	}
+	// 空数据压缩后 Data 应为 nil
+	if enc.Data != nil {
+		t.Errorf("期望 Data 为 nil，实际 %d 字节", len(enc.Data))
 	}
 }

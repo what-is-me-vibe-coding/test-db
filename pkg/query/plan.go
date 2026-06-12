@@ -179,6 +179,8 @@ const (
 	aggNameMinUpper   = "MIN"
 	aggNameMaxUpper   = "MAX"
 	aggNameAvgUpper   = "AVG"
+
+	aggNameUnknown = "UNKNOWN"
 )
 
 // AggregateFunc represents an aggregate function type.
@@ -206,7 +208,7 @@ func (f AggregateFunc) String() string {
 	case AggAvg:
 		return aggNameAvgUpper
 	default:
-		return "UNKNOWN"
+		return aggNameUnknown
 	}
 }
 

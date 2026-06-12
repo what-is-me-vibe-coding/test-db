@@ -335,8 +335,8 @@ func TestBinaryOpStringUnknown(t *testing.T) {
 // TestAggregateFuncStringUnknown tests that an unknown AggregateFunc returns "UNKNOWN".
 func TestAggregateFuncStringUnknown(t *testing.T) {
 	f := AggregateFunc(99)
-	if f.String() != "UNKNOWN" {
-		t.Errorf("expected 'UNKNOWN' for unknown AggregateFunc, got %q", f.String())
+	if f.String() != aggNameUnknown {
+		t.Errorf("expected %q for unknown AggregateFunc, got %q", aggNameUnknown, f.String())
 	}
 }
 
