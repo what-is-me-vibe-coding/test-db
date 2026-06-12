@@ -51,10 +51,10 @@ func TestOpenWALTruncateAfterPartialData(t *testing.T) {
 	if len(recs) != 2 {
 		t.Fatalf("expected 2 valid records, got %d", len(recs))
 	}
-	if string(recs[0].Payload) != "valid1" {
+	if string(recs[0].Payload) != testPayloadValid1 {
 		t.Errorf("record 0: expected 'valid1', got %q", string(recs[0].Payload))
 	}
-	if string(recs[1].Payload) != "valid2" {
+	if string(recs[1].Payload) != testPayloadValid2 {
 		t.Errorf("record 1: expected 'valid2', got %q", string(recs[1].Payload))
 	}
 
