@@ -144,6 +144,8 @@ func (sl *skipList) delete(key string) (Row, bool) {
 }
 
 // scanRange 返回 [start, end] 范围内的所有键值对。
+// 使用 findLess 定位起始节点，利用跳表 O(log n) 查找能力，
+// 避免从 head.forward[0] 线性遍历的 O(n) 开销。
 func (sl *skipList) scanRange(start, end string) []struct {
 	Key   string
 	Value Row
@@ -153,9 +155,13 @@ func (sl *skipList) scanRange(start, end string) []struct {
 		Value Row
 	}, 0, 16)
 
-	x := sl.head.forward[0]
-	for x != nil && x.key < start {
+	// 使用 findLess 在 O(log n) 内定位 >= start 的第一个节点
+	x := sl.findLess(start, nil)
+	if x.forward[0] != nil && x.forward[0].key >= start {
 		x = x.forward[0]
+	} else {
+		// x.forward[0] 为 nil 或 key < start，无满足条件的节点
+		return result
 	}
 
 	for x != nil && x.key <= end {

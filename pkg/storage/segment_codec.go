@@ -18,6 +18,38 @@ type decodedColumn struct {
 	encTyp EncodingType
 }
 
+// prepareEncodedColumn 准备 EncodedColumn 的可变副本用于解码。
+// Data 字段深拷贝（DecompressColumn 会原地替换），Offsets/Dict/Nulls 只读可共享。
+func prepareEncodedColumn(src *EncodedColumn) *EncodedColumn {
+	enc := &EncodedColumn{
+		Encoding: src.Encoding,
+		Type:     src.Type,
+		RowCount: src.RowCount,
+	}
+	if len(src.Data) > 0 {
+		enc.Data = make([]byte, len(src.Data))
+		copy(enc.Data, src.Data)
+	}
+	enc.Offsets = src.Offsets
+	enc.Dict = src.Dict
+	enc.Nulls = src.Nulls
+	return enc
+}
+
+// decodeColumnFromEncoded 解压并解码单个 EncodedColumn，返回 decodedColumn。
+// colIdx 仅用于错误信息上下文。
+func decodeColumnFromEncoded(src *EncodedColumn, colIdx int) (decodedColumn, error) {
+	enc := prepareEncodedColumn(src)
+	if err := DecompressColumn(enc); err != nil {
+		return decodedColumn{}, fmt.Errorf("decompress column %d: %w", colIdx, err)
+	}
+	data, nulls, err := DecodeColumn(enc)
+	if err != nil {
+		return decodedColumn{}, fmt.Errorf("decode column %d: %w", colIdx, err)
+	}
+	return decodedColumn{data: data, nulls: nulls, typ: src.Type, encTyp: src.Encoding}, nil
+}
+
 // extractValue 从已解码的列数据中提取指定行的值。
 func extractValue(dc decodedColumn, row uint32) common.Value {
 	if dc.nulls != nil && dc.nulls.Get(row) {
@@ -79,33 +111,11 @@ func extractTimestampValue(data any, row uint32) common.Value {
 func (s *Segment) decodeAllColumns() ([]decodedColumn, error) {
 	columns := make([]decodedColumn, len(s.Columns))
 	for i := range s.Columns {
-		src := &s.Columns[i]
-		enc := &EncodedColumn{
-			Encoding: src.Encoding,
-			Type:     src.Type,
-			RowCount: src.RowCount,
-		}
-		if len(src.Data) > 0 {
-			enc.Data = make([]byte, len(src.Data))
-			copy(enc.Data, src.Data)
-		}
-		if len(src.Offsets) > 0 {
-			enc.Offsets = src.Offsets
-		}
-		if len(src.Dict) > 0 {
-			enc.Dict = src.Dict
-		}
-		if len(src.Nulls) > 0 {
-			enc.Nulls = src.Nulls
-		}
-		if err := DecompressColumn(enc); err != nil {
-			return nil, fmt.Errorf("segment: decompress column %d: %w", i, err)
-		}
-		decoded, nulls, err := DecodeColumn(enc)
+		dc, err := decodeColumnFromEncoded(&s.Columns[i], i)
 		if err != nil {
-			return nil, fmt.Errorf("segment: decode column %d: %w", i, err)
+			return nil, fmt.Errorf("segment: %w", err)
 		}
-		columns[i] = decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
+		columns[i] = dc
 	}
 	return columns, nil
 }
@@ -140,35 +150,12 @@ func (s *Segment) GetColumnValue(colIdx uint32, rowIdx uint32) (common.Value, er
 	ds := &s.colDecodeState[colIdx]
 	ds.mu.Lock()
 	if !ds.decoded {
-		src := &s.Columns[colIdx]
-		enc := &EncodedColumn{
-			Encoding: src.Encoding,
-			Type:     src.Type,
-			RowCount: src.RowCount,
-		}
-		if len(src.Data) > 0 {
-			enc.Data = make([]byte, len(src.Data))
-			copy(enc.Data, src.Data)
-		}
-		if len(src.Offsets) > 0 {
-			enc.Offsets = src.Offsets
-		}
-		if len(src.Dict) > 0 {
-			enc.Dict = src.Dict
-		}
-		if len(src.Nulls) > 0 {
-			enc.Nulls = src.Nulls
-		}
-		if err := DecompressColumn(enc); err != nil {
-			ds.mu.Unlock()
-			return common.NewNull(), fmt.Errorf("segment: decompress column %d: %w", colIdx, err)
-		}
-		decoded, nulls, err := DecodeColumn(enc)
+		dc, err := decodeColumnFromEncoded(&s.Columns[colIdx], int(colIdx))
 		if err != nil {
 			ds.mu.Unlock()
-			return common.NewNull(), fmt.Errorf("segment: decode column %d: %w", colIdx, err)
+			return common.NewNull(), fmt.Errorf("segment: %w", err)
 		}
-		s.colCache[colIdx] = decodedColumn{data: decoded, nulls: nulls, typ: src.Type, encTyp: src.Encoding}
+		s.colCache[colIdx] = dc
 		ds.decoded = true
 	}
 	ds.mu.Unlock()
