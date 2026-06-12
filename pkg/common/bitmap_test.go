@@ -299,3 +299,115 @@ func TestBitmapForEachEmpty(t *testing.T) {
 		t.Errorf("ForEach on empty bitmap should not call fn, got %d calls", count)
 	}
 }
+
+func TestBitmapReset(t *testing.T) {
+	// 创建位图并设置一些位
+	bm := NewBitmap(128)
+	bm.Set(0)
+	bm.Set(63)
+	bm.Set(64)
+	bm.Set(127)
+
+	// 记录 Reset 前的长度
+	oldLen := bm.Len()
+
+	// 调用 Reset
+	bm.Reset()
+
+	// 验证之前设置的位都被清零
+	if bm.Get(0) {
+		t.Error("Get(0) after Reset = true, want false")
+	}
+	if bm.Get(63) {
+		t.Error("Get(63) after Reset = true, want false")
+	}
+	if bm.Get(64) {
+		t.Error("Get(64) after Reset = true, want false")
+	}
+	if bm.Get(127) {
+		t.Error("Get(127) after Reset = true, want false")
+	}
+
+	// 验证 Count() 返回 0
+	if bm.Count() != 0 {
+		t.Errorf("Count() after Reset = %d, want 0", bm.Count())
+	}
+
+	// 验证 IsEmpty() 返回 true
+	if !bm.IsEmpty() {
+		t.Error("IsEmpty() after Reset = false, want true")
+	}
+
+	// 验证 Len() 不变
+	if bm.Len() != oldLen {
+		t.Errorf("Len() after Reset = %d, want %d", bm.Len(), oldLen)
+	}
+
+	// 验证 Reset 后仍可正常使用
+	bm.Set(10)
+	bm.Set(100)
+	if !bm.Get(10) {
+		t.Error("Get(10) after re-Set = false, want true")
+	}
+	if !bm.Get(100) {
+		t.Error("Get(100) after re-Set = false, want true")
+	}
+	if bm.Count() != 2 {
+		t.Errorf("Count() after re-Set = %d, want 2", bm.Count())
+	}
+}
+
+func TestBitmapGrow(t *testing.T) {
+	tests := []struct {
+		name    string
+		initLen uint32
+		setBits []uint32
+		newLen  uint32
+		wantLen uint32
+	}{
+		{
+			name:    "newLen <= 当前 len，无操作",
+			initLen: 100,
+			setBits: []uint32{10, 50},
+			newLen:  50,
+			wantLen: 100, // 长度不变
+		},
+		{
+			name:    "newLen > 当前 len 但 newWords <= len(b.bits)，仅更新长度",
+			initLen: 65, // 2 个 word (0-63, 64)
+			setBits: []uint32{0, 64},
+			newLen:  100, // 仍只需 2 个 word
+			wantLen: 100,
+		},
+		{
+			name:    "newLen 需要更多 word，分配新切片",
+			initLen: 64, // 1 个 word
+			setBits: []uint32{0, 63},
+			newLen:  200, // 需要 4 个 word
+			wantLen: 200,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bm := NewBitmap(tt.initLen)
+			for _, bit := range tt.setBits {
+				bm.Set(bit)
+			}
+
+			bm.Grow(tt.newLen)
+
+			// 验证长度
+			if bm.Len() != tt.wantLen {
+				t.Errorf("Len() after Grow = %d, want %d", bm.Len(), tt.wantLen)
+			}
+
+			// 验证已有位被保留
+			for _, bit := range tt.setBits {
+				if !bm.Get(bit) {
+					t.Errorf("Get(%d) after Grow = false, want true", bit)
+				}
+			}
+		})
+	}
+}

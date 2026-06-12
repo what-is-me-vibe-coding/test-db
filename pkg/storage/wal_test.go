@@ -3,6 +3,7 @@ package storage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -333,5 +334,90 @@ func TestOpenWALWithValidOffsetRecovery(t *testing.T) {
 
 	if len(recs2) != 4 {
 		t.Fatalf("expected 4 records, got %d", len(recs2))
+	}
+}
+
+// TestOpenWALNotExistErrMsg 测试打开不存在的 WAL 文件应返回包含 "wal open" 的错误
+func TestOpenWALNotExistErrMsg(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nonexistent.wal")
+
+	_, _, err := OpenWAL(path)
+	if err == nil {
+		t.Fatal("expected error when opening non-existent WAL file")
+	}
+
+	// 验证错误信息包含 "wal open"
+	if !strings.Contains(err.Error(), "wal open") {
+		t.Errorf("expected error containing 'wal open', got: %v", err)
+	}
+}
+
+// TestOpenWALCorruptedFile 测试打开包含损坏数据的 WAL 文件，应只返回有效记录
+func TestOpenWALCorruptedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "corrupted.wal")
+
+	// 创建 WAL 并写入有效记录
+	w, err := CreateWAL(path)
+	if err != nil {
+		t.Fatalf("CreateWAL failed: %v", err)
+	}
+
+	_ = w.AppendWrite([]byte("valid1"))
+	_ = w.AppendWrite([]byte("valid2"))
+	_ = w.Sync()
+	_ = w.Close()
+
+	// 在文件末尾追加垃圾数据模拟损坏
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatalf("open for corruption failed: %v", err)
+	}
+	_, _ = f.Write([]byte("garbage data that is not a valid WAL record"))
+	_ = f.Close()
+
+	// 重新打开 WAL，应成功且只返回有效记录
+	recovered, recs, err := OpenWAL(path)
+	if err != nil {
+		t.Fatalf("OpenWAL on corrupted file should succeed, got error: %v", err)
+	}
+	defer func() { _ = recovered.Close() }()
+
+	if len(recs) != 2 {
+		t.Fatalf("expected 2 valid records, got %d", len(recs))
+	}
+
+	if string(recs[0].Payload) != "valid1" {
+		t.Errorf("expected first record 'valid1', got %q", string(recs[0].Payload))
+	}
+	if string(recs[1].Payload) != "valid2" {
+		t.Errorf("expected second record 'valid2', got %q", string(recs[1].Payload))
+	}
+}
+
+// TestMaybeRotateNoRotationNeeded 测试当 offset 小于 maxSize 时，maybeRotate 不执行任何操作
+func TestMaybeRotateNoRotationNeeded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.wal")
+
+	w, err := CreateWAL(path)
+	if err != nil {
+		t.Fatalf("CreateWAL failed: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	// maxSize 保持默认的 64MB，写入少量数据不会触发轮转
+	sizeBefore := w.Size()
+	_ = w.AppendWrite([]byte("small data"))
+	sizeAfter := w.Size()
+
+	if sizeAfter <= sizeBefore {
+		t.Errorf("expected size to increase after write, got before=%d after=%d", sizeBefore, sizeAfter)
+	}
+
+	// 验证没有产生 .prev 文件（未触发轮转）
+	if _, err := os.Stat(path + ".prev"); err == nil {
+		t.Error("expected no .prev file when rotation is not needed")
 	}
 }

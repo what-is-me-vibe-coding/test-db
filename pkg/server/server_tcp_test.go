@@ -247,3 +247,41 @@ func TestTCPWriteToClosedConnection(t *testing.T) {
 		t.Errorf("second ping response type = %d, want %d", resp2.Type, PacketResponse)
 	}
 }
+
+// --- handlePacket 错误路径直接测试 ---
+
+// TestHandleQueryPacketUnmarshalError 测试 handleQueryPacket 在无效 JSON 载荷时返回错误。
+func TestHandleQueryPacketUnmarshalError(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	pkt := NewPacket(PacketQuery, []byte("{{invalid json"))
+	_, err := srv.handleQueryPacket(pkt)
+	if err == nil {
+		t.Error("期望无效 JSON 返回错误，但返回 nil")
+	}
+}
+
+// TestHandleWritePacketUnmarshalError 测试 handleWritePacket 在无效 JSON 载荷时返回错误。
+func TestHandleWritePacketUnmarshalError(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	pkt := NewPacket(PacketWrite, []byte("{{invalid json"))
+	_, err := srv.handleWritePacket(pkt)
+	if err == nil {
+		t.Error("期望无效 JSON 返回错误，但返回 nil")
+	}
+}
+
+// TestHandlePacketUnknownType 测试 handlePacket 在未知包类型时返回错误。
+func TestHandlePacketUnknownTypeDirect(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	pkt := NewPacket(255, nil)
+	_, err := srv.handlePacket(pkt)
+	if err == nil {
+		t.Error("期望未知包类型返回错误，但返回 nil")
+	}
+}

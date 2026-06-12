@@ -290,6 +290,59 @@ func TestEngineGroupCommitConcurrentWrites(t *testing.T) {
 	}
 }
 
+// TestGroupCommitterSyncFailure 验证 doSync 在 wal.Sync() 失败时的行为：
+// sync 失败后 pending channel 不应被关闭，请求应被放回队列。
+// 通过先关闭 WAL 再创建 GroupCommitter 来避免数据竞争。
+func TestGroupCommitterSyncFailure(t *testing.T) {
+	walPath := t.TempDir() + "/wal.log"
+	wal, err := CreateWAL(walPath)
+	if err != nil {
+		t.Fatalf("create wal: %v", err)
+	}
+
+	// 先写入一些数据并关闭，确保文件存在
+	if err := wal.AppendWrite([]byte("init")); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatalf("close wal: %v", err)
+	}
+
+	// 重新打开 WAL，然后立即关闭底层文件使 Sync 失败
+	wal2, err := CreateWAL(walPath)
+	if err != nil {
+		t.Fatalf("create wal2: %v", err)
+	}
+	// 关闭底层文件，后续 Sync 会失败
+	_ = wal2.file.Close()
+
+	// 使用长间隔，避免后台定时器干扰
+	gc := NewGroupCommitter(wal2, 1*time.Second)
+
+	// 提交请求
+	ch1 := gc.Submit()
+	ch2 := gc.Submit()
+
+	// 触发同步，此时 Sync 应失败
+	gc.SyncNow()
+
+	// 验证 sync 失败后 channel 未被关闭（请求被放回 pending 队列）
+	select {
+	case <-ch1:
+		t.Fatal("ch1 should not be closed when sync fails")
+	default:
+		// 符合预期：sync 失败，channel 未关闭
+	}
+	select {
+	case <-ch2:
+		t.Fatal("ch2 should not be closed when sync fails")
+	default:
+		// 符合预期
+	}
+
+	gc.Close()
+}
+
 // TestEngineSyncEveryWriteDefault 验证默认 SyncEveryWrite 模式不受影响。
 func TestEngineSyncEveryWriteDefault(t *testing.T) {
 	eng, err := NewEngine(EngineConfig{
