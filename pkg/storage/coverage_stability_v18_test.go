@@ -156,7 +156,7 @@ func TestMaybeRotate_CloseOldFileError(t *testing.T) {
 	if err := w.file.Close(); err != nil {
 		t.Fatalf("file Close failed: %v", err)
 	}
-	w.offset = w.maxSize + 1
+	w.offset.Store(w.maxSize + 1)
 	err = w.maybeRotate()
 	if err == nil {
 		t.Error("expected error when closing old file fails during rotate, got nil")

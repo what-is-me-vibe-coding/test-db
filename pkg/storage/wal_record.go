@@ -299,8 +299,8 @@ func (e *Engine) loadSegments() error {
 
 	// Update flusher and compactor nextID to avoid ID collisions
 	if maxSegID > 0 {
-		e.flusher.nextID = maxSegID
-		e.compactor.nextID = maxSegID
+		e.flusher.SetNextID(maxSegID)
+		e.compactor.SetNextID(maxSegID)
 	}
 
 	return nil

@@ -156,7 +156,7 @@ func TestOpenWALV13_SuccessWithRecords(t *testing.T) {
 	}
 
 	// 验证 WAL 偏移量正确
-	if w2.offset == 0 {
+	if w2.Size() == 0 {
 		t.Error("期望 WAL 偏移量大于 0")
 	}
 
