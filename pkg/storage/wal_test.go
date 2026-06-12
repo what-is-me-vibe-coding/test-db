@@ -7,6 +7,11 @@ import (
 	"testing"
 )
 
+const (
+	testPayloadValid1 = "valid1"
+	testPayloadValid2 = "valid2"
+)
+
 func TestCreateWAL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.wal")
@@ -388,10 +393,10 @@ func TestOpenWALCorruptedFile(t *testing.T) {
 		t.Fatalf("expected 2 valid records, got %d", len(recs))
 	}
 
-	if string(recs[0].Payload) != "valid1" {
+	if string(recs[0].Payload) != testPayloadValid1 {
 		t.Errorf("expected first record 'valid1', got %q", string(recs[0].Payload))
 	}
-	if string(recs[1].Payload) != "valid2" {
+	if string(recs[1].Payload) != testPayloadValid2 {
 		t.Errorf("expected second record 'valid2', got %q", string(recs[1].Payload))
 	}
 }
