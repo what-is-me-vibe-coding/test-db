@@ -206,6 +206,82 @@ func (b *Bitmap) Clone() *Bitmap {
 	}
 }
 
+// CopyFrom 从源位图复制指定范围的位到当前位图的起始位置。
+// 复制 src 中 [srcStart, srcStart+count) 范围的位到当前位图的 [0, count) 位置。
+// 比逐位 Get/Set 快约 64 倍（按 word 批量拷贝）。
+func (b *Bitmap) CopyFrom(src *Bitmap, srcStart, count uint32) {
+	if count == 0 {
+		return
+	}
+	dstEnd := count
+	if dstEnd > b.len {
+		dstEnd = b.len
+	}
+	srcEnd := srcStart + count
+	if srcEnd > src.len {
+		srcEnd = src.len
+	}
+	actualCount := srcEnd - srcStart
+	if actualCount > dstEnd {
+		actualCount = dstEnd
+	}
+
+	// 快速路径：按 word 对齐批量拷贝
+	srcWordStart := srcStart / 64
+	srcBitOff := srcStart % 64
+	dstWords := (actualCount + 63) / 64
+
+	for i := uint32(0); i < dstWords; i++ {
+		srcIdx := srcWordStart + i
+		if srcIdx >= uint32(len(src.bits)) {
+			break
+		}
+		if i >= uint32(len(b.bits)) {
+			break
+		}
+
+		var word uint64
+		if srcBitOff == 0 {
+			// 源起始位对齐到 word 边界，直接拷贝
+			word = src.bits[srcIdx]
+		} else {
+			// 源起始位未对齐，跨 word 拼接
+			word = src.bits[srcIdx] >> srcBitOff
+			if srcIdx+1 < uint32(len(src.bits)) {
+				word |= src.bits[srcIdx+1] << (64 - srcBitOff)
+			}
+		}
+
+		// 最后一轮需要截断多余位
+		remaining := actualCount - i*64
+		if remaining < 64 {
+			mask := uint64(1)<<remaining - 1
+			word &= mask
+			// 只更新有效位，保留目标 word 中超出范围的原值
+			b.bits[i] = (b.bits[i] & ^mask) | word
+		} else {
+			b.bits[i] = word
+		}
+	}
+}
+
+// Grow 将位图扩展到新容量，保留已有位的值。
+// 比 NewBitmap + 逐位复制快约 64 倍（直接拷贝底层 word 数组）。
+func (b *Bitmap) Grow(newLen uint32) {
+	if newLen <= b.len {
+		return
+	}
+	newWords := (newLen + 63) / 64
+	if newWords <= uint32(len(b.bits)) {
+		b.len = newLen
+		return
+	}
+	newBits := make([]uint64, newWords)
+	copy(newBits, b.bits)
+	b.bits = newBits
+	b.len = newLen
+}
+
 // ForEach 遍历所有为 true 的位置，调用回调函数。
 func (b *Bitmap) ForEach(fn func(idx uint32)) {
 	for i, word := range b.bits {
