@@ -93,7 +93,7 @@ func TestDecodeDictOutOfRangeIndex_V7(t *testing.T) {
 		Type:     common.TypeString,
 		RowCount: 1,
 		Data:     []byte{0x02}, // 索引 2，但字典只有 1 个条目
-		Dict:     []string{"hello"},
+		Dict:     []string{testStrHello},
 	}
 	_, _, err := DecodeColumn(enc)
 	if err == nil {
@@ -145,7 +145,7 @@ func TestIsRLEInt64WrongType_V7(t *testing.T) {
 
 // TestEncodeDictWithNulls_V7 测试 encodeDict 带 null 值的编码。
 func TestEncodeDictWithNulls_V7(t *testing.T) {
-	strs := []string{"hello", "world", "hello"}
+	strs := []string{testStrHello, "world", testStrHello}
 	nulls := common.NewBitmap(3)
 	nulls.Set(1) // 第二行为 null
 

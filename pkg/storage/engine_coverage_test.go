@@ -415,7 +415,7 @@ func TestEngineWriteMultipleColumnTypes(t *testing.T) {
 	vals := map[string]common.Value{
 		"int_col":  common.NewInt64(42),
 		"flt_col":  common.NewFloat64(3.14),
-		"str_col":  common.NewString("hello"),
+		"str_col":  common.NewString(testStrHello),
 		"bool_col": common.NewBool(true),
 		"ts_col":   common.NewTimestamp(ts),
 	}
@@ -435,8 +435,8 @@ func TestEngineWriteMultipleColumnTypes(t *testing.T) {
 	if row.Columns["flt_col"].Float64 != 3.14 {
 		t.Errorf("flt_col: 期望 3.14，得到 %f", row.Columns["flt_col"].Float64)
 	}
-	if row.Columns["str_col"].Str != "hello" {
-		t.Errorf("str_col: 期望 %q，得到 %q", "hello", row.Columns["str_col"].Str)
+	if row.Columns["str_col"].Str != testStrHello {
+		t.Errorf("str_col: 期望 %q，得到 %q", testStrHello, row.Columns["str_col"].Str)
 	}
 	if row.Columns["bool_col"].Int64 != 1 {
 		t.Errorf("bool_col: 期望 1（true），得到 %d", row.Columns["bool_col"].Int64)

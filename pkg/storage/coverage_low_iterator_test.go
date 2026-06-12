@@ -35,12 +35,12 @@ func TestScanRangeWithMultipleSegments_V7(t *testing.T) {
 	}
 	defer func() { _ = eng.Close() }()
 
-	cols := []ColumnMeta{{ID: 0, Name: "val", Type: common.TypeInt64}}
+	cols := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 
 	// 写入第一批数据并刷盘
 	for i := 0; i < 5; i++ {
 		key := string(rune('a' + i))
-		_ = eng.Write(key, map[string]common.Value{"val": common.NewInt64(int64(i))})
+		_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(i))})
 	}
 	if err := eng.Flush(cols); err != nil {
 		t.Fatalf("Flush 1: %v", err)
@@ -49,7 +49,7 @@ func TestScanRangeWithMultipleSegments_V7(t *testing.T) {
 	// 写入第二批数据并刷盘
 	for i := 5; i < 10; i++ {
 		key := string(rune('a' + i))
-		_ = eng.Write(key, map[string]common.Value{"val": common.NewInt64(int64(i))})
+		_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(i))})
 	}
 	if err := eng.Flush(cols); err != nil {
 		t.Fatalf("Flush 2: %v", err)
@@ -137,7 +137,7 @@ func TestMemTableIteratorEntryOutOfRange_V7(t *testing.T) {
 // TestSegmentIteratorEntryBeforeStart_V7 测试 segmentIterator 未开始时 Entry 返回空。
 func TestSegmentIteratorEntryBeforeStart_V7(t *testing.T) {
 	seg := buildTestSegment(t, []string{"a", "b"}, []int64{1, 2})
-	colMeta := []ColumnMeta{{ID: 0, Name: "val", Type: common.TypeInt64}}
+	colMeta := []ColumnMeta{{ID: 0, Name: colVal, Type: common.TypeInt64}}
 	it := newSegmentIterator(seg, colMeta, "a", "b", nil)
 
 	// 未调用 Next 时 Entry 应返回空

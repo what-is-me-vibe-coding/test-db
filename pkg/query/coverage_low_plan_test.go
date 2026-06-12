@@ -11,13 +11,13 @@ import (
 func TestAggregateNodeStringWithGroupBy_V7(t *testing.T) {
 	scan := &ScanNode{
 		Table:   "t",
-		Columns: []string{"id", "score"},
-		schema:  []ColumnDef{{Name: "id", Type: common.TypeInt64}, {Name: "score", Type: common.TypeInt64}},
+		Columns: []string{"id", benchColScore},
+		schema:  []ColumnDef{{Name: "id", Type: common.TypeInt64}, {Name: benchColScore, Type: common.TypeInt64}},
 	}
 	agg := &AggregateNode{
 		Child:      scan,
 		GroupBy:    []Expression{&ColumnExpr{Name: "id"}},
-		Aggregates: []AggregateExpr{{Func: AggSum, Arg: &ColumnExpr{Name: "score"}}},
+		Aggregates: []AggregateExpr{{Func: AggSum, Arg: &ColumnExpr{Name: benchColScore}}},
 		schema:     []ColumnDef{{Name: "id", Type: common.TypeInt64}, {Name: "SUM(score)", Type: common.TypeInt64}},
 	}
 
@@ -37,8 +37,8 @@ func TestAggregateNodeStringWithGroupBy_V7(t *testing.T) {
 func TestAggregateNodeStringNoGroupBy_V7(t *testing.T) {
 	scan := &ScanNode{
 		Table:   "t",
-		Columns: []string{"score"},
-		schema:  []ColumnDef{{Name: "score", Type: common.TypeInt64}},
+		Columns: []string{benchColScore},
+		schema:  []ColumnDef{{Name: benchColScore, Type: common.TypeInt64}},
 	}
 	agg := &AggregateNode{
 		Child:      scan,
@@ -159,9 +159,9 @@ func TestProjectNodeStringNoAlias_V7(t *testing.T) {
 func TestScanNodeStringWithPredicate_V7(t *testing.T) {
 	scan := &ScanNode{
 		Table:     "users",
-		Columns:   []string{"id", "name"},
+		Columns:   []string{"id", benchColName},
 		Predicate: &BinaryExpr{Op: OpEq, Left: &ColumnExpr{Name: "id"}, Right: &LiteralExpr{Value: common.NewInt64(1)}},
-		schema:    []ColumnDef{{Name: "id", Type: common.TypeInt64}, {Name: "name", Type: common.TypeString}},
+		schema:    []ColumnDef{{Name: "id", Type: common.TypeInt64}, {Name: benchColName, Type: common.TypeString}},
 	}
 
 	s := scan.String()
@@ -187,8 +187,8 @@ func TestScanNodeStringNoPredicate_V7(t *testing.T) {
 // TestAggregateFuncUnknownString_V7 测试未知聚合函数的 String() 返回 "UNKNOWN"。
 func TestAggregateFuncUnknownString_V7(t *testing.T) {
 	f := AggregateFunc(99)
-	if f.String() != "UNKNOWN" {
-		t.Errorf("期望 'UNKNOWN'，实际 %q", f.String())
+	if f.String() != aggNameUnknown {
+		t.Errorf("期望 %q，实际 %q", aggNameUnknown, f.String())
 	}
 }
 
