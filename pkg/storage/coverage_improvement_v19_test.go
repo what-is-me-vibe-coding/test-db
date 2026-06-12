@@ -58,16 +58,16 @@ func TestDecompressEmptyDataV19(t *testing.T) {
 	}
 }
 
-// TestCompressColumnNilInput 测试 CompressColumn 在输入为 nil 时返回错误。
-func TestCompressColumnNilInput(t *testing.T) {
+// TestCompressColumnNilInput_V19 测试 CompressColumn 在输入为 nil 时返回错误。
+func TestCompressColumnNilInput_V19(t *testing.T) {
 	err := CompressColumn(nil)
 	if err == nil {
 		t.Error("expected error for nil EncodedColumn, got nil")
 	}
 }
 
-// TestDecompressColumnNilInput 测试 DecompressColumn 在输入为 nil 时返回错误。
-func TestDecompressColumnNilInput(t *testing.T) {
+// TestDecompressColumnNilInput_V19 测试 DecompressColumn 在输入为 nil 时返回错误。
+func TestDecompressColumnNilInput_V19(t *testing.T) {
 	err := DecompressColumn(nil)
 	if err == nil {
 		t.Error("expected error for nil EncodedColumn, got nil")

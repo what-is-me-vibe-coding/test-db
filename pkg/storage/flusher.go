@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
@@ -26,22 +27,24 @@ type ColumnMeta struct {
 type Flusher struct {
 	mu      sync.Mutex
 	dataDir string
-	nextID  uint64
+	nextID  atomic.Uint64 // 无锁读取 segment ID
 }
 
-// NextID returns the next segment ID under the flusher's mutex.
+// NextID 无锁读取下一个 segment ID，适合监控和统计场景。
 func (f *Flusher) NextID() uint64 {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.nextID
+	return f.nextID.Load()
 }
 
 // SetNextID updates the flusher's nextID if the given id is larger.
 func (f *Flusher) SetNextID(id uint64) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if id > f.nextID {
-		f.nextID = id
+	for {
+		current := f.nextID.Load()
+		if id <= current {
+			return
+		}
+		if f.nextID.CompareAndSwap(current, id) {
+			return
+		}
 	}
 }
 
@@ -60,8 +63,8 @@ func (f *Flusher) Flush(mem *MemTable, cols []ColumnMeta) (*Segment, error) {
 		return nil, fmt.Errorf("flusher: empty memtable")
 	}
 
-	f.nextID++
-	seg, err := f.buildSegment(f.nextID, rows, cols)
+	f.nextID.Add(1)
+	seg, err := f.buildSegment(f.nextID.Load(), rows, cols)
 	if err != nil {
 		return nil, err
 	}

@@ -420,7 +420,7 @@ func TestFlusherFlushEmptyMemTableLowCov(t *testing.T) {
 func TestCompactorBuildSegmentColIndexOutOfRange(t *testing.T) {
 	tmpDir := t.TempDir()
 	compactor := NewCompactor(tmpDir)
-	compactor.nextID = 1
+	compactor.nextID.Store(1)
 
 	// Row with fewer values than columns
 	rows := []memRow{
