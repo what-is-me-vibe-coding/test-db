@@ -44,7 +44,7 @@ func TestCoverageOpenWALNotExist(t *testing.T) {
 // 通过创建指向 /dev/null 的符号链接作为 WAL 路径，使 os.OpenFile 成功但
 // f.Truncate 返回 EINVAL（字符设备不支持截断操作），覆盖第 84-86 行。
 func TestCoverageOpenWALTruncateErrorSymlink(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != skipNonLinux {
 		t.Skip("符号链接行为测试仅在 Linux 上可靠")
 	}
 
@@ -78,7 +78,7 @@ func TestCoverageOpenWALTruncateErrorSymlink(t *testing.T) {
 // 注意：在大多数 Linux 系统上，/dev/null 的 Seek 实际上会成功，
 // 因此此测试主要覆盖正常路径，并记录 Seek 错误路径的存在。
 func TestCoverageOpenWALSeekErrorViaSymlink(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	if runtime.GOOS != skipNonLinux {
 		t.Skip("符号链接行为测试仅在 Linux 上可靠")
 	}
 
@@ -373,7 +373,7 @@ func TestCoverageOpenWALNormalReplay(t *testing.T) {
 // TestCoverageOpenWALNonNotExistError 测试 OpenWAL 在文件存在但无法以 O_RDWR
 // 打开时返回非 NotExist 错误（覆盖第 73 行）。
 func TestCoverageOpenWALNonNotExistError(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == skipWindows {
 		t.Skip("权限测试在 Windows 上不可靠")
 	}
 	if os.Getuid() == 0 {

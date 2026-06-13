@@ -39,7 +39,7 @@ func TestHTTPQuery_StorageClosed(t *testing.T) {
 	}
 
 	// 先写入一条数据
-	writeBody := `{"table":"users","rows":[{"id":1,"name":"alice"}]}`
+	writeBody := testWriteAliceBody
 	writeReq := httptest.NewRequest(http.MethodPost, "/write", strings.NewReader(writeBody))
 	writeW := httptest.NewRecorder()
 	srv.httpWrite(writeW, writeReq)
@@ -51,7 +51,7 @@ func TestHTTPQuery_StorageClosed(t *testing.T) {
 	_ = srv.storage.Close()
 
 	// 发送查询请求，数据仍在内存中，查询应正常返回
-	queryBody := `{"sql":"SELECT * FROM users"}`
+	queryBody := benchSelectAllSQL
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(queryBody))
 	w := httptest.NewRecorder()
 	srv.httpQuery(w, req)
@@ -98,7 +98,7 @@ func TestHTTPWrite_InternalError(t *testing.T) {
 	_ = srv.storage.Close()
 
 	// 发送有效的写入请求，期望触发 handleWrite 的内部错误路径
-	body := `{"table":"users","rows":[{"id":1,"name":"alice"}]}`
+	body := testWriteAliceBody
 	req := httptest.NewRequest(http.MethodPost, "/write", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.httpWrite(w, req)
@@ -119,7 +119,7 @@ func TestHTTPQuery_ValidQueryWithResponseCode(t *testing.T) {
 	srv := newTestServerForCoverage(t)
 
 	// 发送一条无效 SQL，handleQuery 会返回 Code=-1 的 Response（非 error）
-	body := `{"sql":"INVALID SQL !!!"}`
+	body := testInvalidSQLBody
 	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	srv.httpQuery(w, req)

@@ -67,8 +67,8 @@ func TestWriteBatchWithGroupCommit(t *testing.T) {
 
 	rows := []WriteRow{
 		{Key: "key1", Values: map[string]common.Value{colVal: common.NewInt64(1)}},
-		{Key: "key2", Values: map[string]common.Value{colVal: common.NewInt64(2)}},
-		{Key: "key3", Values: map[string]common.Value{colVal: common.NewInt64(3)}},
+		{Key: crKey2, Values: map[string]common.Value{colVal: common.NewInt64(2)}},
+		{Key: crKey3, Values: map[string]common.Value{colVal: common.NewInt64(3)}},
 	}
 
 	if err := eng.WriteBatch(rows); err != nil {
@@ -76,7 +76,7 @@ func TestWriteBatchWithGroupCommit(t *testing.T) {
 	}
 
 	// 验证数据可读
-	for i, key := range []string{"key1", "key2", "key3"} {
+	for i, key := range []string{"key1", crKey2, crKey3} {
 		row, ok := eng.Get(key)
 		if !ok {
 			t.Fatalf("%s 未找到", key)

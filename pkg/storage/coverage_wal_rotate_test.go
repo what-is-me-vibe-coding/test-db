@@ -166,7 +166,7 @@ func TestCoverageMaybeRotatePrevFileContent(t *testing.T) {
 // TestCoverageMaybeRotateCreateTempError 测试 maybeRotate 在创建临时文件失败时的错误路径。
 // 通过将 WAL 所在目录设为只读，使 os.Create(.tmp) 失败。
 func TestCoverageMaybeRotateCreateTempError(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == skipWindows {
 		t.Skip("权限测试在 Windows 上不可靠")
 	}
 	if os.Getuid() == 0 {
@@ -262,7 +262,7 @@ func TestCoverageMaybeRotateCloseOldError(t *testing.T) {
 // TestCoverageMaybeRotateRenameOldError 测试 maybeRotate 在重命名旧文件失败时的错误路径。
 // 通过在 .prev 路径创建非空目录使 Rename 失败（不能将文件重命名为已存在的非空目录）。
 func TestCoverageMaybeRotateRenameOldError(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == skipWindows {
 		t.Skip("重命名行为在 Windows 上不同")
 	}
 
@@ -326,45 +326,33 @@ func TestCoverageMaybeRotateRenameOldError(t *testing.T) {
 // 通过在第一次 Rename 成功后，在 w.path 创建非空目录使第二次 Rename 失败，
 // 触发恢复逻辑（关闭 newF、将 .prev 重命名回 w.path、调用 recoverOpen）。
 func TestCoverageMaybeRotateRenameTempError(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == skipWindows {
 		t.Skip("重命名行为在 Windows 上不同")
 	}
-
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.wal")
-
 	w, err := CreateWAL(path)
 	if err != nil {
 		t.Fatalf("CreateWAL 失败: %v", err)
 	}
-
-	// 写入数据使 offset > 0
 	if err := w.AppendWrite([]byte("data")); err != nil {
 		t.Fatalf("AppendWrite 失败: %v", err)
 	}
-
-	// 设置很小的 maxSize
 	w.maxSize = 1
 
-	// 手动模拟 maybeRotate 的前置步骤，以便在第二次 Rename 前设置障碍
+	// 手动模拟 maybeRotate 前置步骤，在第二次 Rename 前设置障碍
 	w.mu.Lock()
-
-	// 步骤 1：创建临时文件
 	newF, err := os.Create(path + ".tmp")
 	if err != nil {
 		w.mu.Unlock()
 		t.Fatalf("创建临时文件失败: %v", err)
 	}
-
-	// 步骤 2：Sync 临时文件
 	if err := newF.Sync(); err != nil {
 		_ = newF.Close()
 		_ = os.Remove(path + ".tmp")
 		w.mu.Unlock()
 		t.Fatalf("Sync 临时文件失败: %v", err)
 	}
-
-	// 步骤 3：关闭旧文件
 	old := w.file
 	if err := old.Close(); err != nil {
 		logClose(newF)
@@ -372,8 +360,6 @@ func TestCoverageMaybeRotateRenameTempError(t *testing.T) {
 		w.mu.Unlock()
 		t.Fatalf("关闭旧文件失败: %v", err)
 	}
-
-	// 步骤 4：重命名旧文件为 .prev
 	rotatedPath := path + ".prev"
 	if err := os.Rename(path, rotatedPath); err != nil {
 		logRemove(path + ".tmp")
@@ -382,16 +368,15 @@ func TestCoverageMaybeRotateRenameTempError(t *testing.T) {
 		t.Fatalf("重命名旧文件失败: %v", err)
 	}
 
-	// 步骤 5：在 w.path 创建非空目录，使第二次 Rename 失败
+	// 在 w.path 创建非空目录，使第二次 Rename 失败
 	if err := os.Mkdir(path, 0755); err != nil {
 		t.Fatalf("创建阻塞目录失败: %v", err)
 	}
-	blockerPath := filepath.Join(path, "blocker")
-	if err := os.WriteFile(blockerPath, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(path, "blocker"), []byte("x"), 0644); err != nil {
 		t.Fatalf("创建阻塞文件失败: %v", err)
 	}
 
-	// 步骤 6：尝试将 .tmp 重命名为 w.path - 应该失败
+	// 尝试将 .tmp 重命名为 w.path - 应该失败
 	err = os.Rename(path+".tmp", path)
 	if err == nil {
 		t.Log("第二次 Rename 意外成功")
@@ -399,13 +384,11 @@ func TestCoverageMaybeRotateRenameTempError(t *testing.T) {
 		t.Logf("第二次 Rename 预期失败: %v", err)
 	}
 
-	// 模拟恢复逻辑：关闭 newF、将 .prev 重命名回 w.path
+	// 恢复：关闭 newF、移除阻塞目录、将 .prev 重命名回 w.path
 	_ = newF.Close()
 	_ = os.Remove(filepath.Join(path, "blocker"))
 	_ = os.Remove(path)
 	_ = os.Rename(rotatedPath, path)
-
-	// 调用 recoverOpen 恢复文件句柄
 	w.recoverOpen()
 	w.mu.Unlock()
 
@@ -427,7 +410,7 @@ func TestCoverageMaybeRotateRenameTempError(t *testing.T) {
 // 无法正确 Sync（因为目录可能变为只读或文件系统问题）。
 // 注意：直接触发 Sync 失败较困难，此测试主要验证正常轮转路径中 Sync 被调用。
 func TestCoverageMaybeRotateSyncTempError(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == skipWindows {
 		t.Skip("权限测试在 Windows 上不可靠")
 	}
 
