@@ -70,9 +70,9 @@ func TestHandleQueryPacket_InvalidJSONVariantsV6(t *testing.T) {
 		name    string
 		payload []byte
 	}{
-		{"纯文本", []byte("hello world")},
+		{testPlainText, []byte("hello world")},
 		{"不完整JSON对象", []byte(`{"sql":`)},
-		{"JSON数组", []byte(`[1,2,3]`)},
+		{testJSONArray, []byte(`[1,2,3]`)},
 		{"JSON数字", []byte("42")},
 		{"JSON布尔值", []byte("true")},
 	}
@@ -100,7 +100,7 @@ func TestHandleQueryPacket_QueryExecutionErrorV6(t *testing.T) {
 		name string
 		sql  string
 	}{
-		{"SQL解析错误", "INVALID SQL !!!"},
+		{"SQL解析错误", testInvalidSQL},
 		{"查询不存在的表", "SELECT * FROM nonexistent_v6_table"},
 		{"空SQL", ""},
 	}
@@ -169,9 +169,9 @@ func TestHandleWritePacket_InvalidJSONVariantsV6(t *testing.T) {
 		name    string
 		payload []byte
 	}{
-		{"纯文本", []byte("hello world")},
+		{testPlainText, []byte("hello world")},
 		{"不完整JSON对象", []byte(`{"table":`)},
-		{"JSON数组", []byte(`[1,2,3]`)},
+		{testJSONArray, []byte(`[1,2,3]`)},
 		{"JSON数字", []byte("42")},
 		{"JSON字符串", []byte(`"hello"`)},
 	}
@@ -302,7 +302,7 @@ func TestHandlePacket_RouteQueryV6(t *testing.T) {
 	srv := newTestServer(t)
 	defer func() { _ = srv.Stop() }()
 
-	payload, _ := json.Marshal(QueryRequest{SQL: "SELECT * FROM nonexistent"})
+	payload, _ := json.Marshal(QueryRequest{SQL: testSelectNonexistent})
 	pkt := NewPacket(PacketQuery, payload)
 	resp, err := srv.handlePacket(pkt)
 	if err != nil {
@@ -319,7 +319,7 @@ func TestHandlePacket_RouteWriteV6(t *testing.T) {
 	defer func() { _ = srv.Stop() }()
 
 	payload, _ := json.Marshal(WriteRequest{
-		Table: "nonexistent",
+		Table: v14Nonexistent,
 		Rows:  []map[string]interface{}{{"id": float64(1)}},
 	})
 	pkt := NewPacket(PacketWrite, payload)

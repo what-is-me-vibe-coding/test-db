@@ -54,9 +54,9 @@ func TestHTTPQuery_PostInvalidJSONV7(t *testing.T) {
 		name string
 		body string
 	}{
-		{"纯文本", "hello world"},
+		{testPlainText, "hello world"},
 		{"不完整JSON", `{"sql":`},
-		{"JSON数组", `[1,2,3]`},
+		{testJSONArray, `[1,2,3]`},
 		{"空字符串", ""},
 	}
 	for _, tt := range tests {
@@ -185,9 +185,9 @@ func TestHTTPWrite_PostInvalidJSONV7(t *testing.T) {
 		name string
 		body string
 	}{
-		{"纯文本", "hello world"},
+		{testPlainText, "hello world"},
 		{"不完整JSON", `{"table":`},
-		{"JSON数组", `[1,2,3]`},
+		{testJSONArray, `[1,2,3]`},
 		{"空字符串", ""},
 	}
 	for _, tt := range tests {
