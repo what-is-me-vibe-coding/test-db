@@ -135,7 +135,9 @@ func (gc *GroupCommitter) doSync() {
 		// 如果 pending 积压过多（超过 4096），丢弃最旧的请求并记录警告，
 		// 防止持续 sync 失败导致内存无限增长。
 		gc.mu.Lock()
-		combined := append(pending, gc.pending...)
+		combined := make([]chan struct{}, 0, len(pending)+len(gc.pending))
+		combined = append(combined, pending...)
+		combined = append(combined, gc.pending...)
 		if len(combined) > 4096 {
 			dropped := len(combined) - 4096
 			for _, ch := range combined[:dropped] {
