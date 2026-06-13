@@ -11,6 +11,12 @@ import (
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
 
+// v8 测试用常量，避免 goconst 重复字符串警告
+const (
+	v8WriteNoTableBody = `{"table":"nonexistent_v7","rows":[{"id":1}]}`
+	v8WriteNoKeyBody   = `{"table":"users","rows":[{"name":"alice"}]}`
+)
+
 // ---------------------------------------------------------------------------
 // httpQuery: 错误 HTTP 方法、JSON 解码错误、handleQuery 错误、非零响应码
 // ---------------------------------------------------------------------------
@@ -162,8 +168,8 @@ var httpWriteNonZeroCodeTests = []struct {
 	body       string
 	wantStatus int
 }{
-	{"非零响应码_表不存在_v8", `{"table":"nonexistent_v7","rows":[{"id":1}]}`, http.StatusBadRequest},
-	{"非零响应码_缺少主键_v8", `{"table":"users","rows":[{"name":"alice"}]}`, http.StatusBadRequest},
+	{"非零响应码_表不存在_v8", v8WriteNoTableBody, http.StatusBadRequest},
+	{"非零响应码_缺少主键_v8", v8WriteNoKeyBody, http.StatusBadRequest},
 	{"非零响应码_类型不匹配", `{"table":"users","rows":[{"id":1,"name":true}]}`, http.StatusBadRequest},
 }
 
