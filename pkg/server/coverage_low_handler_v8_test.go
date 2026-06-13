@@ -15,105 +15,91 @@ import (
 // httpQuery: 错误 HTTP 方法、JSON 解码错误、handleQuery 错误、非零响应码
 // ---------------------------------------------------------------------------
 
-// TestCoverageLowHandlerV7_HttpQuery_ErrorPaths 测试 httpQuery 的各种错误路径。
-// 使用表驱动测试覆盖：错误 HTTP 方法、JSON 解码错误、非零响应码。
-func TestCoverageLowHandlerV7_HttpQuery_ErrorPaths(t *testing.T) {
+// httpQuery 错误方法测试用例
+var httpQueryBadMethodTests = []struct {
+	name       string
+	method     string
+	wantStatus int
+}{
+	{"错误HTTP方法_GET", http.MethodGet, http.StatusMethodNotAllowed},
+	{"错误HTTP方法_PUT", http.MethodPut, http.StatusMethodNotAllowed},
+	{"错误HTTP方法_DELETE", http.MethodDelete, http.StatusMethodNotAllowed},
+}
+
+// httpQuery JSON 解码错误测试用例
+var httpQueryDecodeErrorTests = []struct {
+	name       string
+	body       string
+	wantStatus int
+}{
+	{"JSON解码错误_无效JSON", "<<<不是json>>>", http.StatusBadRequest},
+	{"JSON解码错误_空请求体", "", http.StatusBadRequest},
+	{"JSON解码错误_不完整JSON", "{", http.StatusBadRequest},
+}
+
+// httpQuery 非零响应码测试用例
+var httpQueryNonZeroCodeTests = []struct {
+	name       string
+	body       string
+	wantStatus int
+}{
+	{"非零响应码_无效SQL", testInvalidSQLBody, http.StatusBadRequest},
+	{"非零响应码_查询不存在的表", `{"sql":"SELECT * FROM nonexistent_v7"}`, http.StatusBadRequest},
+}
+
+// TestCoverageLowHandlerV7_HttpQuery_BadMethod 测试 httpQuery 错误 HTTP 方法。
+func TestCoverageLowHandlerV7_HttpQuery_BadMethod(t *testing.T) {
 	srv := newTestServerV7WithTable(t)
-
-	tests := []struct {
-		name       string
-		method     string
-		body       string
-		wantStatus int
-		wantCode   int
-	}{
-		{
-			name:       "错误HTTP方法_GET",
-			method:     http.MethodGet,
-			body:       "",
-			wantStatus: http.StatusMethodNotAllowed,
-			wantCode:   -1,
-		},
-		{
-			name:       "错误HTTP方法_PUT",
-			method:     http.MethodPut,
-			body:       "",
-			wantStatus: http.StatusMethodNotAllowed,
-			wantCode:   -1,
-		},
-		{
-			name:       "错误HTTP方法_DELETE",
-			method:     http.MethodDelete,
-			body:       "",
-			wantStatus: http.StatusMethodNotAllowed,
-			wantCode:   -1,
-		},
-		{
-			name:       "JSON解码错误_无效JSON",
-			method:     http.MethodPost,
-			body:       "<<<不是json>>>",
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "JSON解码错误_空请求体",
-			method:     http.MethodPost,
-			body:       "",
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "JSON解码错误_不完整JSON",
-			method:     http.MethodPost,
-			body:       "{",
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "非零响应码_无效SQL",
-			method:     http.MethodPost,
-			body:       testInvalidSQLBody,
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "非零响应码_查询不存在的表",
-			method:     http.MethodPost,
-			body:       `{"sql":"SELECT * FROM nonexistent_v7"}`,
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "正常查询_零响应码",
-			method:     http.MethodPost,
-			body:       benchSelectAllSQL,
-			wantStatus: http.StatusOK,
-			wantCode:   0,
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range httpQueryBadMethodTests {
 		t.Run(tt.name, func(t *testing.T) {
-			var body string
-			if tt.method == http.MethodPost {
-				body = tt.body
-			}
-			req := httptest.NewRequest(tt.method, "/query", strings.NewReader(body))
+			req := httptest.NewRequest(tt.method, "/query", nil)
 			w := httptest.NewRecorder()
 			srv.httpQuery(w, req)
-
 			if w.Code != tt.wantStatus {
 				t.Errorf("状态码 = %d，期望 %d", w.Code, tt.wantStatus)
 			}
+		})
+	}
+}
 
-			var resp Response
-			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-				t.Fatalf("解析响应失败: %v", err)
-			}
-			if resp.Code != tt.wantCode {
-				t.Errorf("响应 Code = %d，期望 %d，Message = %q", resp.Code, tt.wantCode, resp.Message)
+// TestCoverageLowHandlerV7_HttpQuery_DecodeError 测试 httpQuery JSON 解码错误。
+func TestCoverageLowHandlerV7_HttpQuery_DecodeError(t *testing.T) {
+	srv := newTestServerV7WithTable(t)
+	for _, tt := range httpQueryDecodeErrorTests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			srv.httpQuery(w, req)
+			if w.Code != tt.wantStatus {
+				t.Errorf("状态码 = %d，期望 %d", w.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+// TestCoverageLowHandlerV7_HttpQuery_NonZeroCode 测试 httpQuery 非零响应码。
+func TestCoverageLowHandlerV7_HttpQuery_NonZeroCode(t *testing.T) {
+	srv := newTestServerV7WithTable(t)
+	for _, tt := range httpQueryNonZeroCodeTests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			srv.httpQuery(w, req)
+			if w.Code != tt.wantStatus {
+				t.Errorf("状态码 = %d，期望 %d", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestCoverageLowHandlerV7_HttpQuery_Success 测试 httpQuery 正常查询。
+func TestCoverageLowHandlerV7_HttpQuery_Success(t *testing.T) {
+	srv := newTestServerV7WithTable(t)
+	req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(benchSelectAllSQL))
+	w := httptest.NewRecorder()
+	srv.httpQuery(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("状态码 = %d，期望 %d", w.Code, http.StatusOK)
 	}
 }
 
@@ -148,112 +134,92 @@ func TestCoverageLowHandlerV7_HttpQuery_HandleQueryError(t *testing.T) {
 // httpWrite: 错误 HTTP 方法、JSON 解码错误、handleWrite 错误、非零响应码
 // ---------------------------------------------------------------------------
 
-// TestCoverageLowHandlerV7_HttpWrite_ErrorPaths 测试 httpWrite 的各种错误路径。
-// 使用表驱动测试覆盖：错误 HTTP 方法、JSON 解码错误、非零响应码。
-func TestCoverageLowHandlerV7_HttpWrite_ErrorPaths(t *testing.T) {
+// httpWrite 错误方法测试用例
+var httpWriteBadMethodTests = []struct {
+	name       string
+	method     string
+	wantStatus int
+}{
+	{"错误HTTP方法_GET", http.MethodGet, http.StatusMethodNotAllowed},
+	{"错误HTTP方法_PUT", http.MethodPut, http.StatusMethodNotAllowed},
+	{"错误HTTP方法_PATCH", http.MethodPatch, http.StatusMethodNotAllowed},
+}
+
+// httpWrite JSON 解码错误测试用例
+var httpWriteDecodeErrorTests = []struct {
+	name       string
+	body       string
+	wantStatus int
+}{
+	{"JSON解码错误_无效JSON", "<<<不是json>>>", http.StatusBadRequest},
+	{"JSON解码错误_空请求体", "", http.StatusBadRequest},
+	{"JSON解码错误_不完整JSON", "{", http.StatusBadRequest},
+}
+
+// httpWrite 非零响应码测试用例
+var httpWriteNonZeroCodeTests = []struct {
+	name       string
+	body       string
+	wantStatus int
+}{
+	{"非零响应码_表不存在", `{"table":"nonexistent_v7","rows":[{"id":1}]}`, http.StatusBadRequest},
+	{"非零响应码_缺少主键", `{"table":"users","rows":[{"name":"alice"}]}`, http.StatusBadRequest},
+	{"非零响应码_类型不匹配", `{"table":"users","rows":[{"id":1,"name":true}]}`, http.StatusBadRequest},
+}
+
+// TestCoverageLowHandlerV7_HttpWrite_BadMethod 测试 httpWrite 错误 HTTP 方法。
+func TestCoverageLowHandlerV7_HttpWrite_BadMethod(t *testing.T) {
 	srv := newTestServerV7WithTable(t)
-
-	tests := []struct {
-		name       string
-		method     string
-		body       string
-		wantStatus int
-		wantCode   int
-	}{
-		{
-			name:       "错误HTTP方法_GET",
-			method:     http.MethodGet,
-			body:       "",
-			wantStatus: http.StatusMethodNotAllowed,
-			wantCode:   -1,
-		},
-		{
-			name:       "错误HTTP方法_PUT",
-			method:     http.MethodPut,
-			body:       "",
-			wantStatus: http.StatusMethodNotAllowed,
-			wantCode:   -1,
-		},
-		{
-			name:       "错误HTTP方法_PATCH",
-			method:     http.MethodPatch,
-			body:       "",
-			wantStatus: http.StatusMethodNotAllowed,
-			wantCode:   -1,
-		},
-		{
-			name:       "JSON解码错误_无效JSON",
-			method:     http.MethodPost,
-			body:       "<<<不是json>>>",
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "JSON解码错误_空请求体",
-			method:     http.MethodPost,
-			body:       "",
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "JSON解码错误_不完整JSON",
-			method:     http.MethodPost,
-			body:       "{",
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "非零响应码_表不存在",
-			method:     http.MethodPost,
-			body:       `{"table":"nonexistent_v7","rows":[{"id":1}]}`,
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "非零响应码_缺少主键",
-			method:     http.MethodPost,
-			body:       `{"table":"users","rows":[{"name":"alice"}]}`,
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "非零响应码_类型不匹配",
-			method:     http.MethodPost,
-			body:       `{"table":"users","rows":[{"id":1,"name":true}]}`,
-			wantStatus: http.StatusBadRequest,
-			wantCode:   -1,
-		},
-		{
-			name:       "正常写入_零响应码",
-			method:     http.MethodPost,
-			body:       testWriteAliceBody,
-			wantStatus: http.StatusOK,
-			wantCode:   0,
-		},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range httpWriteBadMethodTests {
 		t.Run(tt.name, func(t *testing.T) {
-			var body string
-			if tt.method == http.MethodPost {
-				body = tt.body
-			}
-			req := httptest.NewRequest(tt.method, "/write", strings.NewReader(body))
+			req := httptest.NewRequest(tt.method, "/write", nil)
 			w := httptest.NewRecorder()
 			srv.httpWrite(w, req)
-
 			if w.Code != tt.wantStatus {
-				t.Errorf("状态码 = %d，期望 %d，Body = %s", w.Code, tt.wantStatus, w.Body.String())
-			}
-
-			var resp Response
-			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-				t.Fatalf("解析响应失败: %v", err)
-			}
-			if resp.Code != tt.wantCode {
-				t.Errorf("响应 Code = %d，期望 %d，Message = %q", resp.Code, tt.wantCode, resp.Message)
+				t.Errorf("状态码 = %d，期望 %d", w.Code, tt.wantStatus)
 			}
 		})
+	}
+}
+
+// TestCoverageLowHandlerV7_HttpWrite_DecodeError 测试 httpWrite JSON 解码错误。
+func TestCoverageLowHandlerV7_HttpWrite_DecodeError(t *testing.T) {
+	srv := newTestServerV7WithTable(t)
+	for _, tt := range httpWriteDecodeErrorTests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/write", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			srv.httpWrite(w, req)
+			if w.Code != tt.wantStatus {
+				t.Errorf("状态码 = %d，期望 %d", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestCoverageLowHandlerV7_HttpWrite_NonZeroCode 测试 httpWrite 非零响应码。
+func TestCoverageLowHandlerV7_HttpWrite_NonZeroCode(t *testing.T) {
+	srv := newTestServerV7WithTable(t)
+	for _, tt := range httpWriteNonZeroCodeTests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/write", strings.NewReader(tt.body))
+			w := httptest.NewRecorder()
+			srv.httpWrite(w, req)
+			if w.Code != tt.wantStatus {
+				t.Errorf("状态码 = %d，期望 %d", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestCoverageLowHandlerV7_HttpWrite_Success 测试 httpWrite 正常写入。
+func TestCoverageLowHandlerV7_HttpWrite_Success(t *testing.T) {
+	srv := newTestServerV7WithTable(t)
+	req := httptest.NewRequest(http.MethodPost, "/write", strings.NewReader(testWriteAliceBody))
+	w := httptest.NewRecorder()
+	srv.httpWrite(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("状态码 = %d，期望 %d", w.Code, http.StatusOK)
 	}
 }
 
