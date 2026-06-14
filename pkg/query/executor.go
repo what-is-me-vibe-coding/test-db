@@ -179,7 +179,6 @@ func buildChunksFromEntries(entries []storage.ScanEntry, schema []ColumnDef, chu
 		return nil, nil
 	}
 
-	// 预分配 chunks 切片，避免 append 扩容
 	numChunks := (len(entries) + chunkSize - 1) / chunkSize
 	chunks := make([]*storage.Chunk, 0, numChunks)
 	for start := 0; start < len(entries); start += chunkSize {
@@ -194,21 +193,7 @@ func buildChunksFromEntries(entries []storage.ScanEntry, schema []ColumnDef, chu
 
 		for colIdx, colDef := range schema {
 			col := storage.NewColumnVector(uint32(colIdx), colDef.Type, batchLen)
-			rowIdx := uint32(0)
-			for _, entry := range batch {
-				val, ok := entry.Value.Columns[colDef.Name]
-				if !ok {
-					val = common.NewNull()
-				}
-				// 直接 SetValue 而非 Append，跳过 ensureCapacity 开销
-				if val.Typ != colDef.Type && val.Valid {
-					val = coerceValue(val, colDef.Type)
-				}
-				if err := col.SetValue(rowIdx, val); err != nil {
-					_ = col.SetValue(rowIdx, common.NewNull())
-				}
-				rowIdx++
-			}
+			fillColumnValues(col, batch, colDef)
 			col.SetLen(batchLen)
 			if err := chunk.AddColumn(col); err != nil {
 				return nil, fmt.Errorf("executor scan: add column %d: %w", colIdx, err)
@@ -219,6 +204,24 @@ func buildChunksFromEntries(entries []storage.ScanEntry, schema []ColumnDef, chu
 	}
 
 	return chunks, nil
+}
+
+// fillColumnValues 将 batch 中每行对应列的值直接写入 ColumnVector。
+// 使用 SetValue 替代 Append，跳过 ensureCapacity 开销。
+func fillColumnValues(col *storage.ColumnVector, batch []storage.ScanEntry, colDef ColumnDef) {
+	for rowIdx, entry := range batch {
+		val, ok := entry.Value.Columns[colDef.Name]
+		if !ok {
+			col.SetNull(uint32(rowIdx))
+			continue
+		}
+		if val.Typ != colDef.Type && val.Valid {
+			val = coerceValue(val, colDef.Type)
+		}
+		if err := col.SetValue(uint32(rowIdx), val); err != nil {
+			col.SetNull(uint32(rowIdx))
+		}
+	}
 }
 
 // buildColIdxMap 构建列名到索引的映射。
