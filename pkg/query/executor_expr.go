@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
@@ -202,10 +203,19 @@ func evalFloatArithmetic(lf, rf float64, op arithOp) (common.Value, error) {
 func evalIntArithmetic(li, ri int64, op arithOp) (common.Value, error) {
 	switch op {
 	case opAdd:
+		if (ri > 0 && li > math.MaxInt64-ri) || (ri < 0 && li < math.MinInt64-ri) {
+			return common.NewNull(), fmt.Errorf("executor: integer overflow in addition")
+		}
 		return common.NewInt64(li + ri), nil
 	case opSub:
+		if (ri < 0 && li > math.MaxInt64+ri) || (ri > 0 && li < math.MinInt64+ri) {
+			return common.NewNull(), fmt.Errorf("executor: integer overflow in subtraction")
+		}
 		return common.NewInt64(li - ri), nil
 	case opMul:
+		if ri != 0 && ((ri > 0 && li > math.MaxInt64/ri) || (ri > 0 && li < math.MinInt64/ri) || (ri < 0 && li > math.MinInt64/ri) || (ri < 0 && li < math.MaxInt64/ri)) {
+			return common.NewNull(), fmt.Errorf("executor: integer overflow in multiplication")
+		}
 		return common.NewInt64(li * ri), nil
 	case opDiv:
 		if ri == 0 {

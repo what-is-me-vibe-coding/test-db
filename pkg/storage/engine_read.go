@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"log"
 	"sort"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
@@ -87,8 +88,12 @@ func (e *Engine) findSegmentByID(segID uint64) *Segment {
 }
 
 // Scan 扫描指定键范围内的所有行，直接返回 ScanEntry 切片，避免额外结构体复制。
+// 注意：此方法静默丢弃迭代错误。如需获取错误信息，请使用 ScanWithError。
 func (e *Engine) Scan(start, end string) []ScanEntry {
-	entries, _ := e.ScanWithError(start, end)
+	entries, err := e.ScanWithError(start, end)
+	if err != nil {
+		log.Printf("engine scan [%q,%q]: %v", start, end, err)
+	}
 	return entries
 }
 

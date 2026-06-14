@@ -160,6 +160,7 @@ func (e *Executor) filterEntriesByPredicate(entries []storage.ScanEntry, pred Ex
 }
 
 // appendValueSafe 安全地向列向量追加值，类型不匹配时尝试转换，仍失败则用 NULL 填充。
+// 如果 NULL 追加也失败（如容量不足），记录警告，避免列数据不对齐导致后续行偏移。
 func appendValueSafe(col *storage.ColumnVector, val common.Value, typ common.DataType) {
 	if err := col.Append(val); err == nil {
 		return
@@ -168,7 +169,9 @@ func appendValueSafe(col *storage.ColumnVector, val common.Value, typ common.Dat
 	if err := col.Append(val); err == nil {
 		return
 	}
-	_ = col.Append(common.NewNull())
+	if err := col.Append(common.NewNull()); err != nil {
+		log.Printf("executor: failed to append NULL to column %d: %v", col.ColumnID, err)
+	}
 }
 
 // buildChunksFromEntries 将 ScanEntry 切片转换为 Chunk 切片。

@@ -164,11 +164,17 @@ func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, in
 			}
 
 			for i := range groupAccum[groupKey] {
-				var val common.Value
 				if agg.Aggregates[i].Arg != nil {
-					val, _ = evalExpr(agg.Aggregates[i].Arg, rowVals, colIdxMap)
+					val, evalErr := evalExpr(agg.Aggregates[i].Arg, rowVals, colIdxMap)
+					if evalErr != nil {
+						// 表达式求值失败时跳过该聚合列的更新，避免零值污染累加器
+						continue
+					}
+					groupAccum[groupKey][i].update(val)
+				} else {
+					// COUNT(*) 等无参数聚合函数，直接更新
+					groupAccum[groupKey][i].update(common.NewNull())
 				}
-				groupAccum[groupKey][i].update(val)
 			}
 		}
 	}
@@ -194,7 +200,10 @@ func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, 
 		colIdx := 0
 
 		for _, gb := range agg.GroupBy {
-			val, _ := evalExpr(gb, gr.values, colIdxMap)
+			val, evalErr := evalExpr(gb, gr.values, colIdxMap)
+			if evalErr != nil {
+				val = common.NewNull()
+			}
 			if err := outputCols[colIdx].Append(coerceValue(val, schema[colIdx].Type)); err != nil {
 				return nil, fmt.Errorf("aggregate output: group-by append: %w", err)
 			}
@@ -216,6 +225,7 @@ func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, 
 // buildGroupKey 构建分组键。
 // 使用 strings.Builder 避免创建临时字符串切片，减少内存分配。
 // 使用 '\x00' 作为分隔符，避免列值中包含可打印字符时产生碰撞。
+// 表达式求值失败时使用空字符串占位，确保分组键仍可正常构建。
 func buildGroupKey(groupBy []Expression, row map[string]common.Value, colIdxMap map[string]int) string {
 	if len(groupBy) == 0 {
 		return ""
@@ -225,8 +235,12 @@ func buildGroupKey(groupBy []Expression, row map[string]common.Value, colIdxMap 
 		if i > 0 {
 			b.WriteByte('\x00')
 		}
-		val, _ := evalExpr(gb, row, colIdxMap)
-		b.WriteString(val.String())
+		val, evalErr := evalExpr(gb, row, colIdxMap)
+		if evalErr != nil {
+			b.WriteString("<error>")
+		} else {
+			b.WriteString(val.String())
+		}
 	}
 	return b.String()
 }
