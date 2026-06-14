@@ -217,6 +217,12 @@ func fillColumnValues(col *storage.ColumnVector, batch []storage.ScanEntry, colD
 		}
 		if val.Typ != colDef.Type && val.Valid {
 			val = coerceValue(val, colDef.Type)
+			// coerceValue 未匹配到转换规则时返回原值，类型仍不匹配，
+			// 此时 SetValue 可能写入错误类型数据，应标记为 Null。
+			if val.Typ != colDef.Type {
+				col.SetNull(uint32(rowIdx))
+				continue
+			}
 		}
 		if err := col.SetValue(uint32(rowIdx), val); err != nil {
 			col.SetNull(uint32(rowIdx))

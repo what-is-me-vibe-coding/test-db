@@ -65,7 +65,11 @@ func (cv *ColumnVector) Len() uint32 {
 // SetLen 设置列向量的有效行数。
 // 仅在直接使用 SetValue 写入数据后调用，用于跳过 Append 的逐行 len 递增。
 // 调用者需确保已通过 SetValue 正确写入了 [0, n) 范围内的所有行。
+// 若 n 超过容量则 panic，防止 ColumnVector 包含未初始化数据。
 func (cv *ColumnVector) SetLen(n uint32) {
+	if n > cv.capacity {
+		panic(fmt.Sprintf("SetLen: n (%d) exceeds capacity (%d)", n, cv.capacity))
+	}
 	cv.len = n
 }
 
