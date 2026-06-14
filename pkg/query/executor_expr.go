@@ -8,14 +8,22 @@ import (
 )
 
 // buildRowValues 从 Chunk 构建指定行的列名到值的映射。
-func buildRowValues(chunk *storage.Chunk, schema []ColumnDef, row uint32) map[string]common.Value {
-	rowVals := make(map[string]common.Value, len(schema))
-	for i, col := range chunk.Columns() {
-		if i < len(schema) {
-			rowVals[schema[i].Name] = col.GetValue(row)
+// 使用传入的 buf map 复用，减少每行分配；buf 为 nil 时创建新 map。
+func buildRowValues(chunk *storage.Chunk, schema []ColumnDef, row uint32, buf map[string]common.Value) map[string]common.Value {
+	if buf == nil {
+		buf = make(map[string]common.Value, len(schema))
+	} else {
+		// 清空复用 map
+		for k := range buf {
+			delete(buf, k)
 		}
 	}
-	return rowVals
+	for i, col := range chunk.Columns() {
+		if i < len(schema) {
+			buf[schema[i].Name] = col.GetValue(row)
+		}
+	}
+	return buf
 }
 
 // evalExpr 在给定行数据上求值表达式。

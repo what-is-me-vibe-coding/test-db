@@ -144,14 +144,22 @@ func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, in
 	groupRows := make(map[string]*groupRow)
 	groupOrder := make([]string, 0)
 
+	// 复用 rowVals map，减少聚合路径的堆分配
+	var rowValsBuf map[string]common.Value
 	for _, chunk := range childResult.chunks {
 		for row := uint32(0); row < chunk.RowCount(); row++ {
-			rowVals := buildRowValues(chunk, inputSchema, row)
+			rowVals := buildRowValues(chunk, inputSchema, row, rowValsBuf)
+			rowValsBuf = rowVals // 后续行复用同一 map
 			groupKey := buildGroupKey(agg.GroupBy, rowVals, colIdxMap)
 
 			if _, ok := groupAccum[groupKey]; !ok {
 				groupAccum[groupKey] = newAccumulators(agg.Aggregates)
-				groupRows[groupKey] = &groupRow{key: groupKey, values: rowVals}
+				// 新分组需要复制当前行值，因为 rowVals 会被后续行覆盖
+				groupRowVals := make(map[string]common.Value, len(rowVals))
+				for k, v := range rowVals {
+					groupRowVals[k] = v
+				}
+				groupRows[groupKey] = &groupRow{key: groupKey, values: groupRowVals}
 				groupOrder = append(groupOrder, groupKey)
 			}
 

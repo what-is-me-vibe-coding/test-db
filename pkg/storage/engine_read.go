@@ -86,22 +86,9 @@ func (e *Engine) findSegmentByID(segID uint64) *Segment {
 	return e.segmentMap[segID]
 }
 
-// Scan 扫描指定键范围内的所有行。
-func (e *Engine) Scan(start, end string) []struct {
-	Key   string
-	Value Row
-} {
+// Scan 扫描指定键范围内的所有行，直接返回 ScanEntry 切片，避免额外结构体复制。
+func (e *Engine) Scan(start, end string) []ScanEntry {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-
-	entries := e.scanRangeUnlocked(start, end)
-	results := make([]struct {
-		Key   string
-		Value Row
-	}, len(entries))
-	for i, entry := range entries {
-		results[i].Key = entry.Key
-		results[i].Value = entry.Value
-	}
-	return results
+	return e.scanRangeUnlocked(start, end)
 }
