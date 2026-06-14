@@ -32,10 +32,7 @@ func ccVerifyKeys(t *testing.T, eng *Engine, groups, perGroup int, prefix, suffi
 	}
 }
 
-func ccCheckScanSorted(results []struct {
-	Key   string
-	Value Row
-}, start, end string) bool {
+func ccCheckScanSorted(results []ScanEntry, start, end string) bool {
 	for i := 1; i < len(results); i++ {
 		if results[i].Key <= results[i-1].Key {
 			return false
@@ -91,10 +88,7 @@ func ccStartFlushCompact(eng *Engine, cols []ColumnMeta, done <-chan struct{}, w
 }
 
 // ccCheckNoDuplicates returns true if there are duplicate keys in results.
-func ccCheckNoDuplicates(results []struct {
-	Key   string
-	Value Row
-}) bool {
+func ccCheckNoDuplicates(results []ScanEntry) bool {
 	seen := make(map[string]struct{}, len(results))
 	for _, r := range results {
 		if _, dup := seen[r.Key]; dup {
@@ -106,10 +100,7 @@ func ccCheckNoDuplicates(results []struct {
 }
 
 // ccVerifyScanResults checks that scan results match expected sequential keys and values.
-func ccVerifyScanResults(results []struct {
-	Key   string
-	Value Row
-}, prefix string) bool {
+func ccVerifyScanResults(results []ScanEntry, prefix string) bool {
 	for i, r := range results {
 		if r.Key != fmt.Sprintf("%s%04d", prefix, i) || r.Value.Columns[colVal].Int64 != int64(i) {
 			return false

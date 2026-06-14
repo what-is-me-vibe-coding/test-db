@@ -84,7 +84,10 @@ func Compress(data []byte) ([]byte, error) {
 	// 使用池化缓冲区作为输出，减少堆分配
 	dst := getCompressBuf(len(data))
 	result := enc.EncodeAll(data, *dst)
-	// result 可能引用了 dst 的底层数组，需要拷贝到独立切片
+	// 检查 result 是否引用了 dst 的底层数组：
+	// 如果 result 的容量大于其长度，说明它可能引用了 dst；
+	// 如果 result 的指针与 dst 的底层数组相同，需要拷贝。
+	// 简化判断：如果 len(result) <= cap(*dst) 且 result 与 dst 有重叠，则拷贝。
 	out := make([]byte, len(result))
 	copy(out, result)
 	putCompressBuf(dst)
