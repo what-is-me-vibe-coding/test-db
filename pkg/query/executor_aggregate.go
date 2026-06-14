@@ -154,22 +154,11 @@ func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, in
 
 			if _, ok := groupAccum[groupKey]; !ok {
 				groupAccum[groupKey] = newAccumulators(agg.Aggregates)
-				// 新分组需要复制当前行值，因为 rowVals 会被后续行覆盖
-				groupRowVals := make(map[string]common.Value, len(rowVals))
-				for k, v := range rowVals {
-					groupRowVals[k] = v
-				}
-				groupRows[groupKey] = &groupRow{key: groupKey, values: groupRowVals}
+				groupRows[groupKey] = newGroupRow(groupKey, rowVals)
 				groupOrder = append(groupOrder, groupKey)
 			}
 
-			for i := range groupAccum[groupKey] {
-				var val common.Value
-				if agg.Aggregates[i].Arg != nil {
-					val, _ = evalExpr(agg.Aggregates[i].Arg, rowVals, colIdxMap)
-				}
-				groupAccum[groupKey][i].update(val)
-			}
+			e.updateAccumulators(groupAccum[groupKey], agg.Aggregates, rowVals, colIdxMap)
 		}
 	}
 
@@ -180,6 +169,32 @@ func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, in
 	}
 
 	return groupAccum, groupRows, groupOrder
+}
+
+// newGroupRow 创建分组行，复制当前行值避免后续行覆盖。
+func newGroupRow(key string, rowVals map[string]common.Value) *groupRow {
+	copied := make(map[string]common.Value, len(rowVals))
+	for k, v := range rowVals {
+		copied[k] = v
+	}
+	return &groupRow{key: key, values: copied}
+}
+
+// updateAccumulators 更新一组累加器。
+func (e *Executor) updateAccumulators(accs []accumulator, aggs []AggregateExpr, rowVals map[string]common.Value, colIdxMap map[string]int) {
+	for i := range accs {
+		if aggs[i].Arg != nil {
+			val, evalErr := evalExpr(aggs[i].Arg, rowVals, colIdxMap)
+			if evalErr != nil {
+				// 表达式求值失败时跳过该聚合列的更新，避免零值污染累加器
+				continue
+			}
+			accs[i].update(val)
+		} else {
+			// COUNT(*) 等无参数聚合函数，直接更新
+			accs[i].update(common.NewNull())
+		}
+	}
 }
 
 func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, groupAccum map[string][]accumulator, groupRows map[string]*groupRow, groupOrder []string, colIdxMap map[string]int) ([]*storage.ColumnVector, error) {
@@ -194,7 +209,10 @@ func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, 
 		colIdx := 0
 
 		for _, gb := range agg.GroupBy {
-			val, _ := evalExpr(gb, gr.values, colIdxMap)
+			val, evalErr := evalExpr(gb, gr.values, colIdxMap)
+			if evalErr != nil {
+				val = common.NewNull()
+			}
 			if err := outputCols[colIdx].Append(coerceValue(val, schema[colIdx].Type)); err != nil {
 				return nil, fmt.Errorf("aggregate output: group-by append: %w", err)
 			}
@@ -216,6 +234,7 @@ func (e *Executor) buildAggregateOutput(agg *AggregateNode, schema []ColumnDef, 
 // buildGroupKey 构建分组键。
 // 使用 strings.Builder 避免创建临时字符串切片，减少内存分配。
 // 使用 '\x00' 作为分隔符，避免列值中包含可打印字符时产生碰撞。
+// 表达式求值失败时使用空字符串占位，确保分组键仍可正常构建。
 func buildGroupKey(groupBy []Expression, row map[string]common.Value, colIdxMap map[string]int) string {
 	if len(groupBy) == 0 {
 		return ""
@@ -225,8 +244,12 @@ func buildGroupKey(groupBy []Expression, row map[string]common.Value, colIdxMap 
 		if i > 0 {
 			b.WriteByte('\x00')
 		}
-		val, _ := evalExpr(gb, row, colIdxMap)
-		b.WriteString(val.String())
+		val, evalErr := evalExpr(gb, row, colIdxMap)
+		if evalErr != nil {
+			b.WriteString("<error>")
+		} else {
+			b.WriteString(val.String())
+		}
 	}
 	return b.String()
 }

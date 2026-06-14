@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
@@ -202,11 +203,11 @@ func evalFloatArithmetic(lf, rf float64, op arithOp) (common.Value, error) {
 func evalIntArithmetic(li, ri int64, op arithOp) (common.Value, error) {
 	switch op {
 	case opAdd:
-		return common.NewInt64(li + ri), nil
+		return evalIntAdd(li, ri)
 	case opSub:
-		return common.NewInt64(li - ri), nil
+		return evalIntSub(li, ri)
 	case opMul:
-		return common.NewInt64(li * ri), nil
+		return evalIntMul(li, ri)
 	case opDiv:
 		if ri == 0 {
 			return common.NewNull(), nil
@@ -214,6 +215,37 @@ func evalIntArithmetic(li, ri int64, op arithOp) (common.Value, error) {
 		return common.NewInt64(li / ri), nil
 	}
 	return common.NewNull(), nil
+}
+
+func evalIntAdd(li, ri int64) (common.Value, error) {
+	if (ri > 0 && li > math.MaxInt64-ri) || (ri < 0 && li < math.MinInt64-ri) {
+		return common.NewNull(), fmt.Errorf("executor: integer overflow in addition")
+	}
+	return common.NewInt64(li + ri), nil
+}
+
+func evalIntSub(li, ri int64) (common.Value, error) {
+	if (ri < 0 && li > math.MaxInt64+ri) || (ri > 0 && li < math.MinInt64+ri) {
+		return common.NewNull(), fmt.Errorf("executor: integer overflow in subtraction")
+	}
+	return common.NewInt64(li - ri), nil
+}
+
+func evalIntMul(li, ri int64) (common.Value, error) {
+	if ri != 0 && mulOverflows(li, ri) {
+		return common.NewNull(), fmt.Errorf("executor: integer overflow in multiplication")
+	}
+	return common.NewInt64(li * ri), nil
+}
+
+func mulOverflows(li, ri int64) bool {
+	if ri > 0 {
+		return li > math.MaxInt64/ri || li < math.MinInt64/ri
+	}
+	if ri < 0 {
+		return li > math.MinInt64/ri || li < math.MaxInt64/ri
+	}
+	return false
 }
 
 func toFloat64(v common.Value) float64 {
