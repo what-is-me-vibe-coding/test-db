@@ -480,4 +480,5 @@ go test -bench=Benchmark -benchmem ./pkg/server/
 | [index.md](index.md) | 索引模块详解 |
 | [catalog.md](catalog.md) | 元数据管理详解 |
 | [common.md](common.md) | 公共模块详解 |
+| [server.md](server.md) | 服务层模块详解 |
 | [api.md](api.md) | API 参考 |
