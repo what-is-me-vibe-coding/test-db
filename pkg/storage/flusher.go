@@ -129,7 +129,9 @@ func writeSegmentFile(dataDir string, seg *Segment) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("write segment: serialize: %w", err)
 	}
-	if err := os.WriteFile(fileName, data, 0644); err != nil {
+	// 使用 writeAndSyncFile 确保数据落盘后再返回，
+	// 避免崩溃时丢失已刷写的 Segment 数据。
+	if err := writeAndSyncFile(fileName, data, 0644); err != nil {
 		return "", fmt.Errorf("write segment: write file: %w", err)
 	}
 	return fileName, nil
