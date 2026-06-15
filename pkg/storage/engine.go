@@ -226,13 +226,17 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
 }
 
 // flushImmutable 逐个刷写 immutable memtable 到磁盘。
+// 注意：调用时 e.mu 未持有。失败回写时将未刷写的 memtable 前置到 e.immutable，
+// 确保它们排在并发 Write 新增的 memtable 之前，维持正确的刷写顺序。
 func (e *Engine) flushImmutable(immutable []*MemTable, cols []ColumnMeta) error {
 	var flushedIdx int
 	for i, mem := range immutable {
 		seg, err := e.flusher.Flush(mem, cols)
 		if err != nil {
 			e.mu.Lock()
-			e.immutable = append(e.immutable, immutable[flushedIdx:]...)
+			// 前置未刷写的 memtable，保证它们在并发 Write 新增的 memtable 之前
+			remaining := immutable[flushedIdx:]
+			e.immutable = append(remaining, e.immutable...)
 			e.mu.Unlock()
 			return fmt.Errorf("engine flush: %w", err)
 		}
@@ -247,7 +251,7 @@ func (e *Engine) flushImmutable(immutable []*MemTable, cols []ColumnMeta) error 
 			remaining := immutable[flushedIdx+1:]
 			if len(remaining) > 0 {
 				e.mu.Lock()
-				e.immutable = append(e.immutable, remaining...)
+				e.immutable = append(remaining, e.immutable...)
 				e.mu.Unlock()
 			}
 			return fmt.Errorf("engine flush: %w", err)
