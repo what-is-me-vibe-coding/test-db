@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -135,6 +136,17 @@ func writeSegmentFile(dataDir string, seg *Segment) (string, error) {
 		return "", fmt.Errorf("write segment: write file: %w", err)
 	}
 	return fileName, nil
+}
+
+// cleanupSegmentFile 清理段文件，用于段注册索引失败时的资源回收。
+// 忽略文件不存在的错误，仅记录其他删除错误。
+func cleanupSegmentFile(seg *Segment) {
+	if seg == nil || seg.FilePath == "" {
+		return
+	}
+	if err := os.Remove(seg.FilePath); err != nil && !os.IsNotExist(err) {
+		log.Printf("cleanup: remove segment file %s: %v", seg.FilePath, err)
+	}
 }
 
 // encodeColumnVector 将 ColumnVector 编码为 EncodedColumn。

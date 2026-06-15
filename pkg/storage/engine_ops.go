@@ -77,6 +77,13 @@ func (e *Engine) WriteBatch(rows []WriteRow) error {
 		return nil
 	}
 
+	// 校验所有行的 key 不为空，避免空 key 导致后续存储层异常
+	for i, row := range rows {
+		if row.Key == "" {
+			return fmt.Errorf("engine write batch: empty key at row %d is not allowed", i)
+		}
+	}
+
 	// Step 1: Allocate versions under lock (brief hold)
 	e.mu.Lock()
 	baseVersion := e.nextVersion

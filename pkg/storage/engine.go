@@ -160,6 +160,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 
 // Write 向引擎写入一行数据。
 func (e *Engine) Write(key string, values map[string]common.Value) error {
+	if key == "" {
+		return fmt.Errorf("engine write: empty key is not allowed")
+	}
+
 	// Step 1: Allocate version under lock (brief hold)
 	e.mu.Lock()
 	version := e.nextVersion
@@ -280,6 +284,8 @@ func (e *Engine) flushImmutable(immutable []*MemTable, cols []ColumnMeta) error 
 		e.mu.Lock()
 		if err := e.addSegment(seg, 0); err != nil {
 			e.mu.Unlock()
+			// 清理已刷盘但注册失败的段文件，避免磁盘资源泄漏
+			cleanupSegmentFile(seg)
 			remaining := immutable[flushedIdx+1:]
 			if len(remaining) > 0 {
 				e.mu.Lock()

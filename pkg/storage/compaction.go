@@ -324,6 +324,7 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 	// 先注册新 segment 的索引，再注销旧 segment 的索引，
 	// 确保任何时刻索引中都有数据可用，避免部分失败导致数据丢失。
 	if err := e.addSegment(newSeg, 1); err != nil {
+		cleanupSegmentFile(newSeg)
 		return fmt.Errorf("engine compact: %w", err)
 	}
 
