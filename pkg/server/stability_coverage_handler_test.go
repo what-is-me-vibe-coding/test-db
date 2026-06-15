@@ -134,6 +134,32 @@ func TestStabilityHandlePacketUnknownType(t *testing.T) {
 	}
 }
 
+func checkErrorResponsePacket(t *testing.T, pkt *Packet, wantMsg string) {
+	t.Helper()
+	if pkt == nil {
+		t.Fatal("newErrorResponse 不应返回 nil")
+	}
+	if pkt.Type != PacketResponse {
+		t.Errorf("Type = %d，期望 %d", pkt.Type, PacketResponse)
+	}
+	if pkt.Magic != Magic {
+		t.Errorf("Magic = 0x%08x，期望 0x%08x", pkt.Magic, Magic)
+	}
+	if pkt.Version != ProtocolVersion {
+		t.Errorf("Version = %d，期望 %d", pkt.Version, ProtocolVersion)
+	}
+	var resp Response
+	if err := json.Unmarshal(pkt.Payload, &resp); err != nil {
+		t.Fatalf("JSON 反序列化失败: %v", err)
+	}
+	if resp.Code != -1 {
+		t.Errorf("Code = %d，期望 -1", resp.Code)
+	}
+	if resp.Message != wantMsg {
+		t.Errorf("Message = %q，期望 %q", resp.Message, wantMsg)
+	}
+}
+
 // TestStabilityNewErrorResponse 测试 newErrorResponse 函数。
 func TestStabilityNewErrorResponse(t *testing.T) {
 	tests := []struct {
@@ -148,30 +174,7 @@ func TestStabilityNewErrorResponse(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pkt := newErrorResponse(tt.err)
-			if pkt == nil {
-				t.Fatal("newErrorResponse 不应返回 nil")
-			}
-			if pkt.Type != PacketResponse {
-				t.Errorf("Type = %d，期望 %d", pkt.Type, PacketResponse)
-			}
-			if pkt.Magic != Magic {
-				t.Errorf("Magic = 0x%08x，期望 0x%08x", pkt.Magic, Magic)
-			}
-			if pkt.Version != ProtocolVersion {
-				t.Errorf("Version = %d，期望 %d", pkt.Version, ProtocolVersion)
-			}
-
-			var resp Response
-			if err := json.Unmarshal(pkt.Payload, &resp); err != nil {
-				t.Fatalf("JSON 反序列化失败: %v", err)
-			}
-			if resp.Code != -1 {
-				t.Errorf("Code = %d，期望 -1", resp.Code)
-			}
-			if resp.Message != tt.wantMsg {
-				t.Errorf("Message = %q，期望 %q", resp.Message, tt.wantMsg)
-			}
+			checkErrorResponsePacket(t, newErrorResponse(tt.err), tt.wantMsg)
 		})
 	}
 }
@@ -255,7 +258,7 @@ func TestStabilityIsTransientAcceptErr(t *testing.T) {
 func TestStabilityHTTPQueryGetMethod(t *testing.T) {
 	srv := newStabilityServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/query", nil)
+	req := httptest.NewRequest(http.MethodGet, "/query", http.NoBody)
 	w := httptest.NewRecorder()
 	srv.httpQuery(w, req)
 
@@ -279,7 +282,7 @@ func TestStabilityHTTPQueryGetMethod(t *testing.T) {
 func TestStabilityHTTPWriteGetMethod(t *testing.T) {
 	srv := newStabilityServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/write", nil)
+	req := httptest.NewRequest(http.MethodGet, "/write", http.NoBody)
 	w := httptest.NewRecorder()
 	srv.httpWrite(w, req)
 
@@ -303,7 +306,7 @@ func TestStabilityHTTPWriteGetMethod(t *testing.T) {
 func TestStabilityHTTPHealthPostMethod(t *testing.T) {
 	srv := newStabilityServer(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/health", nil)
+	req := httptest.NewRequest(http.MethodPost, "/health", http.NoBody)
 	w := httptest.NewRecorder()
 	srv.httpHealth(w, req)
 

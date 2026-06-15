@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -101,7 +102,9 @@ func TestStabilityWALOpenPartialBody(t *testing.T) {
 	binary.LittleEndian.PutUint32(partialRecord[0:4], totalLen)
 	partialRecord[4] = walTypeWrite
 
-	corruptData := append(data, partialRecord...)
+	corruptData := make([]byte, len(data), len(data)+len(partialRecord))
+	copy(corruptData, data)
+	corruptData = append(corruptData, partialRecord...)
 	if err := os.WriteFile(path, corruptData, 0644); err != nil {
 		t.Fatalf("WriteFile 失败: %v", err)
 	}
@@ -134,7 +137,9 @@ func TestStabilityWALOpenCRCMismatch(t *testing.T) {
 	buf2 := encodeRecord(walTypeWrite, []byte("bad_payload"))
 	buf2[len(buf2)-1] ^= 0xFF // 损坏 CRC
 
-	fileData := append(buf1, buf2...)
+	fileData := make([]byte, len(buf1), len(buf1)+len(buf2))
+	copy(fileData, buf1)
+	fileData = append(fileData, buf2...)
 	if err := os.WriteFile(path, fileData, 0644); err != nil {
 		t.Fatalf("WriteFile 失败: %v", err)
 	}
@@ -184,7 +189,9 @@ func TestStabilityWALOpenInvalidLength(t *testing.T) {
 	invalidHeader := make([]byte, walHeaderSize+5)
 	binary.LittleEndian.PutUint32(invalidHeader, 0)
 
-	corruptData := append(data, invalidHeader...)
+	corruptData := make([]byte, len(data), len(data)+len(invalidHeader))
+	copy(corruptData, data)
+	corruptData = append(corruptData, invalidHeader...)
 	if err := os.WriteFile(path, corruptData, 0644); err != nil {
 		t.Fatalf("WriteFile 失败: %v", err)
 	}
@@ -304,7 +311,7 @@ func TestStabilityReadBloomFilterValidData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("期望正常 bloom filter 不返回错误，得到: %v", err)
 	}
-	if string(bloom) != string(bloomData) {
+	if !bytes.Equal(bloom, bloomData) {
 		t.Errorf("bloom 数据不匹配")
 	}
 	if pos != 4+len(bloomData) {
@@ -383,7 +390,7 @@ func TestStabilityReadRawKeysValidData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("期望正常 raw keys 不返回错误，得到: %v", err)
 	}
-	if string(rawKeys) != string(keysData) {
+	if !bytes.Equal(rawKeys, keysData) {
 		t.Errorf("rawKeys 数据不匹配")
 	}
 	if pos != 4+len(keysData) {
@@ -480,10 +487,10 @@ func TestStabilityDeserializeFooterRoundTrip(t *testing.T) {
 				i, got.ColumnID, got.Min, got.Max, got.NullCount)
 		}
 	}
-	if string(deserialized.BloomFilter) != string(footer.BloomFilter) {
+	if !bytes.Equal(deserialized.BloomFilter, footer.BloomFilter) {
 		t.Errorf("BloomFilter 不匹配")
 	}
-	if string(deserialized.RawKeys) != string(footer.RawKeys) {
+	if !bytes.Equal(deserialized.RawKeys, footer.RawKeys) {
 		t.Errorf("RawKeys 不匹配")
 	}
 	if deserialized.IndexOffset != footer.IndexOffset {
@@ -606,6 +613,29 @@ func TestStabilityWALMaybeRotateNoRotationNeeded(t *testing.T) {
 	}
 }
 
+func createAndCorruptWAL(t *testing.T, dir, filename string, validPayload []byte, makeInvalidRec func() []byte) string {
+	t.Helper()
+	path := filepath.Join(dir, filename)
+	w, err := CreateWAL(path)
+	if err != nil {
+		t.Fatalf("CreateWAL 失败: %v", err)
+	}
+	_ = w.AppendWrite(validPayload)
+	_ = w.Sync()
+	_ = w.Close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile 失败: %v", err)
+	}
+
+	invalidRec := makeInvalidRec()
+	if err := os.WriteFile(path, append(data, invalidRec...), 0644); err != nil {
+		t.Fatalf("WriteFile 失败: %v", err)
+	}
+	return path
+}
+
 // TestStabilityReplayWALInvalidLengths 测试 replayWAL 遇到
 // totalLen 过小或过大时停止回放。
 func TestStabilityReplayWALInvalidLengths(t *testing.T) {
@@ -613,27 +643,12 @@ func TestStabilityReplayWALInvalidLengths(t *testing.T) {
 
 	// 子测试：totalLen 过小
 	t.Run("TooSmall", func(t *testing.T) {
-		path := filepath.Join(dir, "small_total.wal")
-		w, err := CreateWAL(path)
-		if err != nil {
-			t.Fatalf("CreateWAL 失败: %v", err)
-		}
-		_ = w.AppendWrite([]byte("first"))
-		_ = w.Sync()
-		_ = w.Close()
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile 失败: %v", err)
-		}
-
-		invalidRec := make([]byte, walHeaderSize+1)
-		binary.LittleEndian.PutUint32(invalidRec, 1) // totalLen = 1，无效
-		invalidRec[4] = 0xEE
-
-		if err := os.WriteFile(path, append(data, invalidRec...), 0644); err != nil {
-			t.Fatalf("WriteFile 失败: %v", err)
-		}
+		path := createAndCorruptWAL(t, dir, "small_total.wal", []byte("first"), func() []byte {
+			invalidRec := make([]byte, walHeaderSize+1)
+			binary.LittleEndian.PutUint32(invalidRec, 1) // totalLen = 1，无效
+			invalidRec[4] = 0xEE
+			return invalidRec
+		})
 
 		recovered, recs, err := OpenWAL(path)
 		if err != nil {
@@ -648,26 +663,11 @@ func TestStabilityReplayWALInvalidLengths(t *testing.T) {
 
 	// 子测试：totalLen 过大
 	t.Run("TooLarge", func(t *testing.T) {
-		path := filepath.Join(dir, "huge_total.wal")
-		w, err := CreateWAL(path)
-		if err != nil {
-			t.Fatalf("CreateWAL 失败: %v", err)
-		}
-		_ = w.AppendWrite([]byte("valid"))
-		_ = w.Sync()
-		_ = w.Close()
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile 失败: %v", err)
-		}
-
-		invalidRec := make([]byte, walHeaderSize+10)
-		binary.LittleEndian.PutUint32(invalidRec, uint32(maxRecordPayload+walTypeSize+walCRCSize+1))
-
-		if err := os.WriteFile(path, append(data, invalidRec...), 0644); err != nil {
-			t.Fatalf("WriteFile 失败: %v", err)
-		}
+		path := createAndCorruptWAL(t, dir, "huge_total.wal", []byte("valid"), func() []byte {
+			invalidRec := make([]byte, walHeaderSize+10)
+			binary.LittleEndian.PutUint32(invalidRec, uint32(maxRecordPayload+walTypeSize+walCRCSize+1))
+			return invalidRec
+		})
 
 		recovered, recs, err := OpenWAL(path)
 		if err != nil {
