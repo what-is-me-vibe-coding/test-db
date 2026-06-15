@@ -124,7 +124,7 @@ func (w *WAL) Append(tp byte, payload []byte) error {
 }
 
 // AppendBatch 批量追加多条记录，在单次锁获取内写入，减少锁竞争。
-// 优化：预计算总大小并合并为单次 Write 调用，减少系统调用次数和缓冲区分配。
+// 优化：预计算总大小并直接编码到合并缓冲区，避免逐条 encodeRecord + copy 的双重拷贝开销。
 func (w *WAL) AppendBatch(records []BatchRecord) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -142,11 +142,19 @@ func (w *WAL) AppendBatch(records []BatchRecord) error {
 		totalSize += walHeaderSize + walTypeSize + len(rec.Payload) + walCRCSize
 	}
 
+	// 直接编码到 combined 缓冲区，避免逐条 encodeRecord 的中间分配和拷贝
 	combined := make([]byte, 0, totalSize)
+	var lenBuf [4]byte
 	for _, rec := range records {
-		encoded := encodeRecord(rec.Type, rec.Payload)
-		combined = append(combined, encoded...)
-		putRecordBuf(encoded)
+		totalLen := walTypeSize + len(rec.Payload) + walCRCSize
+		binary.LittleEndian.PutUint32(lenBuf[:], uint32(totalLen))
+		combined = append(combined, lenBuf[:]...)
+		combined = append(combined, rec.Type)
+		combined = append(combined, rec.Payload...)
+		crc := crc32.Checksum(combined[len(combined)-walTypeSize-len(rec.Payload):], crcTable)
+		var crcBuf [4]byte
+		binary.LittleEndian.PutUint32(crcBuf[:], crc)
+		combined = append(combined, crcBuf[:]...)
 	}
 
 	n, err := w.file.Write(combined)

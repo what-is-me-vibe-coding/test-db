@@ -23,6 +23,7 @@ type Engine struct {
 	segments               []*Segment
 	segmentMap             map[uint64]*Segment
 	segmentLevels          []int
+	l0SegmentCount         int // 缓存 L0 Segment 数量，避免每次线性扫描
 	nextVersion            uint64
 	primaryIndex           *index.PrimaryIndex
 	bloomIndex             *index.BloomIndex
@@ -228,6 +229,7 @@ func (e *Engine) flushImmutable(immutable []*MemTable, cols []ColumnMeta) error 
 		e.segments = append(e.segments, seg)
 		e.segmentMap[seg.ID] = seg
 		e.segmentLevels = append(e.segmentLevels, 0)
+		e.l0SegmentCount++
 		if err := e.registerSegmentIndexes(seg, 0); err != nil {
 			e.mu.Unlock()
 			remaining := immutable[flushedIdx+1:]
@@ -314,6 +316,7 @@ func (e *Engine) Close() error {
 		e.segments = append(e.segments, seg)
 		e.segmentMap[seg.ID] = seg
 		e.segmentLevels = append(e.segmentLevels, 0)
+		e.l0SegmentCount++
 		if err := e.registerSegmentIndexes(seg, 0); err != nil {
 			log.Printf("engine close: register segment %d indexes: %v", seg.ID, err)
 		}
@@ -365,13 +368,7 @@ func (e *Engine) SegmentCount() int {
 func (e *Engine) L0SegmentCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	count := 0
-	for _, lvl := range e.segmentLevels {
-		if lvl == 0 {
-			count++
-		}
-	}
-	return count
+	return e.l0SegmentCount
 }
 
 // MemTableSize 返回当前活跃 MemTable 的大小。
