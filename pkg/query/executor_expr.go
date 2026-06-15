@@ -243,6 +243,10 @@ func mulOverflows(li, ri int64) bool {
 		return li > math.MaxInt64/ri || li < math.MinInt64/ri
 	}
 	if ri < 0 {
+		// 特殊处理 ri == -1：MinInt64 / -1 在 Go 中会导致整数除法溢出（运行时 panic）
+		if ri == -1 {
+			return li == math.MinInt64
+		}
 		return li > math.MinInt64/ri || li < math.MaxInt64/ri
 	}
 	return false
