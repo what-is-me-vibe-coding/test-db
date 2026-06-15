@@ -30,12 +30,9 @@ type memTableIterator struct {
 }
 
 // newMemTableIterator creates an iterator over a MemTable for the given range.
+// 直接使用 ScanRange 返回 ScanEntry 切片，避免中间结构体转换的双重拷贝。
 func newMemTableIterator(mem *MemTable, start, end string) *memTableIterator {
-	pairs := mem.Scan(start, end)
-	entries := make([]ScanEntry, len(pairs))
-	for i, p := range pairs {
-		entries[i] = ScanEntry{Key: p.Key, Value: p.Value}
-	}
+	entries := mem.ScanRange(start, end)
 	return &memTableIterator{entries: entries, pos: -1}
 }
 

@@ -71,17 +71,14 @@ type WriteRow struct {
 }
 
 // WriteBatch 批量写入多行数据，所有行共享一次 WAL sync，大幅提升批量写入吞吐。
-// 优化：释放引擎锁进行 WAL I/O，避免阻塞并发读写；支持 GroupCommitter。
+// 优化：原子化版本号分配，释放引擎锁进行 WAL I/O，避免阻塞并发读写；支持 GroupCommitter。
 func (e *Engine) WriteBatch(rows []WriteRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
-	// Step 1: Allocate versions under lock (brief hold)
-	e.mu.Lock()
-	baseVersion := e.nextVersion
-	e.nextVersion += uint64(len(rows))
-	e.mu.Unlock()
+	// Step 1: 原子分配版本号（无锁，减少写路径竞争）
+	baseVersion := e.nextVersion.Add(uint64(len(rows))) - uint64(len(rows)) + 1
 
 	// Step 2: Serialize WAL record (no lock needed, CPU-bound)
 	payload, err := serializeBatchWriteRecord(rows, baseVersion)
@@ -227,6 +224,7 @@ func (e *Engine) getFromSegments(key string) (Row, bool) {
 
 // fetchColumnsFromSegment 从 Segment 中提取指定行所有列的值，优先从 BlockCache 读取。
 // 解码后的列数据在大小允许时写入 BlockCache，防止大体积冷数据驱逐热数据。
+// 优化：预分配 map 容量与列数匹配，减少 rehash 开销。
 func (e *Engine) fetchColumnsFromSegment(seg *Segment, segID uint64, rowIdx uint32) map[string]common.Value {
 	columns := make(map[string]common.Value, len(e.columnMeta))
 	for colIdx, col := range e.columnMeta {

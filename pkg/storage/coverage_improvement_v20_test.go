@@ -425,11 +425,11 @@ func TestCoverageV20_Engine_ReplayEmptyWAL(t *testing.T) {
 		flusher:      NewFlusher(dir, newSegmentIDGen()),
 		compactor:    NewCompactor(dir, newSegmentIDGen()),
 		segmentMap:   make(map[uint64]*Segment),
-		nextVersion:  1,
 		primaryIndex: index.NewPrimaryIndex(),
 		bloomIndex:   index.NewBloomIndex(),
 		sparseIndex:  index.NewSparseIndex(),
 	}
+	eng.nextVersion.Store(1)
 
 	// 回放空记录
 	err := eng.replayWALRecords(nil)
