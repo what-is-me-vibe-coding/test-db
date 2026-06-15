@@ -107,7 +107,7 @@ func DecompressColumn(enc *EncodedColumn) error {
 	}
 	data, err := Decompress(enc.Data)
 	if err != nil {
-		return err
+		return fmt.Errorf("decompress column: %w", err)
 	}
 	enc.Data = data
 	return nil

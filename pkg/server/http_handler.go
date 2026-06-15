@@ -37,8 +37,9 @@ func (s *Server) registerHTTPHandlers() *http.ServeMux {
 	return mux
 }
 
-// httpQuery 处理 POST /query 请求，执行 SQL 查询。
-func (s *Server) httpQuery(w http.ResponseWriter, r *http.Request) {
+// handlePostJSON 是通用的 POST JSON 请求处理器，封装方法检查、请求解码和响应写入逻辑。
+// handler 参数接收解码后的请求，返回响应和可能的内部错误。
+func (s *Server) handlePostJSON(w http.ResponseWriter, r *http.Request, req any, handler func() (*Response, error)) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, &Response{
 			Code: -1, Message: msgPostOnly,
@@ -46,15 +47,14 @@ func (s *Server) httpQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req QueryRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodySize)).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodySize)).Decode(req); err != nil {
 		writeJSON(w, http.StatusBadRequest, &Response{
 			Code: -1, Message: fmt.Sprintf("解析请求体失败: %v", err),
 		})
 		return
 	}
 
-	resp, err := s.handleQuery(&req)
+	resp, err := handler()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, &Response{
 			Code: -1, Message: fmt.Sprintf("内部错误: %v", err),
@@ -68,35 +68,20 @@ func (s *Server) httpQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, statusCode, resp)
 }
 
+// httpQuery 处理 POST /query 请求，执行 SQL 查询。
+func (s *Server) httpQuery(w http.ResponseWriter, r *http.Request) {
+	var req QueryRequest
+	s.handlePostJSON(w, r, &req, func() (*Response, error) {
+		return s.handleQuery(&req)
+	})
+}
+
 // httpWrite 处理 POST /write 请求，批量写入数据。
 func (s *Server) httpWrite(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, &Response{
-			Code: -1, Message: msgPostOnly,
-		})
-		return
-	}
-
 	var req WriteRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRequestBodySize)).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, &Response{
-			Code: -1, Message: fmt.Sprintf("解析请求体失败: %v", err),
-		})
-		return
-	}
-
-	resp, err := s.handleWrite(&req)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, &Response{
-			Code: -1, Message: fmt.Sprintf("内部错误: %v", err),
-		})
-		return
-	}
-	statusCode := http.StatusOK
-	if resp.Code != 0 {
-		statusCode = http.StatusBadRequest
-	}
-	writeJSON(w, statusCode, resp)
+	s.handlePostJSON(w, r, &req, func() (*Response, error) {
+		return s.handleWrite(&req)
+	})
 }
 
 // httpHealth 处理 GET /health 请求，返回健康状态。

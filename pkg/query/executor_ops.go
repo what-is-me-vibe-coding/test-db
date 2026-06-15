@@ -32,15 +32,9 @@ func (e *Executor) executeFilter(filter *FilterNode) (*execResult, error) {
 }
 
 // fillRowVals 将 chunk 中指定行的列值填入 rowVals map（复用已有 map）。
-func fillRowVals(rowVals map[string]common.Value, cols []*storage.ColumnVector, schema []ColumnDef, row uint32) {
-	for k := range rowVals {
-		delete(rowVals, k)
-	}
-	for i, col := range cols {
-		if i < len(schema) {
-			rowVals[schema[i].Name] = col.GetValue(row)
-		}
-	}
+// 统一使用 buildRowValues 实现，避免重复逻辑。
+func fillRowVals(rowVals map[string]common.Value, chunk *storage.Chunk, schema []ColumnDef, row uint32) {
+	buildRowValues(chunk, schema, row, rowVals)
 }
 
 // filterChunk 对单个 Chunk 执行向量化过滤。
@@ -55,7 +49,7 @@ func filterChunk(input *storage.Chunk, cond Expression, schema []ColumnDef, colI
 
 	selection := make([]uint32, 0, rowCount)
 	for row := uint32(0); row < rowCount; row++ {
-		fillRowVals(rowVals, cols, schema, row)
+		fillRowVals(rowVals, input, schema, row)
 		val, err := evalExpr(cond, rowVals, colIdxMap)
 		if err != nil {
 			continue
@@ -128,14 +122,13 @@ func projectChunk(input *storage.Chunk, exprs []Expression, inputSchema, outputS
 	output := storage.NewChunk(defaultChunkSize)
 
 	rowVals := make(map[string]common.Value, len(inputSchema))
-	cols := input.Columns()
 
 	for exprIdx, expr := range exprs {
 		colDef := outputSchema[exprIdx]
 		newCol := storage.NewColumnVector(uint32(exprIdx), colDef.Type, rowCount)
 
 		for row := uint32(0); row < rowCount; row++ {
-			fillRowVals(rowVals, cols, inputSchema, row)
+			fillRowVals(rowVals, input, inputSchema, row)
 			val, err := evalExpr(expr, rowVals, colIdxMap)
 			if err != nil {
 				return nil, fmt.Errorf("executor project: row %d: %w", row, err)

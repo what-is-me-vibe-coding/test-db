@@ -176,6 +176,25 @@ func (e *Engine) Write(key string, values map[string]common.Value) error {
 	return nil
 }
 
+// freezeActiveMemTable 将活跃 MemTable 冻结并移入 immutable 队列。
+// 调用者必须持有 e.mu 锁。
+func (e *Engine) freezeActiveMemTable() {
+	if e.activeMem.Len() > 0 {
+		e.activeMem.Freeze()
+		e.immutable = append(e.immutable, e.activeMem)
+		e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
+	}
+}
+
+// drainImmutable 冻结活跃 MemTable 并排空 immutable 队列，返回待刷写的 memtable 列表。
+// 调用者必须持有 e.mu 锁，返回后 immutable 队列已被清空。
+func (e *Engine) drainImmutable() []*MemTable {
+	e.freezeActiveMemTable()
+	immutable := e.immutable
+	e.immutable = nil
+	return immutable
+}
+
 // Flush 将内存表中的数据刷写到磁盘。
 func (e *Engine) Flush(cols []ColumnMeta) error {
 	e.mu.Lock()
@@ -185,14 +204,7 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
 		flushVersion = e.nextVersion - 1
 	}
 
-	if e.activeMem.Len() > 0 {
-		e.activeMem.Freeze()
-		e.immutable = append(e.immutable, e.activeMem)
-		e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
-	}
-
-	immutable := e.immutable
-	e.immutable = nil
+	immutable := e.drainImmutable()
 
 	if len(e.columnMeta) == 0 && len(cols) > 0 {
 		e.columnMeta = make([]ColumnMeta, len(cols))
@@ -293,14 +305,7 @@ func (e *Engine) Close() error {
 	e.mu.Lock()
 
 	// 将 activeMem 中未刷写的数据移入 immutable，确保 Close 后数据不丢失
-	if e.activeMem.Len() > 0 {
-		e.activeMem.Freeze()
-		e.immutable = append(e.immutable, e.activeMem)
-		e.activeMem = NewMemTableWithSize(e.activeMem.maxSize)
-	}
-
-	immutable := e.immutable
-	e.immutable = nil
+	immutable := e.drainImmutable()
 	cols := e.columnMeta
 	e.mu.Unlock()
 
