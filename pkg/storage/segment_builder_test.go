@@ -306,6 +306,81 @@ func TestAddEncodedColumnNil(t *testing.T) {
 	}
 }
 
+// TestAddEncodedColumnOwnershipTransfer 测试 AddEncodedColumn 所有权转移后原始 enc 被清零
+func TestAddEncodedColumnOwnershipTransfer(t *testing.T) {
+	builder := NewSegmentBuilder(301, "a", "c")
+	enc, err := EncodeColumn(common.TypeInt64, []int64{1, 2, 3}, 3, nil)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	// 保存原始数据指针用于后续验证
+	originalData := enc.Data
+	originalRowCount := enc.RowCount
+
+	builder.AddEncodedColumn(enc)
+
+	// 验证原始 enc 被清零
+	if enc.RowCount != 0 {
+		t.Errorf("AddEncodedColumn 后 enc.RowCount 应为 0，得到 %d", enc.RowCount)
+	}
+	if len(enc.Data) != 0 {
+		t.Errorf("AddEncodedColumn 后 enc.Data 应为空，得到 len=%d", len(enc.Data))
+	}
+	if len(enc.Offsets) != 0 {
+		t.Errorf("AddEncodedColumn 后 enc.Offsets 应为空，得到 len=%d", len(enc.Offsets))
+	}
+	if len(enc.Dict) != 0 {
+		t.Errorf("AddEncodedColumn 后 enc.Dict 应为空，得到 len=%d", len(enc.Dict))
+	}
+	if len(enc.Nulls) != 0 {
+		t.Errorf("AddEncodedColumn 后 enc.Nulls 应为空，得到 len=%d", len(enc.Nulls))
+	}
+
+	// 验证 builder 中的列数据完整且与原始数据共享底层内存
+	if builder.columns[0].RowCount != originalRowCount {
+		t.Errorf("builder 中 RowCount 应为 %d，得到 %d", originalRowCount, builder.columns[0].RowCount)
+	}
+	if &builder.columns[0].Data[0] != &originalData[0] {
+		t.Error("builder 中的列数据应与原始数据共享底层内存（所有权转移）")
+	}
+}
+
+// TestBuildKeysDeepCopy 测试 Build 后 Segment.Keys 与 builder.keys 生命周期独立
+func TestBuildKeysDeepCopy(t *testing.T) {
+	keys := []string{"a", "b", "c"}
+	values := []int64{1, 2, 3}
+
+	builder := NewSegmentBuilder(302, "a", "c")
+	builder.SetKeys(keys)
+	enc, err := EncodeColumn(common.TypeInt64, values, 3, nil)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	builder.AddEncodedColumn(enc)
+
+	seg, err := builder.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	// 验证 Segment.Keys 与 builder.keys 不共享底层内存
+	if len(seg.Keys) != len(keys) {
+		t.Fatalf("Segment.Keys 长度应为 %d，得到 %d", len(keys), len(seg.Keys))
+	}
+	for i, k := range seg.Keys {
+		if k != keys[i] {
+			t.Errorf("Segment.Keys[%d] 应为 %q，得到 %q", i, keys[i], k)
+		}
+	}
+
+	// 修改 builder 的 keys 不应影响已构建的 Segment
+	builder.keys[0] = "modified"
+	if seg.Keys[0] != "a" {
+		t.Errorf("修改 builder.keys 后 Segment.Keys[0] 应仍为 'a'，得到 %q", seg.Keys[0])
+	}
+}
+
 func buildTestSegmentForSegment(t *testing.T) *Segment {
 	t.Helper()
 	keys := []string{"a", "b", "c"}

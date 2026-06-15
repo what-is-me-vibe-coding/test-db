@@ -529,10 +529,15 @@ func TestAddEncodedColumn_WithAllFields(t *testing.T) {
 		t.Fatalf("期望 1 列，得到 %d", len(builder.columns))
 	}
 
-	// 验证所有权转移：AddEncodedColumn 转移所有权而非深拷贝，
-	// 因此 builder 中的列与原始 enc 共享底层内存（性能优化）。
-	if &builder.columns[0].Data[0] != &enc.Data[0] {
-		t.Error("Data 应为所有权转移，应共享底层内存")
+	// 验证所有权转移：AddEncodedColumn 转移所有权后清零原始 enc，
+	// 防止调用方误用已转移的数据。
+	if len(enc.Data) != 0 || len(enc.Offsets) != 0 || len(enc.Dict) != 0 || len(enc.Nulls) != 0 {
+		t.Error("AddEncodedColumn 后原始 enc 应被清零")
+	}
+
+	// 验证 builder 中的列数据完整
+	if builder.columns[0].RowCount != 3 {
+		t.Errorf("期望 RowCount=3，得到 %d", builder.columns[0].RowCount)
 	}
 }
 
