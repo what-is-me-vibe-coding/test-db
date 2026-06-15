@@ -92,9 +92,10 @@ func NewSegmentBuilder(id uint64, minKey, maxKey string) *SegmentBuilder {
 }
 
 // SetKeys 设置主键数据，用于构建布隆过滤器。
+// 直接赋值 keys 切片引用，避免不必要的拷贝。
+// Build 时会对 seg.Keys 做深拷贝，因此 builder 后续修改不影响已构建的 Segment。
 func (b *SegmentBuilder) SetKeys(keys []string) {
-	b.keys = make([]string, len(keys))
-	copy(b.keys, keys)
+	b.keys = keys
 }
 
 // SetBloomFPRate 设置布隆过滤器目标误判率。
@@ -103,32 +104,16 @@ func (b *SegmentBuilder) SetBloomFPRate(fpRate float64) {
 }
 
 // AddEncodedColumn 添加一个已编码的列。
+// 转移 EncodedColumn 所有权，避免深拷贝开销。
+// 调用后 enc 被清零（*enc = EncodedColumn{}），防止调用方误用已转移的数据。
+// SegmentBuilder 在 Build 时会对列数据进行压缩（原地修改），
+// 因此所有权转移是安全的——builder 是数据的唯一消费者。
 func (b *SegmentBuilder) AddEncodedColumn(enc *EncodedColumn) {
 	if enc == nil {
 		return
 	}
-	clone := EncodedColumn{
-		Encoding: enc.Encoding,
-		Type:     enc.Type,
-		RowCount: enc.RowCount,
-	}
-	if len(enc.Data) > 0 {
-		clone.Data = make([]byte, len(enc.Data))
-		copy(clone.Data, enc.Data)
-	}
-	if len(enc.Offsets) > 0 {
-		clone.Offsets = make([]uint32, len(enc.Offsets))
-		copy(clone.Offsets, enc.Offsets)
-	}
-	if len(enc.Dict) > 0 {
-		clone.Dict = make([]string, len(enc.Dict))
-		copy(clone.Dict, enc.Dict)
-	}
-	if len(enc.Nulls) > 0 {
-		clone.Nulls = make([]byte, len(enc.Nulls))
-		copy(clone.Nulls, enc.Nulls)
-	}
-	b.columns = append(b.columns, clone)
+	b.columns = append(b.columns, *enc)
+	*enc = EncodedColumn{}
 }
 
 // computeColumnStat 计算单列的统计信息。
@@ -373,6 +358,7 @@ func (b *SegmentBuilder) Build() (*Segment, error) {
 			return nil, fmt.Errorf("segment builder: build bloom filter: %w", err)
 		}
 		seg.Footer.BloomFilter = data
+		// 深拷贝 keys 到 Segment，确保 Segment 与 builder 生命周期独立
 		seg.Keys = make([]string, len(b.keys))
 		copy(seg.Keys, b.keys)
 		seg.Footer.RawKeys = serializeKeys(b.keys)
