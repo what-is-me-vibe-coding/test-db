@@ -380,14 +380,19 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 	// 按 ID 删除旧 segment
 	remaining := make([]*Segment, 0, len(e.segments))
 	remainingLevels := make([]int, 0, len(e.segmentLevels))
+	l0Count := 0
 	for i, seg := range e.segments {
 		if _, ok := compactIDs[seg.ID]; !ok {
 			remaining = append(remaining, seg)
 			remainingLevels = append(remainingLevels, e.segmentLevels[i])
+			if e.segmentLevels[i] == 0 {
+				l0Count++
+			}
 		}
 	}
 	e.segments = remaining
 	e.segmentLevels = remainingLevels
+	e.l0SegmentCount = l0Count
 
 	if err := e.compactor.CleanupSegments(allSegments); err != nil {
 		return fmt.Errorf("engine compact: cleanup: %w", err)

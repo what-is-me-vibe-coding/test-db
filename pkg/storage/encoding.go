@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
@@ -170,22 +171,57 @@ func encodePlainTimestamp(data any, rowCount uint32, nulls *common.Bitmap) (*Enc
 	return newPlainEncodedColumn(common.TypeTimestamp, rowCount, buf, nulls), nil
 }
 
-// encodeUint64Batch 将 int64 切片编码为小端字节序列
+// encodeUint64Batch 将 int64 切片编码为小端字节序列。
+// 在小端架构（x86/ARM）上使用 unsafe 零拷贝转换，避免逐元素 binary.LittleEndian 调用；
+// 在大端架构上回退到逐元素转换保证正确性。
 func encodeUint64Batch(ints []int64, rowCount uint32) []byte {
 	buf := make([]byte, rowCount*8)
+	if rowCount == 0 {
+		return buf
+	}
+	// 小端架构：直接内存拷贝，零转换开销
+	if isLittleEndian() {
+		src := unsafe.Slice((*byte)(unsafe.Pointer(&ints[0])), int(rowCount)*8)
+		copy(buf, src)
+		return buf
+	}
+	// 大端架构回退
 	for i := uint32(0); i < rowCount; i++ {
 		binary.LittleEndian.PutUint64(buf[i*8:], uint64(ints[i]))
 	}
 	return buf
 }
 
-// encodeFloat64Batch 将 float64 切片编码为小端字节序列
+// encodeFloat64Batch 将 float64 切片编码为小端字节序列。
+// 在小端架构上使用 unsafe 零拷贝转换。
 func encodeFloat64Batch(floats []float64, rowCount uint32) []byte {
 	buf := make([]byte, rowCount*8)
+	if rowCount == 0 {
+		return buf
+	}
+	if isLittleEndian() {
+		src := unsafe.Slice((*byte)(unsafe.Pointer(&floats[0])), int(rowCount)*8)
+		copy(buf, src)
+		return buf
+	}
 	for i := uint32(0); i < rowCount; i++ {
 		binary.LittleEndian.PutUint64(buf[i*8:], math.Float64bits(floats[i]))
 	}
 	return buf
+}
+
+// isLittleEndian 检测当前系统是否为小端字节序。
+// 结果在进程生命周期内不变，适合缓存为包级变量。
+func isLittleEndian() bool {
+	// 缓存结果避免重复检测
+	return isLE
+}
+
+var isLE = detectLittleEndian()
+
+func detectLittleEndian() bool {
+	var v uint16 = 1
+	return *(*byte)(unsafe.Pointer(&v)) == 1
 }
 
 // newPlainEncodedColumn 创建 Plain 编码的 EncodedColumn
@@ -308,26 +344,11 @@ func decodePlain(enc *EncodedColumn) (any, *common.Bitmap, error) {
 
 	switch enc.Type {
 	case common.TypeInt64:
-		count := len(enc.Data) / 8
-		ints := make([]int64, count)
-		for i := 0; i < count; i++ {
-			ints[i] = int64(binary.LittleEndian.Uint64(enc.Data[i*8:]))
-		}
-		return ints, nulls, nil
+		return decodePlainInt64(enc.Data), nulls, nil
 	case common.TypeFloat64:
-		count := len(enc.Data) / 8
-		floats := make([]float64, count)
-		for i := 0; i < count; i++ {
-			floats[i] = math.Float64frombits(binary.LittleEndian.Uint64(enc.Data[i*8:]))
-		}
-		return floats, nulls, nil
+		return decodePlainFloat64(enc.Data), nulls, nil
 	case common.TypeTimestamp:
-		count := len(enc.Data) / 8
-		times := make([]int64, count)
-		for i := 0; i < count; i++ {
-			times[i] = int64(binary.LittleEndian.Uint64(enc.Data[i*8:]))
-		}
-		return times, nulls, nil
+		return decodePlainTimestamp(enc.Data), nulls, nil
 	case common.TypeString:
 		strs := make([]string, enc.RowCount)
 		for i := uint32(0); i < enc.RowCount; i++ {
@@ -339,6 +360,51 @@ func decodePlain(enc *EncodedColumn) (any, *common.Bitmap, error) {
 	default:
 		return nil, nil, fmt.Errorf("plain decode: unsupported type %v", enc.Type)
 	}
+}
+
+// decodePlainInt64 从小端字节序列解码 int64 切片。
+func decodePlainInt64(data []byte) []int64 {
+	count := len(data) / 8
+	ints := make([]int64, count)
+	if count > 0 && isLittleEndian() {
+		dst := unsafe.Slice((*byte)(unsafe.Pointer(&ints[0])), count*8)
+		copy(dst, data)
+	} else {
+		for i := 0; i < count; i++ {
+			ints[i] = int64(binary.LittleEndian.Uint64(data[i*8:]))
+		}
+	}
+	return ints
+}
+
+// decodePlainFloat64 从小端字节序列解码 float64 切片。
+func decodePlainFloat64(data []byte) []float64 {
+	count := len(data) / 8
+	floats := make([]float64, count)
+	if count > 0 && isLittleEndian() {
+		dst := unsafe.Slice((*byte)(unsafe.Pointer(&floats[0])), count*8)
+		copy(dst, data)
+	} else {
+		for i := 0; i < count; i++ {
+			floats[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[i*8:]))
+		}
+	}
+	return floats
+}
+
+// decodePlainTimestamp 从小端字节序列解码 timestamp（int64）切片。
+func decodePlainTimestamp(data []byte) []int64 {
+	count := len(data) / 8
+	times := make([]int64, count)
+	if count > 0 && isLittleEndian() {
+		dst := unsafe.Slice((*byte)(unsafe.Pointer(&times[0])), count*8)
+		copy(dst, data)
+	} else {
+		for i := 0; i < count; i++ {
+			times[i] = int64(binary.LittleEndian.Uint64(data[i*8:]))
+		}
+	}
+	return times
 }
 
 func decodeRLE(enc *EncodedColumn) (any, *common.Bitmap, error) {

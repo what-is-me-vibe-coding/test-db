@@ -36,13 +36,7 @@ func (e *Engine) rotateMemTable() error {
 }
 
 func (e *Engine) l0Count() int {
-	count := 0
-	for _, lvl := range e.segmentLevels {
-		if lvl == 0 {
-			count++
-		}
-	}
-	return count
+	return e.l0SegmentCount
 }
 
 // --- Engine Batch ---
