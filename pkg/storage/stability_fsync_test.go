@@ -154,7 +154,8 @@ func TestWriteAndSyncFilePerm(t *testing.T) {
 // 验证写入后的文件内容可以被正确读取和反序列化
 func TestFlusherWriteSegmentFsync(t *testing.T) {
 	tmpDir := t.TempDir()
-	flusher := NewFlusher(tmpDir)
+	idGen := newSegmentIDGen()
+	flusher := NewFlusher(tmpDir, idGen)
 
 	mem := NewMemTable()
 	_, _, _ = mem.Put("k1", Row{Version: 1, Columns: map[string]common.Value{
@@ -195,8 +196,8 @@ func TestFlusherWriteSegmentFsync(t *testing.T) {
 // TestCompactorBuildSegmentFsync 测试 Compactor.buildSegment 通过 fsync 确保数据持久化
 func TestCompactorBuildSegmentFsync(t *testing.T) {
 	tmpDir := t.TempDir()
-	compactor := NewCompactor(tmpDir)
-	compactor.nextID.Store(1)
+	idGen := newSegmentIDGen()
+	compactor := NewCompactor(tmpDir, idGen)
 
 	rows := []memRow{
 		{Key: "k1", Values: []common.Value{common.NewInt64(10)}},
