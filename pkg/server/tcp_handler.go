@@ -112,39 +112,36 @@ func (s *Server) handlePacket(pkt *Packet) (*Packet, error) {
 
 // handleQueryPacket 处理查询请求包。
 func (s *Server) handleQueryPacket(pkt *Packet) (*Packet, error) {
-	var req QueryRequest
-	if err := json.Unmarshal(pkt.Payload, &req); err != nil {
-		return nil, fmt.Errorf("解析查询请求: %w", err)
-	}
-
-	resp, err := s.handleQuery(&req)
-	if err != nil {
-		return nil, err
-	}
-
-	payload, err := json.Marshal(resp)
-	if err != nil {
-		return nil, fmt.Errorf("序列化查询响应: %w", err)
-	}
-
-	return NewPacket(PacketResponse, payload), nil
+	return s.handleTypedPacket(pkt, func(payload []byte) (*Response, error) {
+		var req QueryRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			return nil, fmt.Errorf("解析查询请求: %w", err)
+		}
+		return s.handleQuery(&req)
+	})
 }
 
 // handleWritePacket 处理写入请求包。
 func (s *Server) handleWritePacket(pkt *Packet) (*Packet, error) {
-	var req WriteRequest
-	if err := json.Unmarshal(pkt.Payload, &req); err != nil {
-		return nil, fmt.Errorf("解析写入请求: %w", err)
-	}
+	return s.handleTypedPacket(pkt, func(payload []byte) (*Response, error) {
+		var req WriteRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			return nil, fmt.Errorf("解析写入请求: %w", err)
+		}
+		return s.handleWrite(&req)
+	})
+}
 
-	resp, err := s.handleWrite(&req)
+// handleTypedPacket 是通用的 TCP 包处理器，封装业务处理和编码响应的逻辑。
+func (s *Server) handleTypedPacket(pkt *Packet, handler func([]byte) (*Response, error)) (*Packet, error) {
+	resp, err := handler(pkt.Payload)
 	if err != nil {
 		return nil, err
 	}
 
 	payload, err := json.Marshal(resp)
 	if err != nil {
-		return nil, fmt.Errorf("序列化写入响应: %w", err)
+		return nil, fmt.Errorf("序列化响应: %w", err)
 	}
 
 	return NewPacket(PacketResponse, payload), nil
