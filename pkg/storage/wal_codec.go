@@ -192,16 +192,14 @@ func readValueBinary(data []byte) (string, common.Value, int, error) {
 
 // fixedSizeTypeDesc 描述固定大小类型的读取方式，用于表驱动反序列化。
 type fixedSizeTypeDesc struct {
-	size     int
-	typeName string
-	read     func(data []byte) common.Value
+	size int
+	read func(data []byte) common.Value
 }
 
 // fixedSizeTypes 是固定大小类型的读取描述表，消除 readTypedValue 中的重复分支。
 var fixedSizeTypes = map[common.DataType]fixedSizeTypeDesc{
 	common.TypeBool: {
-		size:     1,
-		typeName: "bool",
+		size: 1,
 		read: func(data []byte) common.Value {
 			val := common.Value{Typ: common.TypeBool}
 			if data[0] != 0 {
@@ -211,22 +209,19 @@ var fixedSizeTypes = map[common.DataType]fixedSizeTypeDesc{
 		},
 	},
 	common.TypeInt64: {
-		size:     8,
-		typeName: "int64",
+		size: 8,
 		read: func(data []byte) common.Value {
 			return common.Value{Typ: common.TypeInt64, Int64: int64(binary.LittleEndian.Uint64(data[:8]))}
 		},
 	},
 	common.TypeFloat64: {
-		size:     8,
-		typeName: "float64",
+		size: 8,
 		read: func(data []byte) common.Value {
 			return common.Value{Typ: common.TypeFloat64, Float64: math.Float64frombits(binary.LittleEndian.Uint64(data[:8]))}
 		},
 	},
 	common.TypeTimestamp: {
-		size:     8,
-		typeName: "timestamp",
+		size: 8,
 		read: func(data []byte) common.Value {
 			return common.Value{Typ: common.TypeTimestamp, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(data[:8])))}
 		},
@@ -238,7 +233,7 @@ var fixedSizeTypes = map[common.DataType]fixedSizeTypeDesc{
 func readTypedValue(data []byte, typ common.DataType) (common.Value, int, error) {
 	if desc, ok := fixedSizeTypes[typ]; ok {
 		if len(data) < desc.size {
-			return common.Value{}, 0, fmt.Errorf("truncated %s value", desc.typeName)
+			return common.Value{}, 0, fmt.Errorf("truncated %s value", typ)
 		}
 		return desc.read(data), desc.size, nil
 	}
