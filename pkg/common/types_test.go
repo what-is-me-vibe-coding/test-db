@@ -150,6 +150,10 @@ func TestValueLess(t *testing.T) {
 		{NewBool(false), NewBool(true), true},
 		{NewBool(true), NewBool(false), false},
 		{NewInt64(1), NewFloat64(2), false}, // 类型不同
+		{NewTimestamp(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)), NewTimestamp(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)), true},
+		{NewTimestamp(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)), NewTimestamp(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)), false},
+		{NewTimestamp(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)), NewTimestamp(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)), false},
+		{Value{Typ: DataType(99), Valid: true}, Value{Typ: DataType(99), Valid: true}, false}, // 未知类型
 	}
 	for _, tt := range tests {
 		if got := tt.a.Less(tt.b); got != tt.want {
