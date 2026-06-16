@@ -395,6 +395,33 @@ func makeLargeFloat64Batch(n int) []float64 {
 // Compress/Decompress tests
 // ---------------------------------------------------------------------------
 
+// verifyCompressRoundTrip verifies that Compress/Decompress round-trips correctly.
+func verifyCompressRoundTrip(t *testing.T, data []byte) {
+	t.Helper()
+	compressed, err := Compress(data)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+	if len(data) == 0 {
+		if compressed != nil {
+			t.Errorf("expected nil for empty input, got %v", compressed)
+		}
+		return
+	}
+	decompressed, err := Decompress(compressed)
+	if err != nil {
+		t.Fatalf("Decompress: %v", err)
+	}
+	if len(decompressed) != len(data) {
+		t.Fatalf("decompressed length = %d, want %d", len(decompressed), len(data))
+	}
+	for i, b := range data {
+		if decompressed[i] != b {
+			t.Errorf("decompressed[%d] = %d, want %d", i, decompressed[i], b)
+		}
+	}
+}
+
 // TestCompressRoundTripVariousSizes verifies Compress/Decompress round-trip
 // with various data sizes.
 func TestCompressRoundTripVariousSizes(t *testing.T) {
@@ -410,28 +437,7 @@ func TestCompressRoundTripVariousSizes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			compressed, err := Compress(tt.data)
-			if err != nil {
-				t.Fatalf("Compress: %v", err)
-			}
-			if len(tt.data) == 0 {
-				if compressed != nil {
-					t.Errorf("expected nil for empty input, got %v", compressed)
-				}
-				return
-			}
-			decompressed, err := Decompress(compressed)
-			if err != nil {
-				t.Fatalf("Decompress: %v", err)
-			}
-			if len(decompressed) != len(tt.data) {
-				t.Fatalf("decompressed length = %d, want %d", len(decompressed), len(tt.data))
-			}
-			for i, b := range tt.data {
-				if decompressed[i] != b {
-					t.Errorf("decompressed[%d] = %d, want %d", i, decompressed[i], b)
-				}
-			}
+			verifyCompressRoundTrip(t, tt.data)
 		})
 	}
 }
