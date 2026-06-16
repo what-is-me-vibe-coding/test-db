@@ -199,6 +199,47 @@ SELECT name, temperature FROM sensor WHERE id = 1;
 SELECT * FROM sensor;
 ```
 
+### 3.5 段裁剪优化（Segment Pruning Optimization）
+
+WiDB 在扫描层面引入了段裁剪机制，利用稀疏索引的列统计信息在 I/O 前跳过不满足条件的 Segment，进一步减少无效数据读取：
+
+**核心机制**：
+
+- **ScanRangeWithPruning**：在创建扫描范围时，利用稀疏索引中每列的 Min/Max 统计信息，对每个 Segment 进行谓词检查，跳过不满足条件的 Segment
+- **ColumnPredicate**：列级谓词类型，封装了列名与比较条件，用于与 Segment 的 Min/Max 统计进行匹配
+- **自动提取**：引擎自动从 WHERE 子句中提取列谓词，无需手动指定
+
+**工作流程**：
+
+```
+查询请求（WHERE temp > 30）
+    │
+    ▼
+提取 ColumnPredicate ── temp > 30
+    │
+    ▼
+遍历 Segment 稀疏索引
+    │
+    ├─ Segment A: temp Min=10, Max=25 ── 跳过（Max < 30）
+    │
+    ├─ Segment B: temp Min=15, Max=45 ── 保留（与谓词有交集）
+    │
+    └─ Segment C: temp Min=35, Max=50 ── 保留（Min > 30）
+    │
+    ▼
+仅扫描 Segment B 和 C
+```
+
+**性能收益**：
+
+| 场景 | 效果 |
+|------|------|
+| 选择性查询（少量行匹配） | 可跳过大部分 Segment，I/O 显著减少 |
+| 宽表查询（10,000+ 列） | 列裁剪 + 段裁剪双重优化，效果叠加 |
+| 全表扫描（无 WHERE 条件） | 无裁剪效果，退化为顺序扫描 |
+
+**配置方式**：无需配置，段裁剪自动启用。只要 Segment 的稀疏索引中包含对应列的 Min/Max 统计信息，谓词即可参与裁剪。
+
 ## 4. 存储优化
 
 ### 4.1 编码选择
@@ -280,6 +321,60 @@ WiDB 内部采用了多种减少内存分配的优化：
 - **批量编码**：`encodeUint64Batch` / `encodeFloat64Batch` 一次编码多个值，减少内存分配次数
 - **布隆过滤器零分配查询**：`MayContainString` 使用 `unsafe.Slice` 将 `string` 转为 `[]byte`，避免堆分配
 
+### 5.4 延迟物化（Lazy Materialization）
+
+WiDB 在扫描迭代器中引入了延迟物化策略，推迟列数据的实际解码与行映射构建，直到真正需要时才执行：
+
+**核心机制**：
+
+- **ScanIterator.Key()**：仅返回键值，不物化列数据。在仅需判断键是否存在或进行去重的场景中，避免不必要的列解码开销
+- **MergeIterator 去重优化**：`MergeIterator` 使用 `Key()` 进行键去重比较，对于被跳过的行（重复键），不会触发列数据物化，也无需分配行映射（map），减少了堆分配
+- **segmentIterator 延迟构建**：`segmentIterator` 将行映射（row map）的构建推迟到 `Entry()` 被调用时才执行，而非在迭代初始化阶段就构建
+
+**优化效果**：
+
+| 指标 | 优化前 | 优化后 | 改善 |
+|------|--------|--------|------|
+| EngineScanRange 延迟 | 基准 | -16.3% | 显著降低 |
+| 堆分配次数 | 基准 | -8% | GC 压力减轻 |
+
+**适用场景**：
+
+- **高重复键场景**：MergeIterator 去重时跳过的行越多，收益越大
+- **宽表扫描**：列数多时，跳过行的列解码节省更明显
+- **带 WHERE 过滤的查询**：不满足条件的行无需物化列数据
+
+**配置方式**：无需配置，延迟物化自动生效。
+
+### 5.5 对象池化（Object Pooling）
+
+WiDB 在高频对象创建路径上使用 `sync.Pool` 进行对象复用，减少 GC 压力和内存分配开销：
+
+**skipNode 池化**：
+
+- 跳表节点（`skipNode`）及其前向切片（`forward []byte`）通过 `sync.Pool` 复用
+- 在高频写入场景下，跳表节点的创建/销毁频率极高，池化后显著减少堆分配
+- 池化后 GC 扫描的对象数量减少，STW（Stop-The-World）时间缩短
+
+**ZSTD 编码器/解码器池化**：
+
+- 详见 [4.2 ZSTD 压缩](#42-zstd-压缩)，Encoder/Decoder 通过 `sync.Pool` 复用，避免每次压缩/解压都创建新对象
+
+**压缩输出缓冲区池化**：
+
+- 压缩输出缓冲区通过 `sync.Pool` 复用，减少 `[]byte` 的频繁分配
+- 仅缓存不超过 1MB 的缓冲区，避免大缓冲区长期占用内存
+
+**性能收益**：
+
+| 场景 | 优化效果 |
+|------|----------|
+| 高频写入（>100k rows/s） | GC 压力显著降低，写入延迟更稳定 |
+| 混合读写负载 | 对象复用率提高，内存分配次数减少 |
+| 大批量导入 | 缓冲区池化减少 GC 暂停，导入吞吐更平稳 |
+
+**配置方式**：无需配置，对象池化自动生效。
+
 ## 6. 并发调优
 
 ### 6.1 连接管理
@@ -310,6 +405,7 @@ cfg := server.Config{
 | PrimaryIndex | RWMutex | 读操作可并发 |
 | BlockCache / IndexCache | 内部同步 | 高并发下缓存操作无锁竞争 |
 | GroupCommitter | Mutex + Channel | 批量合并 sync，减少锁持有时间 |
+| Engine.nextVersion | atomic.Uint64 | 写路径版本分配无锁化 |
 
 ### 6.3 读写分离建议
 
@@ -468,6 +564,8 @@ go test -bench=Benchmark -benchmem ./pkg/server/
 | `CompactInterval` | 10s | 缩短 → 更快合并 | L0 数量 ↓，I/O ↑ |
 | `WALCleanThreshold` | 64MB | 增大 → 减少清理频率 | 磁盘 ↑，I/O ↓ |
 | `MaxConnections` | 0（不限） | 设置上限 → 防止资源耗尽 | 稳定性 ↑ |
+
+> **注意**：段裁剪优化（Segment Pruning）为自动启用功能，无需任何配置参数。引擎会自动利用稀疏索引的列 Min/Max 统计信息跳过不满足 WHERE 条件的 Segment，详见 [3.5 段裁剪优化](#35-段裁剪优化segment-pruning-optimization)。
 
 ## 11. 文档索引
 
