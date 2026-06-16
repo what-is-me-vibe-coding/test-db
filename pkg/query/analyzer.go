@@ -51,16 +51,31 @@ func (a *Analyzer) analyzeSelect(sel *SelectStatement) (PlanNode, error) {
 		return nil, err
 	}
 
+	scan, predicate, err := a.buildScanNode(sel, table)
+	if err != nil {
+		return nil, err
+	}
+
+	current, err := a.buildSelectPipeline(sel, table, scan, predicate, resolvedCols)
+	if err != nil {
+		return nil, err
+	}
+
+	return current, nil
+}
+
+// buildScanNode 构建扫描节点并解析 WHERE 谓词。
+func (a *Analyzer) buildScanNode(sel *SelectStatement, table *catalog.Table) (*ScanNode, Expression, error) {
 	var predicate Expression
 	if sel.Where != nil {
+		var err error
 		predicate, err = a.resolveExpr(sel.Where, table)
 		if err != nil {
-			return nil, fmt.Errorf("analyzer: resolve where: %w", err)
+			return nil, nil, fmt.Errorf("analyzer: resolve where: %w", err)
 		}
 	}
 
 	scanCols := a.collectRequiredColumns(sel, table)
-
 	scanSchema := buildScanSchema(scanCols, table)
 	scan := &ScanNode{
 		Table:     table.Name,
@@ -68,7 +83,11 @@ func (a *Analyzer) analyzeSelect(sel *SelectStatement) (PlanNode, error) {
 		Predicate: predicate,
 		schema:    scanSchema,
 	}
+	return scan, predicate, nil
+}
 
+// buildSelectPipeline 在扫描节点之上构建 Filter → Aggregate → Project → Limit 流水线。
+func (a *Analyzer) buildSelectPipeline(sel *SelectStatement, table *catalog.Table, scan *ScanNode, predicate Expression, resolvedCols []resolvedColumn) (PlanNode, error) {
 	var current PlanNode = scan
 
 	if predicate != nil {
@@ -91,8 +110,7 @@ func (a *Analyzer) analyzeSelect(sel *SelectStatement) (PlanNode, error) {
 		return nil, err
 	}
 
-	needsProject := a.needsProjection(sel, table)
-	if needsProject {
+	if a.needsProjection(sel, table) {
 		current = &ProjectNode{
 			Child:       current,
 			Expressions: projectExprs,

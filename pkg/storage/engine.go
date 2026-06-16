@@ -89,29 +89,9 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("engine: create data dir: %w", err)
 	}
 
-	maxSize := cfg.MaxMemTableSize
-	if maxSize <= 0 {
-		maxSize = memTableDefaultSize
-	}
-
-	blockCacheSize := cfg.BlockCacheSize
-	if blockCacheSize == 0 {
-		blockCacheSize = defaultBlockCacheSize
-	}
-
-	blockCacheMaxEntrySize := cfg.BlockCacheMaxEntrySize
-	if blockCacheMaxEntrySize == 0 {
-		blockCacheMaxEntrySize = defaultBlockCacheMaxEntry
-	}
-
-	indexCacheSize := cfg.IndexCacheSize
-	if indexCacheSize == 0 {
-		indexCacheSize = defaultIndexCacheEntries
-	}
-
 	idGen := newSegmentIDGen()
 	eng := &Engine{
-		activeMem:              NewMemTableWithSize(maxSize),
+		activeMem:              NewMemTableWithSize(resolveMemTableSize(cfg.MaxMemTableSize)),
 		segIDGen:               idGen,
 		flusher:                NewFlusher(cfg.DataDir, idGen),
 		compactor:              NewCompactor(cfg.DataDir, idGen),
@@ -119,10 +99,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		primaryIndex:           index.NewPrimaryIndex(),
 		bloomIndex:             index.NewBloomIndex(),
 		sparseIndex:            index.NewSparseIndex(),
-		blockCache:             NewBlockCache(blockCacheSize),
-		indexCache:             NewIndexCache(indexCacheSize),
+		blockCache:             NewBlockCache(resolveBlockCacheSize(cfg.BlockCacheSize)),
+		indexCache:             NewIndexCache(resolveIndexCacheSize(cfg.IndexCacheSize)),
 		syncMode:               cfg.SyncMode,
-		blockCacheMaxEntrySize: blockCacheMaxEntrySize,
+		blockCacheMaxEntrySize: resolveBlockCacheMaxEntry(cfg.BlockCacheMaxEntrySize),
 	}
 
 	// Load existing segments from disk
@@ -130,22 +110,10 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		return nil, fmt.Errorf("engine: load segments: %w", err)
 	}
 
-	// Open or create WAL
-	walPath := filepath.Join(cfg.DataDir, "wal.log")
-	wal, records, err := OpenWAL(walPath)
+	// Open or create WAL and replay records
+	wal, err := eng.initWAL(cfg)
 	if err != nil {
-		wal, err = CreateWAL(walPath)
-		if err != nil {
-			return nil, fmt.Errorf("engine: create wal: %w", err)
-		}
-	} else {
-		// Replay WAL records to recover data
-		if err := eng.replayWALRecords(records); err != nil {
-			if closeErr := wal.Close(); closeErr != nil {
-				log.Printf("engine: close wal after replay failure: %v", closeErr)
-			}
-			return nil, fmt.Errorf("engine: replay wal: %w", err)
-		}
+		return nil, err
 	}
 	eng.wal = wal
 
@@ -155,6 +123,59 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 	}
 
 	return eng, nil
+}
+
+// resolveMemTableSize 解析 MemTable 大小配置，未设置则使用默认值。
+func resolveMemTableSize(maxSize int64) int64 {
+	if maxSize <= 0 {
+		return memTableDefaultSize
+	}
+	return maxSize
+}
+
+// resolveBlockCacheSize 解析 BlockCache 大小配置，未设置则使用默认值。
+func resolveBlockCacheSize(size int64) int64 {
+	if size == 0 {
+		return defaultBlockCacheSize
+	}
+	return size
+}
+
+// resolveIndexCacheSize 解析 IndexCache 条目数配置，未设置则使用默认值。
+func resolveIndexCacheSize(size int) int {
+	if size == 0 {
+		return defaultIndexCacheEntries
+	}
+	return size
+}
+
+// resolveBlockCacheMaxEntry 解析 BlockCache 单条目最大大小配置，未设置则使用默认值。
+func resolveBlockCacheMaxEntry(size int64) int64 {
+	if size == 0 {
+		return defaultBlockCacheMaxEntry
+	}
+	return size
+}
+
+// initWAL 打开或创建 WAL 并回放记录，返回初始化好的 WAL 实例。
+func (e *Engine) initWAL(cfg EngineConfig) (*WAL, error) {
+	walPath := filepath.Join(cfg.DataDir, "wal.log")
+	wal, records, err := OpenWAL(walPath)
+	if err != nil {
+		wal, err = CreateWAL(walPath)
+		if err != nil {
+			return nil, fmt.Errorf("engine: create wal: %w", err)
+		}
+		return wal, nil
+	}
+	// Replay WAL records to recover data
+	if err := e.replayWALRecords(records); err != nil {
+		if closeErr := wal.Close(); closeErr != nil {
+			log.Printf("engine: close wal after replay failure: %v", closeErr)
+		}
+		return nil, fmt.Errorf("engine: replay wal: %w", err)
+	}
+	return wal, nil
 }
 
 // Write 向引擎写入一行数据。
