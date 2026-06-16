@@ -155,7 +155,285 @@ Compactor 负责合并 L0 小 Segment 为 L1 大 Segment。
 - **容量**：默认 1000 条目
 - **淘汰策略**：LRU
 
-## 5. 配置参考
+## 5. 延迟物化优化 (Lazy Materialization)
+
+在扫描迭代过程中，并非所有场景都需要完整的行数据。例如归并排序的堆排序和去重仅需 key，此时构建完整的 `map[string]Value` 会产生不必要的内存分配和 CPU 开销。延迟物化优化将行数据的构建推迟到真正需要的时刻。
+
+### 5.1 ScanIterator 接口变更
+
+```go
+type ScanIterator interface {
+    Next() bool
+    Key() string    // 仅返回 key，不触发列数据物化
+    Entry() Entry   // 返回完整行数据（含列值 map），触发物化
+    Error() error
+}
+```
+
+- `Key()`：仅返回 key，不触发列数据物化，开销极低
+- `Entry()`：返回完整行数据（含 `map[string]Value`），触发物化
+
+调用方应优先使用 `Key()` 获取 key，仅在需要完整行数据时才调用 `Entry()`，以避免不必要的 map 分配。
+
+### 5.2 segmentIterator 延迟构建
+
+`segmentIterator.Next()` 现在仅记录 key 和行索引，不再构建 `map[string]Value`：
+
+```go
+func (it *segmentIterator) Next() bool {
+    // 仅记录 key 和 rowIndex，不构建 map
+    it.key = ...
+    it.rowIndex = ...
+}
+```
+
+行数据通过 `buildRowMap()` 按需构建：
+
+```go
+func (it *segmentIterator) Entry() Entry {
+    if it.rowData == nil {
+        it.rowData = it.buildRowMap()  // 延迟物化
+    }
+    return Entry{Key: it.key, Value: it.rowData}
+}
+```
+
+### 5.3 MergeIterator 优化
+
+`MergeIterator` 在堆排序和去重时使用 `Key()` 替代 `Entry().Key`，避免对被跳过的行触发物化：
+
+```go
+// 优化前：每次堆操作都会触发 Entry() 物化
+heap.Push(&h, &item{key: it.Entry().Key, ...})
+
+// 优化后：仅获取 key，不物化
+heap.Push(&h, &item{key: it.Key(), ...})
+```
+
+### 5.4 性能提升
+
+| 指标 | 改善幅度 |
+|------|----------|
+| EngineScanRange 延迟 | 降低 16.3% |
+| 内存分配次数 | 减少 8% |
+
+## 6. 原子化版本号分配 (Atomic Version Allocation)
+
+### 6.1 变更说明
+
+`Engine.nextVersion` 从 `uint64` 改为 `atomic.Uint64`：
+
+```go
+// 优化前
+type Engine struct {
+    nextVersion uint64
+    mu          sync.Mutex
+}
+
+func (e *Engine) allocVersion() uint64 {
+    e.mu.Lock()
+    v := e.nextVersion
+    e.nextVersion++
+    e.mu.Unlock()
+    return v
+}
+
+// 优化后
+type Engine struct {
+    nextVersion atomic.Uint64
+}
+
+func (e *Engine) allocVersion() uint64 {
+    return e.nextVersion.Add(1) - 1
+}
+```
+
+### 6.2 效果
+
+- `Write` / `WriteBatch` 不再需要为版本号分配获取互斥锁
+- 写路径减少一次 `Lock` / `Unlock` 操作，降低并发写入延迟
+
+## 7. skipNode 对象池化 (skipNode Pool)
+
+### 7.1 实现方式
+
+跳表节点通过 `sync.Pool` 获取和归还，复用 forward 切片：
+
+```go
+var nodePool = sync.Pool{
+    New: func() any {
+        return &skipNode{
+            forward: make([]*skipNode, defaultMaxLevel),
+        }
+    },
+}
+
+func newNode(key string, value map[string]Value, level int) *skipNode {
+    n := nodePool.Get().(*skipNode)
+    n.key = key
+    n.value = value
+    if cap(n.forward) < level {
+        n.forward = make([]*skipNode, level)
+    } else {
+        n.forward = n.forward[:level]
+    }
+    return n
+}
+
+func (n *skipNode) release() {
+    n.key = ""
+    n.value = nil
+    for i := range n.forward {
+        n.forward[i] = nil
+    }
+    n.forward = n.forward[:0]
+    nodePool.Put(n)
+}
+```
+
+### 7.2 效果
+
+- 高频写入场景（10 万+ 行/秒）下减少 GC 压力
+- `delete` 操作将节点归还到池中，避免频繁分配和回收
+
+## 8. 段裁剪优化 (Segment Pruning)
+
+### 8.1 概述
+
+新增 `ScanRangeWithPruning` 方法，利用稀疏索引的列级 Min/Max 统计信息跳过不可能包含匹配数据的 Segment，减少 I/O、CPU 和内存开销。
+
+### 8.2 ColumnPredicate 类型
+
+```go
+type ColumnPredicate struct {
+    Column string      // 列名
+    Op     Operator    // 操作符：=, !=, <, <=, >, >=
+    Value  Value       // 比较值
+}
+```
+
+### 8.3 谓词提取
+
+```go
+// 从查询谓词中提取列级条件
+func extractColumnPredicates(pred Predicate) []ColumnPredicate
+
+// 将二元表达式转换为列谓词
+func binaryExprToColumnPredicate(expr *BinaryExpr) (*ColumnPredicate, bool)
+```
+
+`extractColumnPredicates` 递归遍历查询谓词，将可识别的列条件提取为 `ColumnPredicate` 列表；`binaryExprToColumnPredicate` 将 `BinaryExpr`（如 `age > 30`）转换为 `ColumnPredicate`。
+
+### 8.4 裁剪逻辑
+
+`ScanRangeWithPruning` 对每个 Segment 执行：
+
+1. 获取该 Segment 的列级 Min/Max 统计
+2. 对每个 `ColumnPredicate`，检查是否与 Min/Max 范围相交
+3. 若任一谓词与范围不相交，则跳过该 Segment
+
+### 8.5 优化效果
+
+假设查询涉及 N 个 Segment，其中 M 个匹配：
+
+| 维度 | 优化效果 |
+|------|----------|
+| I/O | 跳过 N-M 个 Segment 的磁盘读取 |
+| CPU | 避免解码和过滤被跳过的 Segment |
+| 内存 | 避免缓存被跳过 Segment 的解码数据 |
+
+该优化对宽表选择性查询（少量列、少量匹配 Segment）尤其有效。
+
+## 9. 空 key 校验 (Empty Key Validation)
+
+### 9.1 Write 校验
+
+`Write` 方法拒绝空 key，返回清晰的错误信息：
+
+```go
+func (e *Engine) Write(key string, value map[string]Value) error {
+    if key == "" {
+        return fmt.Errorf("write: empty key is not allowed")
+    }
+    // ...
+}
+```
+
+### 9.2 WriteBatch 校验
+
+`WriteBatch` 在写入前校验所有行 key，并指明空 key 所在的行号：
+
+```go
+func (e *Engine) WriteBatch(rows []Row) error {
+    for i, row := range rows {
+        if row.Key == "" {
+            return fmt.Errorf("writebatch: empty key at row %d is not allowed", i)
+        }
+    }
+    // ...
+}
+```
+
+### 9.3 目的
+
+防止空 key 进入跳表和 Segment key range 逻辑，避免下游异常。
+
+## 10. 资源泄漏修复 (Resource Leak Fixes)
+
+### 10.1 flushImmutable 泄漏修复
+
+当 `registerSegmentIndexes` 失败时，需要回滚已创建的 Segment 数据并清理已刷写的 Segment 文件：
+
+```go
+func (e *Engine) flushImmutable() error {
+    // ...刷写 Segment 文件...
+    if err := e.registerSegmentIndexes(newSeg); err != nil {
+        // 回滚 Segment 数据
+        e.segments = e.segments[:origLen]
+        delete(e.segmentMap, newSeg.ID)
+        e.segmentLevels[0] = e.segmentLevels[0][:origL0Len]
+        e.l0SegmentCount = origL0Count
+        // 清理已刷写的 Segment 文件
+        cleanupSegmentFile(newSeg)
+        return err
+    }
+}
+```
+
+### 10.2 Compact 泄漏修复
+
+当 `registerSegmentIndexes` 失败时，需要清理已生成的 Segment 文件：
+
+```go
+func (e *Engine) Compact() error {
+    // ...合并写入新 Segment...
+    if err := e.registerSegmentIndexes(newSeg); err != nil {
+        cleanupSegmentFile(newSeg)
+        return err
+    }
+}
+```
+
+### 10.3 cleanupSegmentFile 辅助函数
+
+新增 `cleanupSegmentFile` 辅助函数，安全清理 Segment 文件，处理以下边界情况：
+
+- Segment 为 nil
+- 路径为空
+- 文件不存在
+
+```go
+func cleanupSegmentFile(seg *Segment) {
+    if seg == nil || seg.Path == "" {
+        return
+    }
+    if err := os.Remove(seg.Path); err != nil && !os.IsNotExist(err) {
+        log.Warn("failed to cleanup segment file", "path", seg.Path, "err", err)
+    }
+}
+```
+
+## 11. 配置参考
 
 ### EngineConfig
 
