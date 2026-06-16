@@ -27,17 +27,49 @@ go build -o widb-cli ./cmd/cli
 ./widb-server [选项]
 ```
 
+支持两种配置方式：YAML 配置文件与命令行参数。命令行参数会覆盖配置文件中的同名项，配置采用分层覆盖：**默认值 < 配置文件 < 命令行参数**。
+
+#### YAML 配置文件
+
+未指定 `-config` 时，依次查找当前目录下的 `widb.yaml`、`config.yaml`；均不存在则使用默认值。可用 `-gen-config widb.yaml` 生成带注释的默认配置模板：
+
+```bash
+./widb-server -gen-config widb.yaml   # 生成模板后退出
+./widb-server -config widb.yaml       # 使用指定配置文件启动
+```
+
+配置文件示例（完整字段见生成的模板）：
+
+```yaml
+server:
+  tcp_addr: "0.0.0.0:9000"
+  http_addr: "0.0.0.0:8080"
+storage:
+  data_dir: "./data"
+  max_memtable_size: 67108864
+scheduler:
+  enabled: true
+  flush_interval: 5s
+  compact_interval: 10s
+  wal_clean_interval: 30s
+  wal_clean_threshold: 67108864
+```
+
+#### 命令行选项
+
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
-| `-tcp` | `0.0.0.0:9000` | TCP 监听地址 |
-| `-http` | `0.0.0.0:8080` | HTTP 监听地址 |
-| `-data` | `./data` | 数据存储目录 |
-| `-max-memtable` | `67108864` (64MB) | MemTable 最大字节数 |
-| `-scheduler` | `true` | 启用后台调度器 |
-| `-scheduler.flush-interval` | `5s` | 自动刷盘检查间隔 |
-| `-scheduler.compact-interval` | `10s` | 自动 Compaction 检查间隔 |
-| `-scheduler.wal-clean-interval` | `30s` | WAL 清理检查间隔 |
-| `-scheduler.wal-clean-threshold` | `67108864` (64MB) | WAL 文件大小阈值 |
+| `-config` | （空） | 配置文件路径（YAML），未指定时查找 `./widb.yaml`、`./config.yaml` |
+| `-gen-config` | （空） | 生成带注释的默认配置模板到指定路径后退出 |
+| `-tcp` | `0.0.0.0:9000` | TCP 监听地址（覆盖配置文件） |
+| `-http` | `0.0.0.0:8080` | HTTP 监听地址（覆盖配置文件） |
+| `-data` | `./data` | 数据存储目录（覆盖配置文件） |
+| `-max-memtable` | `67108864` (64MB) | MemTable 最大字节数（覆盖配置文件） |
+| `-scheduler` | `true` | 启用后台调度器（覆盖配置文件） |
+| `-scheduler.flush-interval` | `5s` | 自动刷盘检查间隔（覆盖配置文件） |
+| `-scheduler.compact-interval` | `10s` | 自动 Compaction 检查间隔（覆盖配置文件） |
+| `-scheduler.wal-clean-interval` | `30s` | WAL 清理检查间隔（覆盖配置文件） |
+| `-scheduler.wal-clean-threshold` | `67108864` (64MB) | WAL 文件大小阈值（覆盖配置文件） |
 
 ### 使用 CLI 客户端
 
