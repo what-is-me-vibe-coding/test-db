@@ -89,12 +89,28 @@
 
 ## 7. 依赖清单
 
+### 7.1 已引入依赖
+
 | 库 | 模块 | 用途 | 引入步骤 |
 |---|------|------|----------|
 | `github.com/klauspost/compress/zstd` | Storage | Block 级 ZSTD 压缩 | 步骤 8 |
 | `github.com/bits-and-blooms/bloom/v3` | Index | 布隆过滤器 | 步骤 14 |
 | `github.com/xwb1989/sqlparser` | Query | SQL 解析 | 步骤 17 |
 | `github.com/cespare/xxhash/v2` | Common | 高性能哈希 | 步骤 3 |
+
+### 7.2 计划引入依赖（见 [roadmap.md](.agent_plan/roadmap.md)）
+
+| 库 | 模块 | 用途 | 许可证 | 关联计划 |
+|---|------|------|--------|----------|
+| `gopkg.in/yaml.v3` | config | YAML 配置解析与带注释模板生成 | MIT | 计划 2 |
+| `github.com/jedib0t/go-pretty/v6` | cli | 表格渲染（Unicode box-drawing，复刻 ClickHouse PrettyCompact） | MIT | 计划 3 |
+| `github.com/fatih/color` | cli | 终端颜色（表头/错误/NULL 高亮，`NO_COLOR` 兼容） | MIT | 计划 3 |
+| `github.com/peterh/liner` | cli | REPL 行编辑/历史/Ctrl-R/Tab 补全 | X11 | 计划 3 |
+| `github.com/schollz/progressbar/v3` | cli | 查询进度反馈（行数/耗时） | MIT | 计划 3 |
+| `github.com/jackc/pgproto3` | server/pgwire | PostgreSQL wire 协议消息编解码（JDBC 接入） | MIT | 计划 4 |
+| `github.com/shopspring/decimal`（可选） | common | DECIMAL 精确小数类型 | MIT | 计划 6 |
+
+> 所有新增库均满足「活跃维护 + Apache/MIT/BSD/X11 许可 + 无 CGO」约束。`peterh/liner` 为 X11（BSD-like），与约束兼容。
 
 ## 8. Git 规范
 
