@@ -190,43 +190,67 @@ func readValueBinary(data []byte) (string, common.Value, int, error) {
 	return colName, val, off + n, nil
 }
 
+// fixedSizeTypeDesc 描述固定大小类型的读取方式，用于表驱动反序列化。
+type fixedSizeTypeDesc struct {
+	size int
+	read func(data []byte) common.Value
+}
+
+// fixedSizeTypes 是固定大小类型的读取描述表，消除 readTypedValue 中的重复分支。
+var fixedSizeTypes = map[common.DataType]fixedSizeTypeDesc{
+	common.TypeBool: {
+		size: 1,
+		read: func(data []byte) common.Value {
+			val := common.Value{Typ: common.TypeBool}
+			if data[0] != 0 {
+				val.Int64 = 1
+			}
+			return val
+		},
+	},
+	common.TypeInt64: {
+		size: 8,
+		read: func(data []byte) common.Value {
+			return common.Value{Typ: common.TypeInt64, Int64: int64(binary.LittleEndian.Uint64(data[:8]))}
+		},
+	},
+	common.TypeFloat64: {
+		size: 8,
+		read: func(data []byte) common.Value {
+			return common.Value{Typ: common.TypeFloat64, Float64: math.Float64frombits(binary.LittleEndian.Uint64(data[:8]))}
+		},
+	},
+	common.TypeTimestamp: {
+		size: 8,
+		read: func(data []byte) common.Value {
+			return common.Value{Typ: common.TypeTimestamp, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(data[:8])))}
+		},
+	},
+}
+
 // readTypedValue 根据类型从 data 读取值，返回值、读取字节数和错误。
+// 固定大小类型通过表驱动统一处理，字符串类型单独处理。
 func readTypedValue(data []byte, typ common.DataType) (common.Value, int, error) {
-	switch typ {
-	case common.TypeBool:
-		if len(data) < 1 {
-			return common.Value{}, 0, fmt.Errorf("truncated bool value")
+	if desc, ok := fixedSizeTypes[typ]; ok {
+		if len(data) < desc.size {
+			return common.Value{}, 0, fmt.Errorf("truncated %s value", typ)
 		}
-		val := common.Value{Typ: typ}
-		if data[0] != 0 {
-			val.Int64 = 1
-		}
-		return val, 1, nil
-	case common.TypeInt64:
-		if len(data) < 8 {
-			return common.Value{}, 0, fmt.Errorf("truncated int64 value")
-		}
-		return common.Value{Typ: typ, Int64: int64(binary.LittleEndian.Uint64(data[:8]))}, 8, nil
-	case common.TypeFloat64:
-		if len(data) < 8 {
-			return common.Value{}, 0, fmt.Errorf("truncated float64 value")
-		}
-		return common.Value{Typ: typ, Float64: math.Float64frombits(binary.LittleEndian.Uint64(data[:8]))}, 8, nil
-	case common.TypeString:
-		if len(data) < 2 {
-			return common.Value{}, 0, fmt.Errorf("truncated string len")
-		}
-		strLen := int(binary.LittleEndian.Uint16(data[:2]))
-		if len(data) < 2+strLen {
-			return common.Value{}, 0, fmt.Errorf("truncated string value")
-		}
-		return common.Value{Typ: typ, Str: string(data[2 : 2+strLen])}, 2 + strLen, nil
-	case common.TypeTimestamp:
-		if len(data) < 8 {
-			return common.Value{}, 0, fmt.Errorf("truncated timestamp value")
-		}
-		return common.Value{Typ: typ, Time: time.Unix(0, int64(binary.LittleEndian.Uint64(data[:8])))}, 8, nil
-	default:
-		return common.Value{}, 0, fmt.Errorf("unknown value type: %d", typ)
+		return desc.read(data), desc.size, nil
 	}
+	if typ == common.TypeString {
+		return readStringValue(data)
+	}
+	return common.Value{}, 0, fmt.Errorf("unknown value type: %d", typ)
+}
+
+// readStringValue 从 data 读取字符串类型的值。
+func readStringValue(data []byte) (common.Value, int, error) {
+	if len(data) < 2 {
+		return common.Value{}, 0, fmt.Errorf("truncated string len")
+	}
+	strLen := int(binary.LittleEndian.Uint16(data[:2]))
+	if len(data) < 2+strLen {
+		return common.Value{}, 0, fmt.Errorf("truncated string value")
+	}
+	return common.Value{Typ: common.TypeString, Str: string(data[2 : 2+strLen])}, 2 + strLen, nil
 }

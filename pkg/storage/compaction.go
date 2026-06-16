@@ -344,13 +344,26 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 		return fmt.Errorf("engine compact: %w", err)
 	}
 
-	// 新 segment 注册成功后，再注销旧 segment 的索引
-	for _, seg := range allSegments {
-		e.unregisterSegmentIndexes(seg.ID)
-		delete(e.segmentMap, seg.ID)
+	// 新 segment 注册成功后，再注销旧 segment 的索引并清理
+	e.removeCompactedSegments(compactIDs)
+
+	if err := e.compactor.CleanupSegments(allSegments); err != nil {
+		return fmt.Errorf("engine compact: cleanup: %w", err)
 	}
 
-	// 按 ID 删除旧 segment
+	return nil
+}
+
+// removeCompactedSegments 从引擎中移除已合并的旧 Segment，包括索引注销和数据结构清理。
+// 调用者必须持有 e.mu 写锁。
+func (e *Engine) removeCompactedSegments(compactIDs map[uint64]struct{}) {
+	for _, seg := range e.segments {
+		if _, ok := compactIDs[seg.ID]; ok {
+			e.unregisterSegmentIndexes(seg.ID)
+			delete(e.segmentMap, seg.ID)
+		}
+	}
+
 	remaining := make([]*Segment, 0, len(e.segments))
 	remainingLevels := make([]int, 0, len(e.segmentLevels))
 	l0Count := 0
@@ -366,12 +379,6 @@ func (e *Engine) Compact(cols []ColumnMeta) error {
 	e.segments = remaining
 	e.segmentLevels = remainingLevels
 	e.l0SegmentCount = l0Count
-
-	if err := e.compactor.CleanupSegments(allSegments); err != nil {
-		return fmt.Errorf("engine compact: cleanup: %w", err)
-	}
-
-	return nil
 }
 
 // ShouldCompact 判断是否需要执行 Compaction。
