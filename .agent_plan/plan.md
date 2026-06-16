@@ -110,6 +110,7 @@
 | Catalog | [catalog.md](catalog.md) | Schema 管理、数据类型系统、Segment 列表、原子性变更、版本控制 |
 | Server | [server.md](server.md) | TCP/HTTP 协议、连接管理、批量写入、监控指标、优雅关闭 |
 | Common | [common.md](common.md) | 错误码、日志、内存池、Bitmap、编码工具、第三方依赖汇总 |
+| Roadmap | [roadmap.md](roadmap.md) | 演进路线图：一键启动、YAML 配置、CLI 美化、JDBC 协议、内存表、类型扩展 |
 
 ## 8. 第三方依赖汇总
 
