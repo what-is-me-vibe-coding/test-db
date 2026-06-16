@@ -63,11 +63,43 @@ func (c *Compactor) CompactToLevel(segments []*Segment, _ int, cols []ColumnMeta
 }
 
 // segReader 跟踪单个 Segment 在 k-way merge 中的读取位置。
+// 流式归并优化：不再预物化所有行为 []memRow，而是持有解码后的列数据，
+// 按需从列数据中提取当前行的值，避免同时持有所有行的 memRow 对象。
+// 峰值内存从 O(总行数 × 列数) 降至 O(段数 + 输出行数 × 列数)。
 type segReader struct {
-	seg    *Segment
-	rows   []memRow
-	pos    int
-	segIdx int // 在 sortedSegs 中的索引，用于去重优先级
+	seg         *Segment
+	decodedCols []decodedColumn
+	pos         int
+	rowCount    int
+	segIdx      int // 在 sortedSegs 中的索引，用于去重优先级
+}
+
+// currentKey 返回当前行的主键。
+func (r *segReader) currentKey() string {
+	if r.pos < len(r.seg.Keys) {
+		return r.seg.Keys[r.pos]
+	}
+	return fmt.Sprintf("row_%d_%d", r.seg.ID, r.pos)
+}
+
+// currentRow 从解码后的列数据中按需提取当前行的值，构建 memRow。
+// 每次调用分配一个新的 []common.Value 切片，确保返回值可安全持有。
+func (r *segReader) currentRow() memRow {
+	numCols := len(r.decodedCols)
+	values := make([]common.Value, numCols)
+	for i := range r.decodedCols {
+		values[i] = extractValue(r.decodedCols[i], uint32(r.pos))
+	}
+	return memRow{
+		Key:    r.currentKey(),
+		Values: values,
+	}
+}
+
+// advance 推进读取位置到下一行，返回是否还有更多行。
+func (r *segReader) advance() bool {
+	r.pos++
+	return r.pos < r.rowCount
 }
 
 // compactionEntry 是 k-way merge 堆中的条目。
@@ -103,10 +135,13 @@ func sortSegsByID(segs []*Segment) {
 	sort.Slice(segs, func(i, j int) bool { return segs[i].ID < segs[j].ID })
 }
 
-func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]memRow, error) {
+func (c *Compactor) mergeSegments(segments []*Segment, _ []ColumnMeta) ([]memRow, error) {
 	// 使用 k-way merge 替代全量排序：各 Segment 内行已按 key 有序，
 	// 通过最小堆归并，复杂度 O(n log k) 优于 O(n log n) 的全量排序。
 	// 同时在归并过程中去重，同一 key 保留最高 segment ID（最新版本）。
+	//
+	// 流式归并优化：每个 segReader 仅持有解码后的列数据，按需提取当前行值，
+	// 不再预物化所有行为 []memRow，避免同时持有所有输入行的内存开销。
 
 	// 先按 Segment ID 排序，确保 ID 更大的 segment 在堆中优先级更高
 	sortedSegs := make([]*Segment, len(segments))
@@ -116,18 +151,13 @@ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]mem
 	readers := make([]*segReader, 0, len(sortedSegs))
 	estimatedRows := 0
 	for i, seg := range sortedSegs {
-		rows, err := c.readSegmentRows(seg, cols)
+		reader, err := c.newSegmentReader(seg, i)
 		if err != nil {
 			return nil, fmt.Errorf("compactor: read segment %d: %w", seg.ID, err)
 		}
-		if len(rows) > 0 {
-			readers = append(readers, &segReader{
-				seg:    seg,
-				rows:   rows,
-				pos:    0,
-				segIdx: i,
-			})
-			estimatedRows += len(rows)
+		if reader.rowCount > 0 {
+			readers = append(readers, reader)
+			estimatedRows += reader.rowCount
 		}
 	}
 
@@ -140,7 +170,7 @@ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]mem
 	heap.Init(h)
 	for _, r := range readers {
 		heap.Push(h, &compactionEntry{
-			key:    r.rows[0].Key,
+			key:    r.currentKey(),
 			segIdx: r.segIdx,
 			reader: r,
 		})
@@ -152,12 +182,12 @@ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]mem
 	for h.Len() > 0 {
 		entry := (*h)[0]
 		key := entry.key
-		row := entry.reader.rows[entry.reader.pos]
+		// 按需从列数据提取当前行，避免预物化所有行
+		row := entry.reader.currentRow()
 
 		// 推进该 reader 的位置
-		entry.reader.pos++
-		if entry.reader.pos < len(entry.reader.rows) {
-			entry.key = entry.reader.rows[entry.reader.pos].Key
+		if entry.reader.advance() {
+			entry.key = entry.reader.currentKey()
 			heap.Fix(h, 0)
 		} else {
 			heap.Pop(h)
@@ -175,13 +205,15 @@ func (c *Compactor) mergeSegments(segments []*Segment, cols []ColumnMeta) ([]mem
 	return deduped, nil
 }
 
-func (c *Compactor) readSegmentRows(seg *Segment, _ []ColumnMeta) ([]memRow, error) {
+// newSegmentReader 创建一个流式段读取器，解码所有列数据但不预物化行。
+// 列数据按列式存储，必须一次性解码；行值通过 currentRow() 按需提取，
+// 避免同时持有所有行的 []common.Value 切片，显著降低 Compaction 峰值内存。
+func (c *Compactor) newSegmentReader(seg *Segment, segIdx int) (*segReader, error) {
 	if seg.RowCount == 0 {
-		return nil, nil
+		return &segReader{seg: seg, rowCount: 0, segIdx: segIdx}, nil
 	}
 
 	numCols := len(seg.Columns)
-
 	decodedCols := make([]decodedColumn, numCols)
 	for i := range seg.Columns {
 		cd, err := decodeSegmentColumn(&seg.Columns[i], i)
@@ -191,29 +223,13 @@ func (c *Compactor) readSegmentRows(seg *Segment, _ []ColumnMeta) ([]memRow, err
 		decodedCols[i] = cd
 	}
 
-	// 预分配连续的 values 缓冲区，每行从中切片，避免逐行分配 []common.Value
-	// 减少 GC 压力，特别是大 Segment（百万行级别）时效果显著
-	valuesBuf := make([]common.Value, int(seg.RowCount)*numCols)
-	rows := make([]memRow, 0, seg.RowCount)
-	for r := uint32(0); r < seg.RowCount; r++ {
-		offset := int(r) * numCols
-		values := valuesBuf[offset : offset+numCols]
-		for i := range decodedCols {
-			values[i] = extractValue(decodedCols[i], r)
-		}
-		var key string
-		if int(r) < len(seg.Keys) {
-			key = seg.Keys[r]
-		} else {
-			key = fmt.Sprintf("row_%d", seg.ID*1000000+uint64(len(rows)))
-		}
-		rows = append(rows, memRow{
-			Key:    key,
-			Values: values,
-		})
-	}
-
-	return rows, nil
+	return &segReader{
+		seg:         seg,
+		decodedCols: decodedCols,
+		pos:         0,
+		rowCount:    int(seg.RowCount),
+		segIdx:      segIdx,
+	}, nil
 }
 
 // decodeSegmentColumn 解码单个 Segment 列用于 Compaction。

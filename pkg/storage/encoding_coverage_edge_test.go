@@ -465,18 +465,18 @@ func TestCompactBuildSegmentColAppendError(t *testing.T) {
 	}
 }
 
-// --- Compaction readSegmentRows 边界测试 ---
+// --- Compaction newSegmentReader 边界测试 ---
 
-// TestCompactorReadSegmentRowsNoRows 测试读取空 Segment 的行
-func TestCompactorReadSegmentRowsNoRows(t *testing.T) {
+// TestCompactorNewSegmentReaderNoRows 测试读取空 Segment 的行
+func TestCompactorNewSegmentReaderNoRows(t *testing.T) {
 	c := NewCompactor(t.TempDir(), newSegmentIDGen())
 	seg := &Segment{ID: 1, RowCount: 0, Columns: []EncodedColumn{}, Keys: []string{}}
-	rows, err := c.readSegmentRows(seg, nil)
+	reader, err := c.newSegmentReader(seg, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Errorf("expected 0 rows, got %d", len(rows))
+	if reader.rowCount != 0 {
+		t.Errorf("expected 0 rows, got %d", reader.rowCount)
 	}
 }
 

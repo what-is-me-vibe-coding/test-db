@@ -180,13 +180,13 @@ func TestCompactorCompactEmptySegments(t *testing.T) {
 	}
 }
 
-// TestCompactorCompactMergeError 测试 Compact 在 readSegmentRows 失败时的错误
+// TestCompactorCompactMergeError 测试 Compact 在 newSegmentReader 失败时的错误
 // 通过传入一个包含损坏数据的 Segment 来触发解码失败
 func TestCompactorCompactMergeError(t *testing.T) {
 	tmpDir := t.TempDir()
 	compactor := NewCompactor(tmpDir, newSegmentIDGen())
 
-	// 构造一个包含损坏列数据的 Segment，readSegmentRows 会在解码时失败
+	// 构造一个包含损坏列数据的 Segment，newSegmentReader 会在解码时失败
 	segments := []*Segment{
 		{
 			ID:       1,
