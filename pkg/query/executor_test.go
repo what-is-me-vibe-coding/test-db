@@ -33,6 +33,10 @@ func (m *mockStorage) ScanRange(start, end string) []storage.ScanEntry {
 	return result
 }
 
+func (m *mockStorage) ScanRangeWithPruning(start, end string, _ []storage.ColumnPredicate) []storage.ScanEntry {
+	return m.ScanRange(start, end)
+}
+
 func (m *mockStorage) ColumnMeta() []storage.ColumnMeta {
 	return m.columnMeta
 }

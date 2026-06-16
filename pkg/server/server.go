@@ -66,6 +66,11 @@ func (sa *storageAdapter) ScanRange(start, end string) []storage.ScanEntry {
 	return sa.engine.ScanRange(start, end)
 }
 
+// ScanRangeWithPruning 实现 StorageProvider 接口，利用列谓词进行段裁剪。
+func (sa *storageAdapter) ScanRangeWithPruning(start, end string, predicates []storage.ColumnPredicate) []storage.ScanEntry {
+	return sa.engine.ScanRangeWithPruning(start, end, predicates)
+}
+
 // ColumnMeta 实现 StorageProvider 接口。
 func (sa *storageAdapter) ColumnMeta() []storage.ColumnMeta {
 	return sa.engine.ColumnMeta()
