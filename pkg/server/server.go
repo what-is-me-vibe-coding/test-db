@@ -205,26 +205,8 @@ func (s *Server) Stop() error {
 	var stopErr error
 	s.stopOnce.Do(func() {
 		close(s.done)
-
-		if s.tcpListener != nil {
-			if err := s.tcpListener.Close(); err != nil {
-				log.Printf("server: close tcp listener: %v", err)
-			}
-		}
-		if s.httpListener != nil {
-			if err := s.httpListener.Close(); err != nil {
-				log.Printf("server: close http listener: %v", err)
-			}
-		}
-		if s.httpServer != nil {
-			if err := s.httpServer.Close(); err != nil {
-				log.Printf("server: close http server: %v", err)
-			}
-		}
-
-		// 主动关闭所有已建立的 TCP 连接，使 handleTCPConn 中的阻塞读取立即返回
+		s.closeListeners()
 		s.closeAllConns()
-
 		s.wg.Wait()
 
 		if s.storage != nil {
@@ -237,6 +219,25 @@ func (s *Server) Stop() error {
 		log.Println("服务器已关闭")
 	})
 	return stopErr
+}
+
+// closeListeners 关闭 TCP 监听器、HTTP 监听器和 HTTP 服务器。
+func (s *Server) closeListeners() {
+	if s.tcpListener != nil {
+		if err := s.tcpListener.Close(); err != nil {
+			log.Printf("server: close tcp listener: %v", err)
+		}
+	}
+	if s.httpListener != nil {
+		if err := s.httpListener.Close(); err != nil {
+			log.Printf("server: close http listener: %v", err)
+		}
+	}
+	if s.httpServer != nil {
+		if err := s.httpServer.Close(); err != nil {
+			log.Printf("server: close http server: %v", err)
+		}
+	}
 }
 
 // trackConn 将连接加入跟踪集合，用于优雅关闭时主动断开。
