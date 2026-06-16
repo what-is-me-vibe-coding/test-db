@@ -110,8 +110,10 @@ func (v Value) Less(other Value) bool {
 	switch v.Typ {
 	case TypeBool:
 		return v.Int64 < other.Int64
-	case TypeInt64, TypeTimestamp:
+	case TypeInt64:
 		return v.Int64 < other.Int64
+	case TypeTimestamp:
+		return v.Time.Before(other.Time)
 	case TypeFloat64:
 		return v.Float64 < other.Float64
 	case TypeString:
