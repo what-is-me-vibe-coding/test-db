@@ -140,11 +140,11 @@ func TestEngineReplayWithCorruptCheckpoint(t *testing.T) {
 		flusher:      NewFlusher(dir, newSegmentIDGen()),
 		compactor:    NewCompactor(dir, newSegmentIDGen()),
 		segmentMap:   make(map[uint64]*Segment),
-		nextVersion:  1,
 		primaryIndex: index.NewPrimaryIndex(),
 		bloomIndex:   index.NewBloomIndex(),
 		sparseIndex:  index.NewSparseIndex(),
 	}
+	eng.nextVersion.Store(1)
 
 	err = eng.replayWALRecords(records)
 	// replayWALRecords should not return error for corrupt checkpoint (it just logs)

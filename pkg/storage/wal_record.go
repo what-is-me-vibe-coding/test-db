@@ -207,8 +207,8 @@ func (e *Engine) replayWALRecords(records []RawRecord) error {
 	}
 
 	// Update nextVersion to be greater than any version seen
-	if maxVersion >= e.nextVersion {
-		e.nextVersion = maxVersion + 1
+	if maxVersion >= e.nextVersion.Load() {
+		e.nextVersion.Store(maxVersion + 1)
 	}
 
 	return nil

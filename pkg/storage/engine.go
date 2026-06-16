@@ -57,8 +57,8 @@ type Engine struct {
 	segments               []*Segment
 	segmentMap             map[uint64]*Segment
 	segmentLevels          []int
-	l0SegmentCount         int // 缓存 L0 Segment 数量，避免每次线性扫描
-	nextVersion            uint64
+	l0SegmentCount         int           // 缓存 L0 Segment 数量，避免每次线性扫描
+	nextVersion            atomic.Uint64 // 原子化版本号，避免写路径锁竞争
 	primaryIndex           *index.PrimaryIndex
 	bloomIndex             *index.BloomIndex
 	sparseIndex            *index.SparseIndex
@@ -116,7 +116,6 @@ func NewEngine(cfg EngineConfig) (*Engine, error) {
 		flusher:                NewFlusher(cfg.DataDir, idGen),
 		compactor:              NewCompactor(cfg.DataDir, idGen),
 		segmentMap:             make(map[uint64]*Segment),
-		nextVersion:            1,
 		primaryIndex:           index.NewPrimaryIndex(),
 		bloomIndex:             index.NewBloomIndex(),
 		sparseIndex:            index.NewSparseIndex(),
@@ -164,11 +163,8 @@ func (e *Engine) Write(key string, values map[string]common.Value) error {
 		return fmt.Errorf("engine write: empty key is not allowed")
 	}
 
-	// Step 1: Allocate version under lock (brief hold)
-	e.mu.Lock()
-	version := e.nextVersion
-	e.nextVersion++
-	e.mu.Unlock()
+	// Step 1: 原子分配版本号（无锁，减少写路径竞争）
+	version := e.nextVersion.Add(1)
 
 	// Step 2: Serialize WAL record (no lock needed, CPU-bound)
 	payload, err := serializeWriteRecord(key, version, values)
@@ -240,8 +236,8 @@ func (e *Engine) Flush(cols []ColumnMeta) error {
 	e.mu.Lock()
 
 	var flushVersion uint64
-	if e.nextVersion > 0 {
-		flushVersion = e.nextVersion - 1
+	if v := e.nextVersion.Load(); v > 0 {
+		flushVersion = v - 1
 	}
 
 	immutable := e.drainImmutable()
