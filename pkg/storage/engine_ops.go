@@ -253,6 +253,114 @@ func (e *Engine) findSegmentByID(segID uint64) *Segment {
 	return e.segmentMap[segID]
 }
 
+// ColumnPredicate 表示一个列级谓词，用于段裁剪优化。
+// 通过稀疏索引的列统计信息（Min/Max），在扫描前跳过不可能包含匹配数据的段，
+// 减少不必要的解码和过滤开销，对宽表选择性查询效果尤为显著。
+type ColumnPredicate struct {
+	ColumnName string
+	Op         index.PredicateOp
+	Value      common.Value
+}
+
+// ScanRangeWithPruning 扫描指定键范围内的所有行，同时利用列谓词进行段裁剪。
+// 对于每个满足键范围的段，检查其列统计信息是否可以排除该段，
+// 仅扫描可能包含匹配数据的段，减少 I/O 和 CPU 开销。
+// MemTable 数据不受段裁剪影响（无列统计），始终参与扫描。
+func (e *Engine) ScanRangeWithPruning(start, end string, predicates []ColumnPredicate) []ScanEntry {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.scanRangeWithPruningUnlocked(start, end, predicates)
+}
+
+// scanRangeWithPruningUnlocked 在不持锁的情况下执行带段裁剪的扫描。
+// 调用者必须持有 e.mu.RLock。
+func (e *Engine) scanRangeWithPruningUnlocked(start, end string, predicates []ColumnPredicate) []ScanEntry {
+	iters := e.buildScanIteratorsWithPruning(start, end, predicates)
+	if len(iters) == 0 {
+		return nil
+	}
+
+	estimatedSize := e.estimateScanSize(start, end)
+
+	mi := NewMergeIterator(iters...)
+	defer mi.Close()
+
+	results := make([]ScanEntry, 0, estimatedSize)
+	for mi.Next() {
+		results = append(results, mi.Entry())
+	}
+
+	if err := mi.Err(); err != nil {
+		log.Printf("scan range with pruning [%q,%q]: %v", start, end, err)
+	}
+
+	return results
+}
+
+// buildScanIteratorsWithPruning 构建带段裁剪的扫描迭代器。
+// 对每个段，检查列谓词是否可以排除该段；MemTable 始终参与扫描。
+func (e *Engine) buildScanIteratorsWithPruning(start, end string, predicates []ColumnPredicate) []ScanIterator {
+	capacity := len(e.segments) + len(e.immutable) + 1
+	iters := make([]ScanIterator, 0, capacity)
+
+	// 构建列名到列 ID 的映射，用于查找稀疏索引
+	colNameToID := make(map[string]uint32, len(e.columnMeta))
+	for _, col := range e.columnMeta {
+		colNameToID[col.Name] = col.ID
+	}
+
+	for _, seg := range e.segments {
+		if seg.MinKey > end || seg.MaxKey < start {
+			continue
+		}
+		// 使用列谓词进行段裁剪：任一谓词可以排除该段则跳过
+		if e.canSkipSegment(seg.ID, predicates, colNameToID) {
+			continue
+		}
+		iters = append(iters, newSegmentIterator(seg, e.columnMeta, start, end, e.blockCache))
+	}
+
+	for i := 0; i < len(e.immutable); i++ {
+		iters = append(iters, newMemTableIterator(e.immutable[i], start, end))
+	}
+
+	iters = append(iters, newMemTableIterator(e.activeMem, start, end))
+
+	return iters
+}
+
+// canSkipSegment 检查是否可以根据列谓词跳过指定段。
+// 如果任一谓词的列统计信息表明该段不可能包含匹配数据，则返回 true。
+func (e *Engine) canSkipSegment(segID uint64, predicates []ColumnPredicate, colNameToID map[string]uint32) bool {
+	for _, pred := range predicates {
+		colID, ok := colNameToID[pred.ColumnName]
+		if !ok {
+			continue
+		}
+		if e.sparseIndex.CanSkip(segID, colID, pred.Op, pred.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// estimateScanSize 估算扫描结果大小，用于预分配结果切片。
+func (e *Engine) estimateScanSize(start, end string) int {
+	estimatedSize := e.activeMem.Len()
+	for _, imm := range e.immutable {
+		estimatedSize += imm.Len()
+	}
+	for _, seg := range e.segments {
+		if seg.MinKey <= end && seg.MaxKey >= start {
+			estimatedSize += int(seg.RowCount)
+		}
+	}
+	if estimatedSize > 1<<20 {
+		estimatedSize = 1 << 20
+	}
+	return estimatedSize
+}
+
 // Scan 扫描指定键范围内的所有行，直接返回 ScanEntry 切片，避免额外结构体复制。
 // 注意：此方法静默丢弃迭代错误。如需获取错误信息，请使用 ScanWithError。
 func (e *Engine) Scan(start, end string) []ScanEntry {

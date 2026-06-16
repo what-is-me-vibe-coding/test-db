@@ -14,6 +14,7 @@ const defaultChunkSize = 1024
 // StorageProvider 提供查询执行所需的存储引擎访问能力。
 type StorageProvider interface {
 	ScanRange(start, end string) []storage.ScanEntry
+	ScanRangeWithPruning(start, end string, predicates []storage.ColumnPredicate) []storage.ScanEntry
 	ColumnMeta() []storage.ColumnMeta
 	PrimaryIndex() *index.PrimaryIndex
 	SparseIndex() *index.SparseIndex
@@ -78,6 +79,8 @@ func (e *Executor) executeScan(scan *ScanNode) (*execResult, error) {
 }
 
 // scanWithPredicate 根据谓词从存储引擎获取数据。
+// 优化：从谓词中提取列级条件，利用稀疏索引进行段裁剪，
+// 跳过不可能包含匹配数据的段，减少 I/O 和解码开销。
 func (e *Executor) scanWithPredicate(scan *ScanNode) []storage.ScanEntry {
 	pred := scan.Predicate
 	if pred == nil {
@@ -85,8 +88,15 @@ func (e *Executor) scanWithPredicate(scan *ScanNode) []storage.ScanEntry {
 	}
 
 	keyRange := e.extractKeyRange(pred)
-	entries := e.storage.ScanRange(keyRange.start, keyRange.end)
 
+	// 从谓词中提取列级条件用于段裁剪
+	columnPreds := e.extractColumnPredicates(pred)
+	if len(columnPreds) > 0 {
+		entries := e.storage.ScanRangeWithPruning(keyRange.start, keyRange.end, columnPreds)
+		return e.filterEntriesByPredicate(entries, pred, scan.Columns)
+	}
+
+	entries := e.storage.ScanRange(keyRange.start, keyRange.end)
 	return e.filterEntriesByPredicate(entries, pred, scan.Columns)
 }
 
@@ -138,6 +148,105 @@ func (e *Executor) extractKeyRange(pred Expression) keyRange {
 	}
 
 	return kr
+}
+
+// extractColumnPredicates 从谓词中提取可用于段裁剪的列级条件。
+// 仅提取形如 "column op literal" 的简单比较谓词（AND 连接），
+// 复杂表达式（OR、嵌套、函数调用等）不参与段裁剪，保证安全性。
+func (e *Executor) extractColumnPredicates(pred Expression) []storage.ColumnPredicate {
+	conjuncts := splitConjuncts(pred)
+	var preds []storage.ColumnPredicate
+	for _, c := range conjuncts {
+		bin, ok := c.(*BinaryExpr)
+		if !ok {
+			continue
+		}
+		colPred, ok := e.binaryExprToColumnPredicate(bin)
+		if !ok {
+			continue
+		}
+		preds = append(preds, colPred)
+	}
+	return preds
+}
+
+// binaryExprToColumnPredicate 将二元表达式转换为列谓词。
+// 仅处理 "column op literal" 或 "literal op column" 形式的比较表达式。
+func (e *Executor) binaryExprToColumnPredicate(bin *BinaryExpr) (storage.ColumnPredicate, bool) {
+	// 仅处理比较运算符
+	var colName string
+	var value common.Value
+	var op index.PredicateOp
+	var ok bool
+
+	// 尝试 "column op literal" 形式
+	if col, isCol := bin.Left.(*ResolvedColumnExpr); isCol {
+		if lit, isLit := bin.Right.(*LiteralExpr); isLit && lit.Value.Valid {
+			colName = col.Name
+			value = lit.Value
+			op, ok = queryOpToIndexOp(bin.Op)
+			if !ok {
+				return storage.ColumnPredicate{}, false
+			}
+			return storage.ColumnPredicate{ColumnName: colName, Op: op, Value: value}, true
+		}
+	}
+
+	// 尝试 "literal op column" 形式（需要翻转运算符）
+	if col, isCol := bin.Right.(*ResolvedColumnExpr); isCol {
+		if lit, isLit := bin.Left.(*LiteralExpr); isLit && lit.Value.Valid {
+			colName = col.Name
+			value = lit.Value
+			op, ok = queryOpToIndexOpFlip(bin.Op)
+			if !ok {
+				return storage.ColumnPredicate{}, false
+			}
+			return storage.ColumnPredicate{ColumnName: colName, Op: op, Value: value}, true
+		}
+	}
+
+	return storage.ColumnPredicate{}, false
+}
+
+// queryOpToIndexOp 将查询层的 BinaryOp 映射为索引层的 PredicateOp。
+func queryOpToIndexOp(op BinaryOp) (index.PredicateOp, bool) {
+	switch op {
+	case OpEq:
+		return index.OpEqual, true
+	case OpNe:
+		return index.OpNotEqual, true
+	case OpLt:
+		return index.OpLess, true
+	case OpLe:
+		return index.OpLessEqual, true
+	case OpGt:
+		return index.OpGreater, true
+	case OpGe:
+		return index.OpGreaterEqual, true
+	default:
+		return 0, false
+	}
+}
+
+// queryOpToIndexOpFlip 将翻转后的运算符映射为索引层的 PredicateOp。
+// 例如 "literal < column" 等价于 "column > literal"。
+func queryOpToIndexOpFlip(op BinaryOp) (index.PredicateOp, bool) {
+	switch op {
+	case OpLt:
+		return index.OpGreater, true
+	case OpLe:
+		return index.OpGreaterEqual, true
+	case OpGt:
+		return index.OpLess, true
+	case OpGe:
+		return index.OpLessEqual, true
+	case OpEq:
+		return index.OpEqual, true
+	case OpNe:
+		return index.OpNotEqual, true
+	default:
+		return 0, false
+	}
 }
 
 // filterEntriesByPredicate 使用谓词过滤扫描结果。

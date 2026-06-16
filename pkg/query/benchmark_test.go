@@ -104,6 +104,10 @@ func (sp *benchStorageProvider) ScanRange(_, _ string) []storage.ScanEntry {
 	return nil
 }
 
+func (sp *benchStorageProvider) ScanRangeWithPruning(start, end string, _ []storage.ColumnPredicate) []storage.ScanEntry {
+	return sp.ScanRange(start, end)
+}
+
 func (sp *benchStorageProvider) ColumnMeta() []storage.ColumnMeta {
 	return []storage.ColumnMeta{
 		{Name: benchColID, Type: common.TypeInt64},
