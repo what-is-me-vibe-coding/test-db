@@ -547,17 +547,8 @@ func TestWrite_EmptyKey(t *testing.T) {
 	defer func() { _ = eng.Close() }()
 
 	err = eng.Write("", map[string]common.Value{crCol1: common.NewInt64(1)})
-	if err != nil {
-		t.Errorf("空 key 写入不应返回错误: %v", err)
-	}
-
-	// 验证可以读取
-	row, ok := eng.Get("")
-	if !ok {
-		t.Error("期望能读取空 key 的数据")
-	}
-	if row.Columns[crCol1] != common.NewInt64(1) {
-		t.Errorf("读取值不匹配: 期望 1，得到 %v", row.Columns[crCol1])
+	if err == nil {
+		t.Error("空 key 写入应返回错误")
 	}
 }
 
