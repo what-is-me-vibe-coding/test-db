@@ -12,7 +12,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
-	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/query"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
@@ -43,6 +42,7 @@ type Server struct {
 	executor  *query.Executor
 	metrics   *Metrics
 	registry  prometheus.Registerer
+	adapter   *routingAdapter // 表路由适配器，按表名选择 LSM 或内存引擎
 
 	tcpListener  net.Listener
 	httpServer   *http.Server
@@ -54,36 +54,6 @@ type Server struct {
 	wg        sync.WaitGroup
 	done      chan struct{}
 	stopOnce  sync.Once
-}
-
-// storageAdapter 适配 storage.Engine 以实现 query.StorageProvider 接口。
-type storageAdapter struct {
-	engine *storage.Engine
-}
-
-// ScanRange 实现 StorageProvider 接口。
-func (sa *storageAdapter) ScanRange(start, end string) []storage.ScanEntry {
-	return sa.engine.ScanRange(start, end)
-}
-
-// ScanRangeWithPruning 实现 StorageProvider 接口，利用列谓词进行段裁剪。
-func (sa *storageAdapter) ScanRangeWithPruning(start, end string, predicates []storage.ColumnPredicate) []storage.ScanEntry {
-	return sa.engine.ScanRangeWithPruning(start, end, predicates)
-}
-
-// ColumnMeta 实现 StorageProvider 接口。
-func (sa *storageAdapter) ColumnMeta() []storage.ColumnMeta {
-	return sa.engine.ColumnMeta()
-}
-
-// PrimaryIndex 实现 StorageProvider 接口。
-func (sa *storageAdapter) PrimaryIndex() *index.PrimaryIndex {
-	return sa.engine.PrimaryIndex()
-}
-
-// SparseIndex 实现 StorageProvider 接口。
-func (sa *storageAdapter) SparseIndex() *index.SparseIndex {
-	return sa.engine.SparseIndex()
 }
 
 // NewServer 创建一个新的服务器实例，初始化所有组件。
@@ -101,8 +71,8 @@ func NewServer(cfg Config, opts ...Option) (*Server, error) {
 	}
 
 	cat := catalog.NewCatalog("")
-	sp := &storageAdapter{engine: eng}
-	exec := query.NewExecutor(sp)
+	adapter := newRoutingAdapter(eng)
+	exec := query.NewExecutor(adapter)
 
 	s := &Server{
 		cfg:       cfg,
@@ -112,6 +82,7 @@ func NewServer(cfg Config, opts ...Option) (*Server, error) {
 		analyzer:  query.NewAnalyzer(cat),
 		optimizer: query.NewOptimizer(),
 		executor:  exec,
+		adapter:   adapter,
 		done:      make(chan struct{}),
 		conns:     make(map[net.Conn]struct{}),
 	}
@@ -214,6 +185,11 @@ func (s *Server) Stop() error {
 		s.closeAllConns()
 		s.wg.Wait()
 
+		// 先关闭所有内存引擎表，再关闭默认 LSM 引擎。
+		if s.adapter != nil {
+			s.adapter.closeAll()
+		}
+
 		if s.storage != nil {
 			if err := s.storage.Close(); err != nil {
 				stopErr = fmt.Errorf("server: close storage: %w", err)
@@ -303,6 +279,12 @@ func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
 		return &Response{Code: -1, Message: fmt.Sprintf("SQL 解析错误: %v", err)}, nil
 	}
 
+	// 拦截 CREATE TABLE：在分析器之前实际创建 catalog 表与对应引擎，
+	// 避免 analyzer 将其降级为空 ScanNode 而不产生副作用。
+	if ct, ok := stmt.(*query.CreateTableStatement); ok {
+		return s.handleCreateTable(ct)
+	}
+
 	plan, err := s.analyzer.Analyze(stmt)
 	if err != nil {
 		s.metrics.QueriesTotal.WithLabelValues("analyze_error").Inc()
@@ -352,7 +334,7 @@ func (s *Server) handleWrite(req *WriteRequest) (*Response, error) {
 		writeRows = append(writeRows, storage.WriteRow{Key: key, Values: values})
 	}
 
-	if err := s.storage.WriteBatch(writeRows); err != nil {
+	if err := s.adapter.engineForTable(req.Table).WriteBatch(writeRows); err != nil {
 		s.metrics.WritesTotal.WithLabelValues("write_error").Inc()
 		return &Response{Code: -1, Message: fmt.Sprintf("写入错误: %v", err)}, nil
 	}
@@ -360,6 +342,43 @@ func (s *Server) handleWrite(req *WriteRequest) (*Response, error) {
 	s.metrics.WritesTotal.WithLabelValues("success").Add(float64(len(writeRows)))
 	s.metrics.WriteDuration.WithLabelValues("success").Observe(time.Since(start).Seconds())
 	return &Response{Code: 0, Rows: len(writeRows)}, nil
+}
+
+// handleCreateTable 处理 CREATE TABLE 语句：在 catalog 中注册表，
+// 并根据 ENGINE 选项创建对应的存储引擎（memory 或默认 LSM）。
+// 若表已存在且未指定 IF NOT EXISTS，返回错误响应。
+func (s *Server) handleCreateTable(ct *query.CreateTableStatement) (*Response, error) {
+	cols := make([]catalog.ColumnDef, len(ct.Columns))
+	for i, c := range ct.Columns {
+		cols[i] = catalog.ColumnDef{
+			Name:     c.Name,
+			Type:     c.Type,
+			Nullable: c.Nullable,
+		}
+	}
+
+	opts := catalog.TableOptions{Engine: ct.Engine}
+	if err := s.catalog.CreateTable(ct.Table, cols, ct.PrimaryKey, opts); err != nil {
+		// IF NOT EXISTS 时表已存在视为成功
+		if ct.IfNotExists && strings.Contains(err.Error(), "already exists") {
+			s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+			return &Response{Code: 0, Rows: 0}, nil
+		}
+		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
+		return &Response{Code: -1, Message: fmt.Sprintf("创建表错误: %v", err)}, nil
+	}
+
+	// 为 memory 引擎表创建并注册专属内存引擎；LSM 表复用默认引擎，无需额外操作。
+	if catalog.NormalizeEngine(ct.Engine) == catalog.EngineMemory {
+		eng := createMemoryEngine(cols)
+		if err := s.adapter.registerMemoryEngine(ct.Table, eng); err != nil {
+			s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
+			return &Response{Code: -1, Message: fmt.Sprintf("注册内存引擎错误: %v", err)}, nil
+		}
+	}
+
+	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+	return &Response{Code: 0, Rows: 0}, nil
 }
 
 // convertWriteRow 将 JSON 行数据转换为存储引擎需要的格式。
