@@ -11,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/query"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/server/pgwire"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
@@ -22,6 +23,7 @@ const defaultMaxMemTableSize = 64 * 1024 * 1024 // 64MB
 type Config struct {
 	TCPAddr         string
 	HTTPAddr        string
+	PGAddr          string // PostgreSQL wire 协议监听地址，空表示不启用
 	DataDir         string
 	MaxMemTableSize int64
 	MaxConnections  int                     // 最大并发 TCP 连接数，0 表示不限制
@@ -45,6 +47,7 @@ type Server struct {
 	tcpListener  net.Listener
 	httpServer   *http.Server
 	httpListener net.Listener
+	pgServer     *pgwire.Server
 
 	connCount int64 // 当前活跃 TCP 连接数
 	conns     map[net.Conn]struct{}
@@ -156,6 +159,17 @@ func (s *Server) Start() error {
 
 	log.Printf("HTTP 监听 %s", s.cfg.HTTPAddr)
 
+	// 启动 PostgreSQL wire 协议服务（若配置了地址）
+	if s.cfg.PGAddr != "" {
+		adapter := &pgwireAdapter{server: s}
+		s.pgServer = pgwire.NewServer(s.cfg.PGAddr, adapter)
+		if err := s.pgServer.Start(); err != nil {
+			// PG 监听失败不阻断启动，仅记录日志
+			log.Printf("server: start pgwire: %v", err)
+			s.pgServer = nil
+		}
+	}
+
 	// 启动后台调度器
 	if s.cfg.EnableScheduler {
 		s.storage.StartScheduler(s.cfg.SchedulerConfig)
@@ -177,6 +191,14 @@ func (s *Server) TCPAddr() string {
 func (s *Server) HTTPAddr() string {
 	if s.httpListener != nil {
 		return s.httpListener.Addr().String()
+	}
+	return ""
+}
+
+// PGAddr 返回 PostgreSQL wire 协议监听地址，未启动时返回空字符串。
+func (s *Server) PGAddr() string {
+	if s.pgServer != nil {
+		return s.pgServer.Addr()
 	}
 	return ""
 }
@@ -230,6 +252,9 @@ func (s *Server) closeListeners() {
 		if err := s.httpServer.Close(); err != nil {
 			log.Printf("server: close http server: %v", err)
 		}
+	}
+	if s.pgServer != nil {
+		s.pgServer.Stop()
 	}
 }
 
