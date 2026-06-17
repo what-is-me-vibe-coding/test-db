@@ -56,26 +56,7 @@ func TestInferColumnTypes(t *testing.T) {
 		}
 	})
 
-	t.Run("infer from first non-nil value", func(t *testing.T) {
-		cols := []string{"id", "name", "score", "flag"}
-		rows := []map[string]any{
-			{"id": int64(1), "name": nil, "score": float64(9.5), "flag": true},
-			{"id": int64(2), "name": "alice", "score": nil, "flag": false},
-		}
-		got := inferColumnTypes(cols, rows)
-		if got[0].OID != OIDInt8 {
-			t.Errorf("列 id 期望 OIDInt8, got %d", got[0].OID)
-		}
-		if got[1].OID != OIDText {
-			t.Errorf("列 name 期望 OIDText, got %d", got[1].OID)
-		}
-		if got[2].OID != OIDFloat8 {
-			t.Errorf("列 score 期望 OIDFloat8, got %d", got[2].OID)
-		}
-		if got[3].OID != OIDBool {
-			t.Errorf("列 flag 期望 OIDBool, got %d", got[3].OID)
-		}
-	})
+	t.Run("infer from first non-nil value", testInferColumnTypesFromRows)
 
 	t.Run("all nil values uses default", func(t *testing.T) {
 		cols := []string{"a"}
@@ -99,6 +80,22 @@ func TestInferColumnTypes(t *testing.T) {
 			t.Errorf("缺失列应使用默认类型, got %+v", got[0])
 		}
 	})
+}
+
+// testInferColumnTypesFromRows 验证从结果行推断每列类型。
+func testInferColumnTypesFromRows(t *testing.T) {
+	cols := []string{"id", "name", "score", "flag"}
+	rows := []map[string]any{
+		{"id": int64(1), "name": nil, "score": float64(9.5), "flag": true},
+		{"id": int64(2), "name": "alice", "score": nil, "flag": false},
+	}
+	got := inferColumnTypes(cols, rows)
+	wantOIDs := []uint32{OIDInt8, OIDText, OIDFloat8, OIDBool}
+	for i, want := range wantOIDs {
+		if got[i].OID != want {
+			t.Errorf("列 %s 期望 OID %d, got %d", cols[i], want, got[i].OID)
+		}
+	}
 }
 
 // TestPGOIDConstants 验证 OID 常量值符合 PostgreSQL 标准。
