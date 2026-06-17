@@ -3,8 +3,10 @@ package pgwire
 import (
 	"fmt"
 	"log"
+	"net"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/jackc/pgproto3/v2"
 )
@@ -30,13 +32,23 @@ func (sslNegotiationResponse) Decode([]byte) error { return nil }
 
 // connHandler 处理单个 PG wire 连接的完整生命周期。
 type connHandler struct {
-	backend  *pgproto3.Backend
-	executor SQLExecutor
+	backend      *pgproto3.Backend
+	executor     SQLExecutor
+	conn         net.Conn
+	idleTimeout  time.Duration
+	writeTimeout time.Duration
 }
 
 // newConnHandler 创建一个新的连接处理器。
-func newConnHandler(backend *pgproto3.Backend, executor SQLExecutor) *connHandler {
-	return &connHandler{backend: backend, executor: executor}
+// conn 用于设置读写截止时间，idleTimeout 为单次读取空闲超时，writeTimeout 为单次写入超时。
+func newConnHandler(backend *pgproto3.Backend, executor SQLExecutor, conn net.Conn, idleTimeout, writeTimeout time.Duration) *connHandler {
+	return &connHandler{
+		backend:      backend,
+		executor:     executor,
+		conn:         conn,
+		idleTimeout:  idleTimeout,
+		writeTimeout: writeTimeout,
+	}
 }
 
 // serve 运行连接生命周期：启动握手 → 查询循环。
@@ -48,8 +60,25 @@ func (h *connHandler) serve() {
 	h.queryLoop()
 }
 
+// setReadDeadline 在配置了空闲超时时设置下次读取的截止时间。
+func (h *connHandler) setReadDeadline() {
+	if h.idleTimeout > 0 {
+		_ = h.conn.SetReadDeadline(time.Now().Add(h.idleTimeout))
+	}
+}
+
+// send 发送一条后端消息，并在配置了写超时时设置写截止时间。
+// 返回发送错误，便于调用方感知连接断开（修复 review #4：不再静默丢弃发送错误）。
+func (h *connHandler) send(msg pgproto3.BackendMessage) error {
+	if h.writeTimeout > 0 {
+		_ = h.conn.SetWriteDeadline(time.Now().Add(h.writeTimeout))
+	}
+	return h.backend.Send(msg)
+}
+
 // handleStartup 处理启动握手，包括 SSL 协商和认证。
 func (h *connHandler) handleStartup() error {
+	h.setReadDeadline()
 	msg, err := h.backend.ReceiveStartupMessage()
 	if err != nil {
 		return fmt.Errorf("receive startup: %w", err)
@@ -69,9 +98,10 @@ func (h *connHandler) handleStartup() error {
 
 // handleSSLNegotiation 拒绝 SSL/GSS 加密，然后接收真正的 StartupMessage。
 func (h *connHandler) handleSSLNegotiation() error {
-	if err := h.backend.Send(sslNegotiationResponse{}); err != nil {
+	if err := h.send(sslNegotiationResponse{}); err != nil {
 		return fmt.Errorf("send ssl response: %w", err)
 	}
+	h.setReadDeadline()
 	msg, err := h.backend.ReceiveStartupMessage()
 	if err != nil {
 		return fmt.Errorf("receive startup after ssl: %w", err)
@@ -84,14 +114,14 @@ func (h *connHandler) handleSSLNegotiation() error {
 
 // sendStartupResponse 发送认证成功后的初始消息序列。
 func (h *connHandler) sendStartupResponse() error {
-	if err := h.backend.Send(&pgproto3.AuthenticationOk{}); err != nil {
+	if err := h.send(&pgproto3.AuthenticationOk{}); err != nil {
 		return fmt.Errorf("send auth ok: %w", err)
 	}
 	if err := h.sendParameterStatuses(); err != nil {
 		return err
 	}
 	pid := atomic.AddUint32(&processIDCounter, 1)
-	if err := h.backend.Send(&pgproto3.BackendKeyData{
+	if err := h.send(&pgproto3.BackendKeyData{
 		ProcessID: pid,
 		SecretKey: pid,
 	}); err != nil {
@@ -112,7 +142,7 @@ func (h *connHandler) sendParameterStatuses() error {
 		{"integer_datetimes", "on"},
 	}
 	for _, p := range params {
-		if err := h.backend.Send(&pgproto3.ParameterStatus{
+		if err := h.send(&pgproto3.ParameterStatus{
 			Name: p.name, Value: p.value,
 		}); err != nil {
 			return fmt.Errorf("send parameter %s: %w", p.name, err)
@@ -122,8 +152,10 @@ func (h *connHandler) sendParameterStatuses() error {
 }
 
 // queryLoop 接收并处理客户端消息，直到连接关闭或 Terminate。
+// 每次接收前重置读截止时间，空闲超时后自动关闭连接（修复 review #2）。
 func (h *connHandler) queryLoop() {
 	for {
+		h.setReadDeadline()
 		msg, err := h.backend.Receive()
 		if err != nil {
 			return
@@ -156,7 +188,10 @@ func (h *connHandler) dispatchMessage(msg pgproto3.FrontendMessage) bool {
 func (h *connHandler) handleQuery(sql string) {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
-		_ = h.backend.Send(&pgproto3.EmptyQueryResponse{})
+		if err := h.send(&pgproto3.EmptyQueryResponse{}); err != nil {
+			log.Printf("pgwire: send empty query response: %v", err)
+			return
+		}
 		_ = h.sendReadyForQuery()
 		return
 	}
@@ -169,40 +204,52 @@ func (h *connHandler) handleQuery(sql string) {
 	if result.IsQuery {
 		h.sendQueryResult(result)
 	} else {
-		_ = h.backend.Send(&pgproto3.CommandComplete{
+		if err := h.send(&pgproto3.CommandComplete{
 			CommandTag: []byte(result.CommandTag),
-		})
+		}); err != nil {
+			log.Printf("pgwire: send command complete: %v", err)
+			return
+		}
 	}
 	_ = h.sendReadyForQuery()
 }
 
-// sendQueryResult 发送 SELECT 结果集（RowDescription + DataRow* + CommandComplete）。
+// sendQueryResult 发送结果集（RowDescription + DataRow* + CommandComplete）。
+// 使用 result.CommandTag 作为命令标签，避免对 INSERT/UPDATE...RETURNING 等带结果集
+// 的写操作错误地返回 "SELECT N" 标签（修复 review #1）。
 func (h *connHandler) sendQueryResult(result *SQLResult) {
 	types := inferColumnTypes(result.Columns, result.Rows)
-	if err := h.backend.Send(buildRowDescription(result.Columns, types)); err != nil {
+	if err := h.send(buildRowDescription(result.Columns, types)); err != nil {
 		log.Printf("pgwire: send row description: %v", err)
 		return
 	}
 	for _, row := range result.Rows {
-		if err := h.backend.Send(buildDataRow(row, result.Columns)); err != nil {
+		if err := h.send(buildDataRow(row, result.Columns)); err != nil {
 			log.Printf("pgwire: send data row: %v", err)
 			return
 		}
 	}
-	tag := fmt.Sprintf("SELECT %d", len(result.Rows))
-	_ = h.backend.Send(&pgproto3.CommandComplete{CommandTag: []byte(tag)})
+	tag := result.CommandTag
+	if tag == "" {
+		tag = fmt.Sprintf("SELECT %d", len(result.Rows))
+	}
+	if err := h.send(&pgproto3.CommandComplete{CommandTag: []byte(tag)}); err != nil {
+		log.Printf("pgwire: send command complete: %v", err)
+	}
 }
 
 // sendError 发送错误响应。
 func (h *connHandler) sendError(err error) {
-	_ = h.backend.Send(&pgproto3.ErrorResponse{
+	if err := h.send(&pgproto3.ErrorResponse{
 		Severity: "ERROR",
 		Code:     "XX000",
 		Message:  err.Error(),
-	})
+	}); err != nil {
+		log.Printf("pgwire: send error response: %v", err)
+	}
 }
 
 // sendReadyForQuery 发送 ReadyForQuery 消息（空闲状态）。
 func (h *connHandler) sendReadyForQuery() error {
-	return h.backend.Send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
+	return h.send(&pgproto3.ReadyForQuery{TxStatus: 'I'})
 }

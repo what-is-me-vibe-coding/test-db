@@ -729,7 +729,7 @@ func TestConnHandlerDirect(t *testing.T) {
 
 		backend := pgproto3.NewBackend(pgproto3.NewChunkReader(serverConn), serverConn)
 		exec := &mockExecutor{}
-		h := newConnHandler(backend, exec)
+		h := newConnHandler(backend, exec, serverConn, 0, 0)
 		if h == nil {
 			t.Fatal("newConnHandler 返回 nil")
 		}
@@ -738,6 +738,9 @@ func TestConnHandlerDirect(t *testing.T) {
 		}
 		if h.executor == nil {
 			t.Error("executor 不应为 nil")
+		}
+		if h.conn == nil {
+			t.Error("conn 不应为 nil")
 		}
 	})
 }
