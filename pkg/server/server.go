@@ -6,9 +6,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
@@ -327,107 +325,4 @@ func (s *Server) serveHTTP() {
 			}
 		}
 	}
-}
-
-// handleQuery 执行 SQL 查询。
-func (s *Server) handleQuery(req *QueryRequest) (*Response, error) {
-	start := time.Now()
-	defer func() {
-		s.metrics.QueryDuration.WithLabelValues("sql").Observe(time.Since(start).Seconds())
-	}()
-
-	stmt, err := s.parser.Parse(req.SQL)
-	if err != nil {
-		s.metrics.QueriesTotal.WithLabelValues("parse_error").Inc()
-		return &Response{Code: -1, Message: fmt.Sprintf("SQL 解析错误: %v", err)}, nil
-	}
-
-	// DDL/DML 语句（CREATE TABLE / INSERT）由服务层直接执行，
-	// 不走 analyzer/executor 路径（它们仅处理 SELECT 这类只读查询）。
-	switch st := stmt.(type) {
-	case *query.CreateTableStatement:
-		return s.handleCreateTable(st)
-	case *query.InsertStatement:
-		return s.handleInsert(st)
-	}
-
-	plan, err := s.analyzer.Analyze(stmt)
-	if err != nil {
-		s.metrics.QueriesTotal.WithLabelValues("analyze_error").Inc()
-		return &Response{Code: -1, Message: fmt.Sprintf("SQL 分析错误: %v", err)}, nil
-	}
-
-	optimized := s.optimizer.Optimize(plan)
-
-	chunks, err := s.executor.Execute(optimized)
-	if err != nil {
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return &Response{Code: -1, Message: fmt.Sprintf("SQL 执行错误: %v", err)}, nil
-	}
-
-	// 从查询计划的 Schema 中提取列名，用于 JSON 响应的 key
-	var colNames []string
-	if schema := optimized.Schema(); len(schema) > 0 {
-		colNames = make([]string, len(schema))
-		for i, col := range schema {
-			colNames[i] = col.Name
-		}
-	}
-	data := chunksToRows(chunks, colNames)
-	totalRows := countRows(chunks)
-
-	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
-	return &Response{Code: 0, Data: data, Rows: totalRows, Columns: colNames}, nil
-}
-
-// handleCreateTable 执行 CREATE TABLE 语句，在 catalog 中注册表定义，
-// 并将列元数据同步到存储引擎，使后台调度器自动刷盘能正确编码列。
-func (s *Server) handleCreateTable(ct *query.CreateTableStatement) (*Response, error) {
-	cols := make([]catalog.ColumnDef, len(ct.Columns))
-	for i, c := range ct.Columns {
-		cols[i] = catalog.ColumnDef{
-			Name:     c.Name,
-			Type:     c.Type,
-			Nullable: c.Nullable,
-		}
-	}
-
-	if err := s.catalog.CreateTable(ct.Table, cols, ct.PrimaryKey, catalog.TableOptions{}); err != nil {
-		// IF NOT EXISTS 时表已存在视为成功
-		if ct.IfNotExists && strings.Contains(err.Error(), "already exists") {
-			s.metrics.QueriesTotal.WithLabelValues("success").Inc()
-			return &Response{Code: 0, Message: "成功"}, nil
-		}
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return &Response{Code: -1, Message: fmt.Sprintf("建表错误: %v", err)}, nil
-	}
-
-	// 同步列元数据到存储引擎（单表模型：以最新创建的表为准）
-	s.storage.SetColumnMeta(buildColumnMeta(cols))
-
-	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
-	return &Response{Code: 0, Message: "成功"}, nil
-}
-
-// buildColumnMetaFromCatalog 从 catalog 的第一张表构建存储引擎列元数据。
-// 当前存储引擎为单表模型，取任意一张表即可。
-func buildColumnMetaFromCatalog(cat *catalog.Catalog) []storage.ColumnMeta {
-	snap := cat.Snapshot()
-	for _, tbl := range snap.Tables {
-		return buildColumnMeta(tbl.Columns)
-	}
-	return nil
-}
-
-// buildColumnMeta 将 catalog 列定义转换为存储引擎列元数据。
-func buildColumnMeta(cols []catalog.ColumnDef) []storage.ColumnMeta {
-	result := make([]storage.ColumnMeta, len(cols))
-	for i, c := range cols {
-		result[i] = storage.ColumnMeta{
-			ID:   uint32(i),
-			Name: c.Name,
-			Type: c.Type,
-		}
-	}
-	return result
 }

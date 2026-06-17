@@ -15,16 +15,22 @@ func TestSQLCreateInsertSelect(t *testing.T) {
 	resp, err := srv.handleQuery(&QueryRequest{
 		SQL: "CREATE TABLE sensor (id INT64, name STRING, temperature FLOAT64, active BOOL, PRIMARY KEY (id))",
 	})
-	if err != nil || resp.Code != 0 {
-		t.Fatalf("CREATE TABLE 失败: err=%v resp=%+v", err, resp)
+	if err != nil {
+		t.Fatalf("CREATE TABLE 失败: %v", err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("CREATE TABLE 失败: %s", resp.Message)
 	}
 
 	// 2. INSERT
 	resp, err = srv.handleQuery(&QueryRequest{
 		SQL: "INSERT INTO sensor (id, name, temperature, active) VALUES (1, 'sensor-1', 23.5, true)",
 	})
-	if err != nil || resp.Code != 0 {
-		t.Fatalf("INSERT 失败: err=%v resp=%+v", err, resp)
+	if err != nil {
+		t.Fatalf("INSERT 失败: %v", err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("INSERT 失败: %s", resp.Message)
 	}
 	if resp.Rows != 1 {
 		t.Errorf("INSERT 影响行数 = %d, 期望 1", resp.Rows)
@@ -34,24 +40,30 @@ func TestSQLCreateInsertSelect(t *testing.T) {
 	resp, err = srv.handleQuery(&QueryRequest{
 		SQL: "SELECT id, name, temperature FROM sensor WHERE id = 1",
 	})
-	if err != nil || resp.Code != 0 {
-		t.Fatalf("SELECT 失败: err=%v resp=%+v", err, resp)
+	if err != nil {
+		t.Fatalf("SELECT 失败: %v", err)
+	}
+	if resp.Code != 0 {
+		t.Fatalf("SELECT 失败: %s", resp.Message)
 	}
 	if resp.Rows != 1 {
 		t.Fatalf("SELECT 行数 = %d, 期望 1", resp.Rows)
 	}
 
-	// 验证返回数据
-	data, ok := resp.Data.([]map[string]any)
-	if !ok || len(data) != 1 {
-		t.Fatalf("SELECT 返回数据异常: type=%T len=%d", resp.Data, len(data))
-	}
-	validateSensorRow(t, data[0])
+	assertSensorRow(t, resp.Data)
 }
 
-// validateSensorRow 验证 sensor 表查询返回的单行数据。
-func validateSensorRow(t *testing.T, row map[string]any) {
+// assertSensorRow 验证 SELECT 返回的单行 sensor 数据。
+func assertSensorRow(t *testing.T, data any) {
 	t.Helper()
+	rows, ok := data.([]map[string]any)
+	if !ok {
+		t.Fatalf("SELECT 返回数据类型错误: %T", data)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("SELECT 返回 %d 行, 期望 1", len(rows))
+	}
+	row := rows[0]
 	if v, ok := row["id"].(int64); !ok || v != 1 {
 		t.Errorf("id: 期望 int64(1), got %T(%v)", row["id"], row["id"])
 	}
