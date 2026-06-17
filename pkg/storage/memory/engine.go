@@ -81,6 +81,9 @@ func (e *Engine) upsertLocked(key string, row storage.Row) {
 
 // WriteBatch 批量写入多行数据，所有行共享一次锁获取，提升批量写入吞吐。
 // 空 key 不被允许。批量写入内若某行 key 重复，后写入的行覆盖先写入的行。
+//
+// 优化：批量写入时先追加全部新行再统一排序去重，避免逐行 upsert 的 O(n) 写放大，
+// 复杂度从 O(n*m) 降为 O((n+m) log (n+m))，对大批量写入显著降低耗时。
 func (e *Engine) WriteBatch(rows []storage.WriteRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -97,11 +100,35 @@ func (e *Engine) WriteBatch(rows []storage.WriteRow) error {
 		return errEngineClosed
 	}
 	base := e.nextVer.Add(uint64(len(rows)))
+	// 先追加全部批量行（版本号随 i 递增），再统一排序去重。
 	for i, r := range rows {
 		version := base - uint64(len(rows)) + uint64(i) + 1
-		e.upsertLocked(r.Key, storage.Row{Version: version, Columns: r.Values})
+		e.rows = append(e.rows, rowEntry{key: r.Key, row: storage.Row{Version: version, Columns: r.Values}})
 	}
+	e.sortAndDedupLocked()
 	return nil
+}
+
+// sortAndDedupLocked 将 e.rows 按 key 升序排序并对同 key 的条目去重（保留最后一个）。
+// 调用者必须持有 e.mu。使用稳定排序保证同 key 时后追加的条目（版本号更大）胜出，
+// 从而与逐行 upsert 的 last-wins 语义保持一致。
+func (e *Engine) sortAndDedupLocked() {
+	sort.SliceStable(e.rows, func(i, j int) bool {
+		return e.rows[i].key < e.rows[j].key
+	})
+	if len(e.rows) <= 1 {
+		return
+	}
+	w := 0
+	for i := 1; i < len(e.rows); i++ {
+		if e.rows[i].key == e.rows[w].key {
+			e.rows[w] = e.rows[i] // 后者覆盖前者（last-wins）
+		} else {
+			w++
+			e.rows[w] = e.rows[i]
+		}
+	}
+	e.rows = e.rows[:w+1]
 }
 
 // Get 根据主键查询一行数据。未找到返回 (Row{}, false)。

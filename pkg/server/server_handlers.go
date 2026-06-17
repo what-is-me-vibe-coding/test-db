@@ -223,32 +223,61 @@ func (s *Server) handleCreateTable(ct *query.CreateTableStatement) (*Response, e
 			Nullable: c.Nullable,
 		}
 	}
-
 	opts := catalog.TableOptions{Engine: ct.Engine}
-	if err := s.catalog.CreateTable(ct.Table, cols, ct.PrimaryKey, opts); err != nil {
-		// IF NOT EXISTS 时表已存在视为成功
-		if ct.IfNotExists && strings.Contains(err.Error(), "already exists") {
-			s.metrics.QueriesTotal.WithLabelValues("success").Inc()
-			return &Response{Code: 0, Rows: 0}, nil
-		}
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return &Response{Code: -1, Message: fmt.Sprintf("创建表错误: %v", err)}, nil
-	}
 
-	// 为 memory 引擎表创建并注册专属内存引擎；LSM 表复用默认引擎，无需额外操作。
 	if catalog.NormalizeEngine(ct.Engine) == catalog.EngineMemory {
-		eng := createMemoryEngine(cols)
-		if err := s.adapter.registerMemoryEngine(ct.Table, eng); err != nil {
-			s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-			return &Response{Code: -1, Message: fmt.Sprintf("注册内存引擎错误: %v", err)}, nil
-		}
-	} else {
-		// LSM 表：同步列元数据到存储引擎，使后台调度器自动刷盘能正确编码列
-		s.storage.SetColumnMeta(buildColumnMeta(cols))
+		return s.createMemoryTable(ct, cols, opts)
 	}
 
+	// LSM 表：在 catalog 建表，并同步列元数据到存储引擎，使后台调度器自动刷盘能正确编码列。
+	if err := s.catalog.CreateTable(ct.Table, cols, ct.PrimaryKey, opts); err != nil {
+		return s.createTableErrorResponse(ct, err), nil
+	}
+	s.storage.SetColumnMeta(buildColumnMeta(cols))
 	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
 	return &Response{Code: 0, Rows: 0}, nil
+}
+
+// createMemoryTable 创建内存引擎表。先注册内存引擎再在 catalog 建表，确保当表在
+// catalog 中对外可见时内存引擎已注册，避免并发查询回退到默认 LSM 引擎导致数据写入
+// 错误的引擎（修复 registerMemoryEngine 与 catalog.CreateTable 之间的竞态）。
+// 若 catalog 建表失败则回滚（注销内存引擎）。
+func (s *Server) createMemoryTable(ct *query.CreateTableStatement, cols []catalog.ColumnDef, opts catalog.TableOptions) (*Response, error) {
+	// 表已存在时直接返回，避免对已存在的表（如 LSM 表）误注册内存引擎造成短暂错误路由。
+	if _, err := s.catalog.GetTable(ct.Table); err == nil {
+		return s.tableAlreadyExistsResponse(ct), nil
+	}
+	eng := createMemoryEngine(cols)
+	if err := s.adapter.registerMemoryEngine(ct.Table, eng); err != nil {
+		// 该表已注册过内存引擎（如并发建表），视为已存在。
+		return s.tableAlreadyExistsResponse(ct), nil
+	}
+	if err := s.catalog.CreateTable(ct.Table, cols, ct.PrimaryKey, opts); err != nil {
+		_ = s.adapter.unregisterMemoryEngine(ct.Table) // 建表失败，回滚内存引擎注册
+		return s.createTableErrorResponse(ct, err), nil
+	}
+	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+	return &Response{Code: 0, Rows: 0}, nil
+}
+
+// createTableErrorResponse 根据建表错误与 IF NOT EXISTS 语义构造响应。
+func (s *Server) createTableErrorResponse(ct *query.CreateTableStatement, err error) *Response {
+	if ct.IfNotExists && strings.Contains(err.Error(), "already exists") {
+		s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+		return &Response{Code: 0, Rows: 0}
+	}
+	s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
+	return &Response{Code: -1, Message: fmt.Sprintf("创建表错误: %v", err)}
+}
+
+// tableAlreadyExistsResponse 根据 IF NOT EXISTS 语义返回“表已存在”的响应。
+func (s *Server) tableAlreadyExistsResponse(ct *query.CreateTableStatement) *Response {
+	if ct.IfNotExists {
+		s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+		return &Response{Code: 0, Rows: 0}
+	}
+	s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
+	return &Response{Code: -1, Message: fmt.Sprintf("创建表错误: table %q already exists", ct.Table)}
 }
 
 // convertWriteRow 将 JSON 行数据转换为存储引擎需要的格式。

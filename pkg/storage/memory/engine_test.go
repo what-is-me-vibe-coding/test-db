@@ -113,6 +113,60 @@ func TestEngineWriteBatchEmpty(t *testing.T) {
 	}
 }
 
+// TestEngineWriteBatchDedup 验证批量写入的去重与 last-wins 语义（review #2 优化回归）。
+// 覆盖：批内重复 key、与已存在 key 重复、结果保持有序且版本号为批内最新。
+func TestEngineWriteBatchDedup(t *testing.T) {
+	e := New()
+	defer func() { _ = e.Close() }()
+
+	// 预置一行
+	if err := e.Write("a", map[string]common.Value{"v": intVal(0)}); err != nil {
+		t.Fatalf("预置写入失败: %v", err)
+	}
+
+	// 批量写入：a(覆盖预置)、b(批内重复，后写胜出)、c(新)、d(新)
+	rows := []storage.WriteRow{
+		{Key: "a", Values: map[string]common.Value{"v": intVal(1)}},
+		{Key: "b", Values: map[string]common.Value{"v": intVal(10)}},
+		{Key: "b", Values: map[string]common.Value{"v": intVal(20)}}, // 批内重复
+		{Key: "c", Values: map[string]common.Value{"v": intVal(3)}},
+		{Key: "d", Values: map[string]common.Value{"v": intVal(4)}},
+	}
+	if err := e.WriteBatch(rows); err != nil {
+		t.Fatalf("WriteBatch 失败: %v", err)
+	}
+
+	if e.RowCount() != 4 {
+		t.Fatalf("去重后行数应为 4，得到 %d", e.RowCount())
+	}
+
+	entries := e.ScanRange("", "")
+	want := []struct {
+		key string
+		v   int64
+	}{
+		{"a", 1}, {"b", 20}, {"c", 3}, {"d", 4},
+	}
+	if len(entries) != len(want) {
+		t.Fatalf("扫描行数期望 %d，得到 %d", len(want), len(entries))
+	}
+	for i, w := range want {
+		if entries[i].Key != w.key {
+			t.Errorf("第 %d 行 key 期望 %s，得到 %s", i, w.key, entries[i].Key)
+		}
+		if got := entries[i].Value.Columns["v"].Int64; got != w.v {
+			t.Errorf("第 %d 行 v 期望 %d，得到 %d", i, w.v, got)
+		}
+	}
+
+	// 版本号应单调递增（按写入顺序）
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Value.Version < entries[i-1].Value.Version {
+			t.Errorf("版本号未随写入顺序递增: %d < %d", entries[i].Value.Version, entries[i-1].Value.Version)
+		}
+	}
+}
+
 // TestEngineScanRange 验证范围扫描的边界条件。
 func TestEngineScanRange(t *testing.T) {
 	e := New()

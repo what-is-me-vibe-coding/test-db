@@ -73,6 +73,22 @@ func (r *routingAdapter) registerMemoryEngine(table string, eng TableEngine) err
 	return nil
 }
 
+// unregisterMemoryEngine 注销一张内存引擎表并关闭其引擎，释放占用的内存。
+// 用于 CREATE TABLE 失败时的回滚，以及未来 DROP TABLE 的支持。
+// 若该表未注册内存引擎，返回错误。
+func (r *routingAdapter) unregisterMemoryEngine(table string) error {
+	r.mu.Lock()
+	eng, ok := r.memEngines[table]
+	if !ok {
+		r.mu.Unlock()
+		return fmt.Errorf("memory engine for table %q not registered", table)
+	}
+	delete(r.memEngines, table)
+	r.mu.Unlock()
+	_ = eng.Close()
+	return nil
+}
+
 // engineForTable 返回指定表的引擎。内存引擎表返回其专属引擎，其余返回默认 LSM 引擎。
 func (r *routingAdapter) engineForTable(table string) TableEngine {
 	r.mu.RLock()
