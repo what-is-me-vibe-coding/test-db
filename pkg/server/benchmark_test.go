@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 const (
@@ -119,6 +120,97 @@ func BenchmarkPacketDecode(b *testing.B) {
 }
 
 // --- 数据转换基准测试 ---
+
+// benchBuildChunk 构建一个包含多列多行的 Chunk，用于 chunksToRows 基准测试。
+// 列类型覆盖 INT64/STRING/FLOAT64/BOOL/TIMESTAMP，模拟真实查询结果。
+func benchBuildChunk(b *testing.B, rowCount uint32) *storage.Chunk {
+	b.Helper()
+	chunk := storage.NewChunk(rowCount)
+
+	cols := []struct {
+		id  uint32
+		typ common.DataType
+	}{
+		{0, common.TypeInt64},
+		{1, common.TypeString},
+		{2, common.TypeFloat64},
+		{3, common.TypeBool},
+		{4, common.TypeTimestamp},
+	}
+	for _, c := range cols {
+		col := storage.NewColumnVector(c.id, c.typ, rowCount)
+		for i := uint32(0); i < rowCount; i++ {
+			switch c.typ {
+			case common.TypeInt64:
+				_ = col.Append(common.NewInt64(int64(i)))
+			case common.TypeString:
+				_ = col.Append(common.NewString(fmt.Sprintf("user_%d", i)))
+			case common.TypeFloat64:
+				_ = col.Append(common.NewFloat64(float64(i) * 1.5))
+			case common.TypeBool:
+				_ = col.Append(common.NewBool(i%2 == 0))
+			case common.TypeTimestamp:
+				_ = col.Append(common.NewTimestamp(time.Unix(int64(i), 0)))
+			}
+		}
+		_ = chunk.AddColumn(col)
+	}
+	return chunk
+}
+
+// BenchmarkChunksToRows 测试查询结果物化的性能（SELECT 结果转 []map）。
+// 这是每个返回行的 SELECT 查询的热点路径。
+func BenchmarkChunksToRows(b *testing.B) {
+	chunk := benchBuildChunk(b, 1024)
+	chunks := []*storage.Chunk{chunk}
+	colNames := []string{"id", "name", "score", "active", "ts"}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = chunksToRows(chunks, colNames)
+	}
+	b.ReportAllocs()
+}
+
+// BenchmarkChunksToRowsMultiChunk 测试多 Chunk 场景下的物化性能。
+func BenchmarkChunksToRowsMultiChunk(b *testing.B) {
+	chunks := make([]*storage.Chunk, 0, 4)
+	for k := 0; k < 4; k++ {
+		chunks = append(chunks, benchBuildChunk(b, 256))
+	}
+	colNames := []string{"id", "name", "score", "active", "ts"}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = chunksToRows(chunks, colNames)
+	}
+	b.ReportAllocs()
+}
+
+// BenchmarkChunksToRowsWideTable 测试宽表场景下的物化性能。
+// 项目目标支持 ≥10000 列，宽表下列数较多，逐行 GetColumn 与 columnName
+// 的累积开销更显著，是验证列遍历优化的关键场景。
+func BenchmarkChunksToRowsWideTable(b *testing.B) {
+	const colCount = 20
+	const rowCount = 512
+	chunk := storage.NewChunk(rowCount)
+	colNames := make([]string, colCount)
+	for c := 0; c < colCount; c++ {
+		col := storage.NewColumnVector(uint32(c), common.TypeInt64, rowCount)
+		for i := uint32(0); i < rowCount; i++ {
+			_ = col.Append(common.NewInt64(int64(int(i) + c)))
+		}
+		_ = chunk.AddColumn(col)
+		colNames[c] = fmt.Sprintf("col_%d", c)
+	}
+	chunks := []*storage.Chunk{chunk}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = chunksToRows(chunks, colNames)
+	}
+	b.ReportAllocs()
+}
 
 func BenchmarkInterfaceToValue(b *testing.B) {
 	b.ResetTimer()

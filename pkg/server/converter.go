@@ -111,6 +111,10 @@ func toDateValue(raw any) (common.Value, error) {
 // chunksToRows 将 Chunk 切片转换为可 JSON 序列化的行数据。
 // colNames 为每列的名称，按列索引顺序排列。若 colNames 为空则回退到 col_N 格式。
 // 预分配 result 切片容量，避免追加时的反复扩容。
+//
+// 性能优化：每个 Chunk 的列向量与列名只解析一次，避免在逐行遍历中重复调用
+// GetColumn（含边界检查与错误返回）与 columnName。行 map 按列数预分配容量，
+// 消除插入时的 rehash。列遍历改为直接 range 切片，跳过逐次索引边界检查。
 func chunksToRows(chunks []*storage.Chunk, colNames []string) []map[string]any {
 	totalRows := countRows(chunks)
 	if totalRows == 0 {
@@ -121,28 +125,29 @@ func chunksToRows(chunks []*storage.Chunk, colNames []string) []map[string]any {
 		if chunk == nil {
 			continue
 		}
-		for i := uint32(0); i < chunk.RowCount(); i++ {
-			result = append(result, buildRowMap(chunk, i, colNames))
+		cols := chunk.Columns()
+		colCount := len(cols)
+		if colCount == 0 {
+			continue
+		}
+		// 预计算每列名称，避免逐行重复解析
+		names := make([]string, colCount)
+		for i := 0; i < colCount; i++ {
+			names[i] = columnName(colNames, i)
+		}
+		rowCount := chunk.RowCount()
+		for i := uint32(0); i < rowCount; i++ {
+			// 按列数预分配 map 容量，避免渐进式扩容
+			rowMap := make(map[string]any, colCount)
+			for colIdx, col := range cols {
+				if i < col.Len() {
+					rowMap[names[colIdx]] = valueToInterface(col.GetValue(i))
+				}
+			}
+			result = append(result, rowMap)
 		}
 	}
 	return result
-}
-
-// buildRowMap 从 Chunk 中构建单行数据映射。
-func buildRowMap(chunk *storage.Chunk, rowIdx uint32, colNames []string) map[string]any {
-	rowMap := make(map[string]any)
-	for colIdx := 0; colIdx < chunk.ColumnCount(); colIdx++ {
-		col, err := chunk.GetColumn(colIdx)
-		if err != nil {
-			continue
-		}
-		if rowIdx < col.Len() {
-			val := col.GetValue(rowIdx)
-			name := columnName(colNames, colIdx)
-			rowMap[name] = valueToInterface(val)
-		}
-	}
-	return rowMap
 }
 
 // columnName 解析列名，优先使用 colNames 中指定名称，否则回退到 col_N 格式。
