@@ -436,3 +436,95 @@ func TestColumnVectorGrowPreservesNulls(t *testing.T) {
 		t.Errorf("row 2 = %d, want 100", cv.GetValue(2).Int64)
 	}
 }
+
+// TestCopySelected 验证 CopySelected 在各类型、NULL、乱序选择下的正确性，
+// 并与逐行 GetValue+SetValue 的语义做等价性校验。
+func TestCopySelected(t *testing.T) {
+	// 构造 6 行数据，行 1/4 为 NULL，selection 为非连续、乱序选择。
+	const n = 6
+	selection := []uint32{0, 2, 4, 5}
+
+	intCol := NewColumnVector(1, common.TypeInt64, n)
+	floatCol := NewColumnVector(2, common.TypeFloat64, n)
+	strCol := NewColumnVector(3, common.TypeString, n)
+	boolCol := NewColumnVector(4, common.TypeBool, n)
+	tsCol := NewColumnVector(5, common.TypeTimestamp, n)
+	for i := uint32(0); i < n; i++ {
+		intCol.SetInt64(i, int64(i*10))
+		floatCol.SetFloat64(i, float64(i)*1.5)
+		strCol.SetString(i, "v"+itoa(i))
+		boolCol.SetBool(i, i%2 == 0)
+		tsCol.SetTimestamp(i, time.Unix(int64(i)*60, 0))
+	}
+	// 行 1 与行 4 设为 NULL
+	for _, col := range []*ColumnVector{intCol, floatCol, strCol, boolCol, tsCol} {
+		col.SetNull(1)
+		col.SetNull(4)
+		col.len = n
+	}
+
+	cols := []*ColumnVector{intCol, floatCol, strCol, boolCol, tsCol}
+	for _, src := range cols {
+		dst := src.CopySelected(selection)
+		if dst.Len() != uint32(len(selection)) {
+			t.Fatalf("%s: Len = %d, want %d", src.Typ, dst.Len(), len(selection))
+		}
+		if dst.ColumnID != src.ColumnID {
+			t.Errorf("%s: ColumnID = %d, want %d", src.Typ, dst.ColumnID, src.ColumnID)
+		}
+		if dst.Typ != src.Typ {
+			t.Errorf("%s: Typ mismatch", src.Typ)
+		}
+		// 与逐行 GetValue 做等价性校验（Value.Equal 覆盖 NULL/各类型/Timestamp）
+		for dstIdx, srcIdx := range selection {
+			want := src.GetValue(srcIdx)
+			got := dst.GetValue(uint32(dstIdx))
+			if !want.Equal(got) {
+				t.Errorf("%s row %d: got %v, want %v", src.Typ, dstIdx, got, want)
+			}
+		}
+	}
+}
+
+// TestCopySelectedEmpty 验证空 selection 返回空列且不 panic。
+func TestCopySelectedEmpty(t *testing.T) {
+	cv := NewColumnVector(1, common.TypeInt64, 4)
+	cv.SetInt64(0, 1)
+	cv.len = 4
+	dst := cv.CopySelected(nil)
+	if dst.Len() != 0 {
+		t.Fatalf("Len = %d, want 0", dst.Len())
+	}
+}
+
+// TestCopySelectedNoNullsFastPath 验证无 NULL 快速路径（hasNulls=false）的正确性。
+func TestCopySelectedNoNullsFastPath(t *testing.T) {
+	cv := NewColumnVector(1, common.TypeInt64, 8)
+	for i := uint32(0); i < 8; i++ {
+		cv.SetInt64(i, int64(i+1))
+	}
+	cv.len = 8
+	selection := []uint32{1, 3, 7}
+	dst := cv.CopySelected(selection)
+	want := []int64{2, 4, 8}
+	for i, w := range want {
+		if got := dst.GetValue(uint32(i)).Int64; got != w {
+			t.Errorf("row %d = %d, want %d", i, got, w)
+		}
+	}
+}
+
+// itoa 是测试用的简易整数转字符串，避免引入 strconv。
+func itoa(i uint32) string {
+	if i == 0 {
+		return "0"
+	}
+	var buf [12]byte
+	pos := len(buf)
+	for i > 0 {
+		pos--
+		buf[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(buf[pos:])
+}

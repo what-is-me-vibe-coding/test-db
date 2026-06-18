@@ -293,6 +293,74 @@ func (cv *ColumnVector) Slice(startRow, endRow uint32) (*ColumnVector, error) {
 	return result, nil
 }
 
+// CopySelected 返回一个新列向量，仅包含 selection 指定行（按 selection 顺序）。
+// 使用类型特化的批量拷贝，直接访问强类型底层数组与 null 位图，
+// 跳过 GetValue/SetValue 的逐行类型分发与 common.Value 装箱/拆箱，
+// 对过滤后结果物化（如 buildFilteredOutput）有显著吞吐收益。
+// 语义等价于逐行 GetValue + SetValue，但分配与计算开销更低。
+// selection 中的索引必须 < cv.len，调用方需保证。
+func (cv *ColumnVector) CopySelected(selection []uint32) *ColumnVector {
+	selLen := uint32(len(selection))
+	result := NewColumnVector(cv.ColumnID, cv.Typ, selLen)
+	result.len = selLen
+	if selLen == 0 {
+		return result
+	}
+	srcNulls := cv.nulls
+	dstNulls := result.nulls
+	// 多数 OLAP 列无 NULL，先整体判断；无 NULL 时跳过逐行 null 检查。
+	hasNulls := !srcNulls.IsEmpty()
+	switch cv.Typ {
+	case common.TypeInt64, common.TypeInt8, common.TypeInt16,
+		common.TypeInt32, common.TypeUint64, common.TypeDate:
+		copySelectedTyped(result.int64s, cv.int64s, selection, hasNulls, srcNulls, dstNulls)
+	case common.TypeFloat64:
+		copySelectedTyped(result.float64s, cv.float64s, selection, hasNulls, srcNulls, dstNulls)
+	case common.TypeString:
+		copySelectedTyped(result.strings, cv.strings, selection, hasNulls, srcNulls, dstNulls)
+	case common.TypeTimestamp:
+		copySelectedTyped(result.times, cv.times, selection, hasNulls, srcNulls, dstNulls)
+	case common.TypeBool:
+		copySelectedBool(result, cv, selection, hasNulls, srcNulls, dstNulls)
+	}
+	return result
+}
+
+// copySelectedTyped 将 src 中 selection 指定行的元素拷贝到 dst，并同步 null 位图。
+// 无 NULL 时跳过逐行 null 检查以提升吞吐。
+func copySelectedTyped[T any](dst, src []T, selection []uint32, hasNulls bool, srcNulls, dstNulls *common.Bitmap) {
+	if hasNulls {
+		for dstIdx, srcIdx := range selection {
+			if srcNulls.Get(srcIdx) {
+				dstNulls.Set(uint32(dstIdx))
+			} else {
+				dst[dstIdx] = src[srcIdx]
+			}
+		}
+		return
+	}
+	for dstIdx, srcIdx := range selection {
+		dst[dstIdx] = src[srcIdx]
+	}
+}
+
+// copySelectedBool 处理 BOOL 列的稀疏选择拷贝（底层为 bitmap 存储）。
+func copySelectedBool(dst, src *ColumnVector, selection []uint32, hasNulls bool, srcNulls, dstNulls *common.Bitmap) {
+	if hasNulls {
+		for dstIdx, srcIdx := range selection {
+			if srcNulls.Get(srcIdx) {
+				dstNulls.Set(uint32(dstIdx))
+			} else {
+				dst.SetBool(uint32(dstIdx), src.GetBool(srcIdx))
+			}
+		}
+		return
+	}
+	for dstIdx, srcIdx := range selection {
+		dst.SetBool(uint32(dstIdx), src.GetBool(srcIdx))
+	}
+}
+
 // NullBitmap 返回内部的 NULL 位图（只读引用，不要修改）。
 func (cv *ColumnVector) NullBitmap() *common.Bitmap {
 	return cv.nulls
