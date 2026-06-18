@@ -369,7 +369,8 @@ func TestToFloat64(t *testing.T) {
 		{"int64值转换为float64", common.NewInt64(42), 42.0},
 		{"其他类型返回0", common.NewString("hello"), 0},
 		{"null类型返回0", common.NewNull(), 0},
-		{"bool类型返回0", common.NewBool(true), 0},
+		{"bool类型true返回1", common.NewBool(true), 1},
+		{"bool类型false返回0", common.NewBool(false), 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

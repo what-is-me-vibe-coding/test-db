@@ -162,10 +162,25 @@ func (b *Bitmap) Xor(other *Bitmap) {
 }
 
 // Not 对当前位图取反。
+// 取反后清除最后一个 word 中超出 len 的填充位，避免 Count/ForEach/Equals
+// 将填充位误计为有效位（例如 len=10 时填充位 10..63 不应被翻转计入统计）。
 func (b *Bitmap) Not() {
 	for i := range b.bits {
 		b.bits[i] = ^b.bits[i]
 	}
+	if b.len == 0 {
+		return
+	}
+	used := b.len % 64
+	if used == 0 {
+		return
+	}
+	lastWord := len(b.bits) - 1
+	if lastWord < 0 {
+		return
+	}
+	mask := uint64(1)<<used - 1
+	b.bits[lastWord] &= mask
 }
 
 // Equals 判断两个位图是否相等。
