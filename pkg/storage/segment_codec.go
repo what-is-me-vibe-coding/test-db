@@ -312,49 +312,42 @@ func readColumnStat(data []byte, pos int, idx uint32) (ColumnStat, int, error) {
 }
 
 func readStatBytes(data []byte, pos int, field string, idx uint32) (int, []byte, error) {
-	if pos+4 > len(data) {
-		return pos, nil, fmt.Errorf("segment: footer truncated at %s length for column %d", field, idx)
-	}
-	byteLen := binary.LittleEndian.Uint32(data[pos:])
-	pos += 4
 	// 校验单列统计值长度上限，防止损坏数据导致 OOM
 	const maxStatSize = 1 << 20 // 1MB
-	if byteLen > maxStatSize {
-		return pos, nil, fmt.Errorf("segment: %s length %d for column %d exceeds max %d, possibly corrupted", field, byteLen, idx, maxStatSize)
-	}
-	if byteLen > 0 {
-		if pos+int(byteLen) > len(data) {
-			return pos, nil, fmt.Errorf("segment: footer truncated at %s data for column %d", field, idx)
-		}
-		b := make([]byte, byteLen)
-		copy(b, data[pos:pos+int(byteLen)])
-		pos += int(byteLen)
-		return pos, b, nil
-	}
-	return pos, nil, nil
+	label := fmt.Sprintf("%s for column %d", field, idx)
+	return readLengthPrefixedBytes(data, pos, maxStatSize, label)
 }
 
 func readBloomFilter(data []byte, pos int) (int, []byte, error) {
-	if pos+4 > len(data) {
-		return pos, nil, fmt.Errorf("segment: footer truncated at bloom length")
-	}
-	bloomLen := binary.LittleEndian.Uint32(data[pos:])
-	pos += 4
 	// 校验 bloom filter 长度上限，防止损坏数据导致 OOM
 	const maxBloomSize = 16 << 20 // 16MB，远超正常布隆过滤器大小
-	if bloomLen > maxBloomSize {
-		return pos, nil, fmt.Errorf("segment: bloom filter length %d exceeds max %d, possibly corrupted", bloomLen, maxBloomSize)
+	return readLengthPrefixedBytes(data, pos, maxBloomSize, "bloom filter")
+}
+
+// readLengthPrefixedBytes 统一 readStatBytes/readBloomFilter 的
+// "读 uint32 长度 → 校验上限 → 校验边界 → 拷贝" 反序列化逻辑，
+// 消除两处近乎逐行重复的代码。label 用于错误消息上下文描述。
+// 注意：readRawKeys 未并入此函数——其在长度字段截断时返回 (nil,nil,nil)
+// 而非错误，属不同语义，保持独立实现。
+func readLengthPrefixedBytes(data []byte, pos int, maxLen uint32, label string) (int, []byte, error) {
+	if pos+4 > len(data) {
+		return pos, nil, fmt.Errorf("segment: footer truncated at %s length", label)
 	}
-	if bloomLen > 0 {
-		if pos+int(bloomLen) > len(data) {
-			return pos, nil, fmt.Errorf("segment: footer truncated at bloom data")
-		}
-		b := make([]byte, bloomLen)
-		copy(b, data[pos:pos+int(bloomLen)])
-		pos += int(bloomLen)
-		return pos, b, nil
+	byteLen := binary.LittleEndian.Uint32(data[pos:])
+	pos += 4
+	if byteLen > maxLen {
+		return pos, nil, fmt.Errorf("segment: %s length %d exceeds max %d, possibly corrupted", label, byteLen, maxLen)
 	}
-	return pos, nil, nil
+	if byteLen == 0 {
+		return pos, nil, nil
+	}
+	if pos+int(byteLen) > len(data) {
+		return pos, nil, fmt.Errorf("segment: footer truncated at %s data", label)
+	}
+	b := make([]byte, byteLen)
+	copy(b, data[pos:pos+int(byteLen)])
+	pos += int(byteLen)
+	return pos, b, nil
 }
 
 func readRawKeys(data []byte, pos int) (int, []byte, error) {

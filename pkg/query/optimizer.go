@@ -387,7 +387,14 @@ func collectColumnRefs(expr Expression) []string {
 	return result
 }
 
+// collectColumnRefsInto 递归收集表达式树中的列引用名至 seen。
+// 这是 analyzer.collectRequiredColumns 与 optimizer 列裁剪共用的唯一实现，
+// 消除原先 analyzer.collectExprColumns 的重复逻辑。
+// expr 可为 nil（例如 SELECT 无 WHERE 子句时 sel.Where 为 nil），此时直接返回。
 func collectColumnRefsInto(expr Expression, seen map[string]bool) {
+	if expr == nil {
+		return
+	}
 	switch e := expr.(type) {
 	case *ColumnExpr:
 		seen[e.Name] = true
