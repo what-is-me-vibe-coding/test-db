@@ -262,7 +262,7 @@ func (a *Analyzer) resolveSelectColumns(cols []SelectColumn, table *catalog.Tabl
 func (a *Analyzer) collectRequiredColumns(sel *SelectStatement, table *catalog.Table) []string {
 	colSet := make(map[string]bool)
 
-	a.collectExprColumns(sel.Where, colSet)
+	collectColumnRefsInto(sel.Where, colSet)
 
 	for _, col := range sel.Columns {
 		// SELECT * 需要所有列，确保带 WHERE 的全表查询能返回完整行
@@ -272,11 +272,11 @@ func (a *Analyzer) collectRequiredColumns(sel *SelectStatement, table *catalog.T
 			}
 			continue
 		}
-		a.collectExprColumns(col.Expr, colSet)
+		collectColumnRefsInto(col.Expr, colSet)
 	}
 
 	for _, gb := range sel.GroupBy {
-		a.collectExprColumns(gb, colSet)
+		collectColumnRefsInto(gb, colSet)
 	}
 
 	cols := make([]string, 0, len(colSet))
@@ -293,25 +293,6 @@ func (a *Analyzer) collectRequiredColumns(sel *SelectStatement, table *catalog.T
 	}
 
 	return cols
-}
-
-func (a *Analyzer) collectExprColumns(expr Expression, colSet map[string]bool) {
-	if expr == nil {
-		return
-	}
-	switch e := expr.(type) {
-	case *ColumnExpr:
-		colSet[e.Name] = true
-	case *BinaryExpr:
-		a.collectExprColumns(e.Left, colSet)
-		a.collectExprColumns(e.Right, colSet)
-	case *UnaryExpr:
-		a.collectExprColumns(e.Expr, colSet)
-	case *FuncExpr:
-		for _, arg := range e.Args {
-			a.collectExprColumns(arg, colSet)
-		}
-	}
 }
 
 func (a *Analyzer) buildProjectOutput(_ []SelectColumn, resolved []resolvedColumn, _ *catalog.Table) ([]Expression, []string, []ColumnDef, error) {
