@@ -82,7 +82,8 @@ func (p *Parser) convertSQLVal(val *sqlparser.SQLVal) (*LiteralExpr, error) {
 }
 
 // convertComparisonExpr 转换比较表达式。
-func (p *Parser) convertComparisonExpr(expr *sqlparser.ComparisonExpr) (*BinaryExpr, error) {
+// NOT LIKE 等价于 NOT (x LIKE y)，复用 OpLike + OpNot 实现，避免单独的运算符语义。
+func (p *Parser) convertComparisonExpr(expr *sqlparser.ComparisonExpr) (Expression, error) {
 	left, err := p.convertExpr(expr.Left)
 	if err != nil {
 		return nil, err
@@ -90,6 +91,13 @@ func (p *Parser) convertComparisonExpr(expr *sqlparser.ComparisonExpr) (*BinaryE
 	right, err := p.convertExpr(expr.Right)
 	if err != nil {
 		return nil, err
+	}
+
+	if expr.Operator == sqlparser.NotLikeStr {
+		return &UnaryExpr{
+			Op:   OpNot,
+			Expr: &BinaryExpr{Op: OpLike, Left: left, Right: right},
+		}, nil
 	}
 
 	op, err := p.convertComparisonOp(expr.Operator)

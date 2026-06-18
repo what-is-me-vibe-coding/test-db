@@ -51,6 +51,55 @@ func compareOrdered[T cmp.Ordered](op BinaryOp, left, right T) bool {
 	return false
 }
 
+// matchLike 实现 SQL LIKE 模式匹配，返回 left 是否匹配 right 模式。
+// 模式语义：% 匹配任意长度（含空）字符序列；_ 匹配恰好一个字符；其余字符按字面匹配。
+// 大小写敏感，与字符串比较语义保持一致。
+// 字符串值按原始内容参与匹配，非字符串值按其 String() 表示参与匹配，
+// 使 `WHERE int_col LIKE '1%'` 等场景可按预期工作。
+func matchLike(left, right common.Value) bool {
+	return likeMatch(valueToLikeString(left), valueToLikeString(right))
+}
+
+// valueToLikeString 将 Value 转换为参与 LIKE 匹配的字符串。
+// 字符串类型直接使用原始内容，其余类型使用可读字符串表示。
+func valueToLikeString(v common.Value) string {
+	if v.Typ == common.TypeString {
+		return v.Str
+	}
+	return v.String()
+}
+
+// likeMatch 使用通配符回溯算法匹配 s 与 SQL LIKE 模式 pattern。
+// % 等价于通配符 *（任意序列），_ 等价于 ?（单个字符）。
+// 时间复杂度均摊 O(len(s)+len(pattern))，无正则编译开销，适合逐行过滤调用。
+func likeMatch(s, pattern string) bool {
+	sr := []rune(s)
+	pr := []rune(pattern)
+	i, j := 0, 0
+	starJ, matchI := -1, 0
+	for i < len(sr) {
+		switch {
+		case j < len(pr) && (pr[j] == '_' || pr[j] == sr[i]):
+			i++
+			j++
+		case j < len(pr) && pr[j] == '%':
+			starJ = j
+			matchI = i
+			j++
+		case starJ != -1:
+			j = starJ + 1
+			matchI++
+			i = matchI
+		default:
+			return false
+		}
+	}
+	for j < len(pr) && pr[j] == '%' {
+		j++
+	}
+	return j == len(pr)
+}
+
 // isComparisonOp 判断 op 是否为比较运算符（OpEq/OpNe/OpLt/OpLe/OpGt/OpGe）。
 func isComparisonOp(op BinaryOp) bool {
 	switch op {
