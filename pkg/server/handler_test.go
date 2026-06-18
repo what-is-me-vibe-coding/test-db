@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
@@ -646,5 +647,35 @@ func TestHandlePacket_PingRoute(t *testing.T) {
 	}
 	if resp.Type != PacketResponse {
 		t.Errorf("响应包类型 = %d, 期望 %d", resp.Type, PacketResponse)
+	}
+}
+
+// TestCoerceValueByType 验证按目标类型的强制转换语义，重点覆盖 FLOAT64→BOOL
+// 不再因读取零值 Int64 字段而恒为 false 的回归。
+func TestCoerceValueByType(t *testing.T) {
+	cases := []struct {
+		name   string
+		val    common.Value
+		target common.DataType
+		want   common.Value
+	}{
+		{"float64->bool nonzero", common.NewFloat64(1.5), common.TypeBool, common.NewBool(true)},
+		{"float64->bool zero", common.NewFloat64(0.0), common.TypeBool, common.NewBool(false)},
+		{"int64->bool nonzero", common.NewInt64(42), common.TypeBool, common.NewBool(true)},
+		{"int64->bool zero", common.NewInt64(0), common.TypeBool, common.NewBool(false)},
+		{"float64->int64 truncates", common.NewFloat64(9.7), common.TypeInt64, common.NewInt64(9)},
+		{"bool->int64", common.NewBool(true), common.TypeInt64, common.NewInt64(1)},
+		{"int64->float64", common.NewInt64(7), common.TypeFloat64, common.NewFloat64(7)},
+		{"same type passthrough", common.NewString("x"), common.TypeString, common.NewString("x")},
+		{"null passthrough", common.NewNull(), common.TypeBool, common.NewNull()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := coerceValueByType(tc.val, tc.target)
+			if !got.Equal(tc.want) {
+				t.Errorf("coerceValueByType(%s, %s) = %v, want %v",
+					tc.val, tc.target, got, tc.want)
+			}
+		})
 	}
 }
