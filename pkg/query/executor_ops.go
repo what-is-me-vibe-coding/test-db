@@ -210,22 +210,13 @@ func resolveColumnIndex(expr Expression, schema []ColumnDef) (int, string) {
 }
 
 // buildFilteredOutput 根据 selection 向量构建过滤后的 Chunk 输出。
-// 使用 SetValue 替代 Append 跳过 ensureCapacity 检查，提升吞吐。
+// 使用 ColumnVector.CopySelected 进行类型特化批量拷贝，跳过逐行
+// GetValue/SetValue 的类型分发与 common.Value 装箱/拆箱，提升过滤后物化吞吐。
 func buildFilteredOutput(input *storage.Chunk, selection []uint32) *storage.Chunk {
 	selLen := uint32(len(selection))
 	output := storage.NewChunk(selLen)
 	for _, col := range input.Columns() {
-		newCol := storage.NewColumnVector(col.ColumnID, col.Typ, selLen)
-		for dstIdx, srcIdx := range selection {
-			v := col.GetValue(srcIdx)
-			if v.Valid {
-				_ = newCol.SetValue(uint32(dstIdx), v)
-			} else {
-				newCol.SetNull(uint32(dstIdx))
-			}
-		}
-		newCol.SetLen(selLen)
-		_ = output.AddColumn(newCol)
+		_ = output.AddColumn(col.CopySelected(selection))
 	}
 	return output
 }

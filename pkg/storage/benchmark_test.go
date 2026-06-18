@@ -538,3 +538,65 @@ func BenchmarkEngineWriteBatchGroupCommit(b *testing.B) {
 	}
 	b.ReportAllocs()
 }
+
+// --- CopySelected 基准测试 ---
+//
+// 度量 ColumnVector.CopySelected 在半数行命中场景下的吞吐，
+// 用于回归过滤后结果物化（buildFilteredOutput）的性能。
+
+const benchCopySelectedRows = 8192
+
+func buildBenchInt64Column() *ColumnVector {
+	n := uint32(benchCopySelectedRows)
+	col := NewColumnVector(0, common.TypeInt64, n)
+	for i := uint32(0); i < n; i++ {
+		col.SetInt64(i, int64(i))
+	}
+	col.SetLen(n)
+	return col
+}
+
+func buildBenchStringColumn() *ColumnVector {
+	n := uint32(benchCopySelectedRows)
+	col := NewColumnVector(0, common.TypeString, n)
+	for i := uint32(0); i < n; i++ {
+		col.SetString(i, fmt.Sprintf("name-%d", i))
+	}
+	col.SetLen(n)
+	return col
+}
+
+// halfSelection 返回 [0, rows) 中偶数行索引，模拟约半数命中的过滤结果。
+func halfSelection(rows uint32) []uint32 {
+	sel := make([]uint32, 0, rows/2)
+	for i := uint32(0); i < rows; i += 2 {
+		sel = append(sel, i)
+	}
+	return sel
+}
+
+func BenchmarkCopySelectedInt64(b *testing.B) {
+	col := buildBenchInt64Column()
+	sel := halfSelection(benchCopySelectedRows)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out := col.CopySelected(sel)
+		if out.Len() == 0 {
+			b.Fatal("expected non-empty result")
+		}
+	}
+	b.ReportAllocs()
+}
+
+func BenchmarkCopySelectedString(b *testing.B) {
+	col := buildBenchStringColumn()
+	sel := halfSelection(benchCopySelectedRows)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out := col.CopySelected(sel)
+		if out.Len() == 0 {
+			b.Fatal("expected non-empty result")
+		}
+	}
+	b.ReportAllocs()
+}
