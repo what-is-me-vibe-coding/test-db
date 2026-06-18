@@ -179,26 +179,24 @@ func TestSelectEncodingTypeString(t *testing.T) {
 }
 
 func TestIndexWidth(t *testing.T) {
+	// indexWidth 始终为 nullMarker 预留一个槽位（size+1）。
 	tests := []struct {
-		size     uint32
-		hasNulls bool
-		want     int
+		size uint32
+		want int
 	}{
-		{0, false, 1},
-		{1, false, 1},
-		{256, false, 1},
-		{256, true, 2},
-		{255, true, 1},
-		{257, false, 2},
-		{65535, false, 2},
-		{65536, false, 2},
-		{65536, true, 4},
-		{65537, false, 4},
+		{0, 1},     // 0+1=1 ≤256 → 1
+		{1, 1},     // 1+1=2 ≤256 → 1
+		{255, 1},   // 255+1=256 ≤256 → 1
+		{256, 2},   // 256+1=257 >256 → 2（历史 bug 触发边界）
+		{257, 2},   // 257+1=258 >256 → 2
+		{65535, 2}, // 65535+1=65536 ≤65536 → 2
+		{65536, 4}, // 65536+1=65537 >65536 → 4（历史 bug 触发边界）
+		{65537, 4}, // 65537+1=65538 >65536 → 4
 	}
 	for _, tt := range tests {
-		got := indexWidth(tt.size, tt.hasNulls)
+		got := indexWidth(tt.size)
 		if got != tt.want {
-			t.Errorf("indexWidth(%d, %v) = %d, want %d", tt.size, tt.hasNulls, got, tt.want)
+			t.Errorf("indexWidth(%d) = %d, want %d", tt.size, got, tt.want)
 		}
 	}
 }

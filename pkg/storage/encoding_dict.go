@@ -26,10 +26,8 @@ func encodeDict(typ common.DataType, data any, rowCount uint32, nulls *common.Bi
 	dictMap := make(map[string]uint32, dictHint)
 	dict := make([]string, 0, dictHint)
 	indices := make([]uint32, rowCount)
-	hasNulls := false
 	for i := uint32(0); i < rowCount; i++ {
 		if nulls != nil && nulls.Get(i) {
-			hasNulls = true
 			continue
 		}
 		idx, exists := dictMap[strs[i]]
@@ -41,7 +39,12 @@ func encodeDict(typ common.DataType, data any, rowCount uint32, nulls *common.Bi
 		indices[i] = idx
 	}
 
-	idxWidth := indexWidth(uint32(len(dict)), hasNulls)
+	// indexWidth 始终为 nullMarker 预留槽位：dict 编码用 nullMarker
+	// 在索引流中标记 NULL，而 decodeDict 无法从编码数据得知是否存在 NULL，
+	// 因此必须始终预留。否则在基数边界（256/65536）且无 NULL 时，encode
+	// 用更窄宽度写入、decode 用更宽宽度读取，且最大有效索引会与 nullMarker
+	// 冲突，导致数据损坏。
+	idxWidth := indexWidth(uint32(len(dict)))
 	nullMarker := nullMarkerForWidth(idxWidth)
 	idxBuf := make([]byte, rowCount*uint32(idxWidth))
 	for i := uint32(0); i < rowCount; i++ {
@@ -61,7 +64,7 @@ func encodeDict(typ common.DataType, data any, rowCount uint32, nulls *common.Bi
 }
 
 func decodeDict(enc *EncodedColumn) (any, *common.Bitmap, error) {
-	idxWidth := indexWidth(uint32(len(enc.Dict)), true)
+	idxWidth := indexWidth(uint32(len(enc.Dict)))
 	nullMarker := nullMarkerForWidth(idxWidth)
 	strs := make([]string, enc.RowCount)
 	nulls := common.NewBitmap(enc.RowCount)
@@ -82,11 +85,11 @@ func decodeDict(enc *EncodedColumn) (any, *common.Bitmap, error) {
 	return strs, nulls, nil
 }
 
-func indexWidth(dictSize uint32, hasNulls bool) int {
-	size := dictSize
-	if hasNulls {
-		size++
-	}
+// indexWidth 返回给定字典大小所需的索引字节宽度。
+// 始终为 nullMarker 预留一个槽位（size+1），确保最大有效索引
+// 不会与 nullMarker 冲突，且 encode/decode 宽度一致。
+func indexWidth(dictSize uint32) int {
+	size := dictSize + 1
 	switch {
 	case size <= 256:
 		return 1
