@@ -76,6 +76,10 @@ func evalBinaryExpr(e *BinaryExpr, row map[string]common.Value, colIdxMap map[st
 		return common.NewNull(), nil
 	}
 
+	if e.Op == OpLike {
+		return common.NewBool(matchLike(left, right)), nil
+	}
+
 	if result, ok := evalComparisonOp(e.Op, left, right); ok {
 		return result, nil
 	}
