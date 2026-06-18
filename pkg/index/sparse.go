@@ -164,6 +164,9 @@ func (si *SparseIndex) BuildFromColumnVector(segID uint64, colID uint32, cv Colu
 
 		val := cv.GetValue(i)
 		if val.IsNull() {
+			// 当 NullBitmap 为 nil（或未标记该位）但值本身为 NULL 时，
+			// 同样计入 NullCount，避免统计被低估。
+			stat.NullCount++
 			continue
 		}
 

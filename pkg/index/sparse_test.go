@@ -365,6 +365,49 @@ func TestBuildFromColumnVectorWithNulls(t *testing.T) {
 	}
 }
 
+// newMockColumnVectorNoBitmap 创建不带 NullBitmap 的列向量（NullBitmap 返回 nil），
+// 用于验证 BuildFromColumnVector 在位图缺失时通过 GetValue().IsNull() 正确统计 NullCount。
+func newMockColumnVectorNoBitmap(values []common.Value) *mockColumnVector {
+	return &mockColumnVector{
+		len:    uint32(len(values)),
+		nulls:  nil,
+		values: values,
+	}
+}
+
+// TestBuildFromColumnVectorNilBitmapNulls 验证当 NullBitmap 为 nil 但值序列含 NULL 时，
+// BuildFromColumnVector 仍能正确统计 NullCount 与 Min/Max。
+func TestBuildFromColumnVectorNilBitmapNulls(t *testing.T) {
+	si := NewSparseIndex()
+
+	cv := newMockColumnVectorNoBitmap([]common.Value{
+		common.NewInt64(100),
+		common.NewNull(),
+		common.NewInt64(200),
+		common.NewNull(),
+		common.NewNull(),
+	})
+
+	si.BuildFromColumnVector(2, 0, cv)
+
+	css, ok := si.GetColumnStat(2, 0)
+	if !ok {
+		t.Fatal("expected stat to exist")
+	}
+	if !css.HasValues {
+		t.Error("expected HasValues to be true")
+	}
+	if css.MinValue.Int64 != 100 {
+		t.Errorf("expected Min 100, got %d", css.MinValue.Int64)
+	}
+	if css.MaxValue.Int64 != 200 {
+		t.Errorf("expected Max 200, got %d", css.MaxValue.Int64)
+	}
+	if css.NullCount != 3 {
+		t.Errorf("expected NullCount 3, got %d", css.NullCount)
+	}
+}
+
 func TestBuildFromColumnVectorEmpty(t *testing.T) {
 	si := NewSparseIndex()
 

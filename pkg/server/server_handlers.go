@@ -189,7 +189,14 @@ func coerceValueByType(val common.Value, target common.DataType) common.Value {
 			return common.NewFloat64(float64(val.Int64))
 		}
 	case common.TypeBool:
-		return common.NewBool(val.Int64 != 0)
+		// FLOAT64 字面量存于 Float64 字段，直接读 Int64 会得到零值从而恒为 false。
+		// 其余整数族类型（含 INT8/16/32/UINT64/DATE）统一存于 Int64 字段，按 Int64 判断。
+		switch val.Typ {
+		case common.TypeFloat64:
+			return common.NewBool(val.Float64 != 0)
+		default:
+			return common.NewBool(val.Int64 != 0)
+		}
 	}
 	return val
 }
