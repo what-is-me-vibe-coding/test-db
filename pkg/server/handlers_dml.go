@@ -65,7 +65,7 @@ func (s *Server) handleUpdate(upd *query.UpdateStatement) (*Response, error) {
 			return &Response{Code: -1, Message: keyErr.Error()}, nil
 		}
 		if newKey != entry.Key {
-			if conflictErr := s.checkUpdatePKConflict(eng, newKey); conflictErr != nil {
+			if conflictErr := checkPKConflict(eng, newKey); conflictErr != nil {
 				s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
 				return &Response{Code: -1, Message: conflictErr.Error()}, nil
 			}
@@ -105,13 +105,15 @@ func (s *Server) applyUpdateAssignments(
 	return newValues, nil
 }
 
-// checkUpdatePKConflict 检查新主键是否已存在（且不是当前正在更新的行）。
-func (s *Server) checkUpdatePKConflict(eng TableEngine, newKey string) error {
+// checkPKConflict 检查主键是否已存在，存在则返回冲突错误。
+// 通过引擎的 Get 接口检查；不支持 Get 的引擎（无该接口）则跳过检查。
+// INSERT 与 UPDATE 主键变更路径共享此实现。
+func checkPKConflict(eng TableEngine, key string) error {
 	if getter, ok := eng.(interface {
 		Get(string) (storage.Row, bool)
 	}); ok {
-		if _, exists := getter.Get(newKey); exists {
-			return fmt.Errorf("PRIMARY KEY CONFLICT: key %q 已存在", newKey)
+		if _, exists := getter.Get(key); exists {
+			return fmt.Errorf("PRIMARY KEY CONFLICT: key %q 已存在", key)
 		}
 	}
 	return nil
@@ -198,17 +200,4 @@ func (s *Server) handleDescribe(desc *query.DescribeStatement) (*Response, error
 		Data:    rows,
 		Rows:    len(rows),
 	}, nil
-}
-
-// checkInsertPKConflict 检查 INSERT 行的主键是否已存在，存在则返回冲突错误。
-// 通过引擎的 Get 接口检查；不支持 Get 的引擎（无该接口）则跳过检查。
-func checkInsertPKConflict(eng TableEngine, key string) error {
-	if getter, ok := eng.(interface {
-		Get(string) (storage.Row, bool)
-	}); ok {
-		if _, exists := getter.Get(key); exists {
-			return fmt.Errorf("PRIMARY KEY CONFLICT: key %q 已存在", key)
-		}
-	}
-	return nil
 }

@@ -105,11 +105,14 @@ func (s *Scheduler) Stats() SchedulerStats {
 	return s.stats
 }
 
-// runFlushLoop 定时检查并刷盘 Immutable MemTable。
-func (s *Scheduler) runFlushLoop() {
+// runLoop 是后台定时任务的通用循环：按 interval 周期调用 fn，
+// 收到 stopCh 信号时退出，fn 返回的错误经 recordError 记录。
+// runFlushLoop/runCompactLoop/runWALCleanLoop 共享此实现，消除三段重复的
+// ticker + select 骨架。
+func (s *Scheduler) runLoop(interval time.Duration, fn func() error) {
 	defer s.wg.Done()
 
-	ticker := time.NewTicker(s.config.FlushInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -117,50 +120,21 @@ func (s *Scheduler) runFlushLoop() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			if err := s.tryFlush(); err != nil {
+			if err := fn(); err != nil {
 				s.recordError(err)
 			}
 		}
 	}
 }
+
+// runFlushLoop 定时检查并刷盘 Immutable MemTable。
+func (s *Scheduler) runFlushLoop() { s.runLoop(s.config.FlushInterval, s.tryFlush) }
 
 // runCompactLoop 定时检查并执行 Compaction。
-func (s *Scheduler) runCompactLoop() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(s.config.CompactInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		case <-ticker.C:
-			if err := s.tryCompact(); err != nil {
-				s.recordError(err)
-			}
-		}
-	}
-}
+func (s *Scheduler) runCompactLoop() { s.runLoop(s.config.CompactInterval, s.tryCompact) }
 
 // runWALCleanLoop 定时检查并清理旧 WAL 文件。
-func (s *Scheduler) runWALCleanLoop() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(s.config.WALCleanInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		case <-ticker.C:
-			if err := s.tryCleanWAL(); err != nil {
-				s.recordError(err)
-			}
-		}
-	}
-}
+func (s *Scheduler) runWALCleanLoop() { s.runLoop(s.config.WALCleanInterval, s.tryCleanWAL) }
 
 // tryFlush 尝试刷盘 Immutable MemTable。
 func (s *Scheduler) tryFlush() error {

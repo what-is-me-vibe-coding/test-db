@@ -142,7 +142,7 @@ func (s *Server) buildInsertWriteRow(
 		return storage.WriteRow{}, fmt.Errorf("第 %d 行: %v", rowIdx+1, keyErr)
 	}
 	// 主键冲突检查：若 key 已存在则拒绝插入
-	if conflictErr := checkInsertPKConflict(eng, key); conflictErr != nil {
+	if conflictErr := checkPKConflict(eng, key); conflictErr != nil {
 		return storage.WriteRow{}, fmt.Errorf("第 %d 行: %v", rowIdx+1, conflictErr)
 	}
 	return storage.WriteRow{Key: key, Values: values}, nil

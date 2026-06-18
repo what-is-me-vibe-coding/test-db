@@ -199,14 +199,9 @@ func (e *Engine) Write(key string, values map[string]common.Value) error {
 		return fmt.Errorf("engine write: wal append: %w", err)
 	}
 
-	var syncCh <-chan struct{}
-	e.mu.RLock()
-	gc := e.groupCommitter
-	e.mu.RUnlock()
-	if gc != nil {
-		syncCh = gc.Submit()
-	} else if err := e.wal.Sync(); err != nil {
-		return fmt.Errorf("engine write: wal sync: %w", err)
+	syncCh, err := e.submitWALSync("engine write")
+	if err != nil {
+		return err
 	}
 
 	// Step 4: Put to memtable under lock (brief hold)

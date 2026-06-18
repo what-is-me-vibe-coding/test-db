@@ -70,6 +70,23 @@ type WriteRow struct {
 	Values map[string]common.Value
 }
 
+// submitWALSync 提交 WAL 同步：若启用 GroupCommitter 则提交并返回同步等待通道，
+// 否则直接同步 WAL。opCtx 用于错误信息上下文（如 "engine write"）。
+// Write/WriteBatch/Delete 共享此实现，消除三处重复的 GroupCommitter 分支与锁读取。
+// 返回的 syncCh 在 GroupCommit 模式下非 nil，调用方需在 MemTable 写入完成后等待。
+func (e *Engine) submitWALSync(opCtx string) (<-chan struct{}, error) {
+	e.mu.RLock()
+	gc := e.groupCommitter
+	e.mu.RUnlock()
+	if gc != nil {
+		return gc.Submit(), nil
+	}
+	if err := e.wal.Sync(); err != nil {
+		return nil, fmt.Errorf("%s: sync: %w", opCtx, err)
+	}
+	return nil, nil
+}
+
 // WriteBatch 批量写入多行数据，所有行共享一次 WAL sync，大幅提升批量写入吞吐。
 // 优化：原子化版本号分配，释放引擎锁进行 WAL I/O，避免阻塞并发读写；支持 GroupCommitter。
 func (e *Engine) WriteBatch(rows []WriteRow) error {
@@ -99,14 +116,9 @@ func (e *Engine) WriteBatch(rows []WriteRow) error {
 	}
 
 	// 根据同步模式选择同步策略，与 Engine.Write 保持一致
-	var syncCh <-chan struct{}
-	e.mu.RLock()
-	gc := e.groupCommitter
-	e.mu.RUnlock()
-	if gc != nil {
-		syncCh = gc.Submit()
-	} else if err := e.wal.Sync(); err != nil {
-		return fmt.Errorf("engine write batch: sync: %w", err)
+	syncCh, err := e.submitWALSync("engine write batch")
+	if err != nil {
+		return err
 	}
 
 	// Step 4: Put all rows to memtable under lock (brief hold)
@@ -157,14 +169,9 @@ func (e *Engine) Delete(key string) error {
 		return fmt.Errorf("engine delete: wal: %w", err)
 	}
 
-	var syncCh <-chan struct{}
-	e.mu.RLock()
-	gc := e.groupCommitter
-	e.mu.RUnlock()
-	if gc != nil {
-		syncCh = gc.Submit()
-	} else if err := e.wal.Sync(); err != nil {
-		return fmt.Errorf("engine delete: sync: %w", err)
+	syncCh, err := e.submitWALSync("engine delete")
+	if err != nil {
+		return err
 	}
 
 	e.mu.Lock()
