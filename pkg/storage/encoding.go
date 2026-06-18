@@ -172,43 +172,38 @@ func encodePlainTimestamp(data any, rowCount uint32, nulls *common.Bitmap) (*Enc
 	return newPlainEncodedColumn(common.TypeTimestamp, rowCount, buf, nulls), nil
 }
 
-// encodeUint64Batch 将 int64 切片编码为小端字节序列。
+// encodeLE64Batch 将 8 字节定长切片编码为小端字节序列。
 // 在小端架构（x86/ARM）上使用 unsafe 零拷贝转换，避免逐元素 binary.LittleEndian 调用；
 // 在大端架构上回退到逐元素转换保证正确性。
-func encodeUint64Batch(ints []int64, rowCount uint32) []byte {
+// 调用方需保证 T 为 8 字节定长类型（int64/float64），否则小端快路径的内存视图长度不正确。
+func encodeLE64Batch[T any](vals []T, rowCount uint32, toBits func(T) uint64) []byte {
 	buf := make([]byte, rowCount*8)
 	if rowCount == 0 {
 		return buf
 	}
 	// 小端架构：直接内存拷贝，零转换开销
 	if isLittleEndian() {
-		src := unsafe.Slice((*byte)(unsafe.Pointer(&ints[0])), int(rowCount)*8)
+		src := unsafe.Slice((*byte)(unsafe.Pointer(&vals[0])), int(rowCount)*8)
 		copy(buf, src)
 		return buf
 	}
 	// 大端架构回退
 	for i := uint32(0); i < rowCount; i++ {
-		binary.LittleEndian.PutUint64(buf[i*8:], uint64(ints[i]))
+		binary.LittleEndian.PutUint64(buf[i*8:], toBits(vals[i]))
 	}
 	return buf
 }
 
+// encodeUint64Batch 将 int64 切片编码为小端字节序列。
+// 保留为具名入口以供测试与文档引用，内部委托给泛型实现。
+func encodeUint64Batch(ints []int64, rowCount uint32) []byte {
+	return encodeLE64Batch(ints, rowCount, func(v int64) uint64 { return uint64(v) })
+}
+
 // encodeFloat64Batch 将 float64 切片编码为小端字节序列。
-// 在小端架构上使用 unsafe 零拷贝转换。
+// 保留为具名入口以供测试与文档引用，内部委托给泛型实现。
 func encodeFloat64Batch(floats []float64, rowCount uint32) []byte {
-	buf := make([]byte, rowCount*8)
-	if rowCount == 0 {
-		return buf
-	}
-	if isLittleEndian() {
-		src := unsafe.Slice((*byte)(unsafe.Pointer(&floats[0])), int(rowCount)*8)
-		copy(buf, src)
-		return buf
-	}
-	for i := uint32(0); i < rowCount; i++ {
-		binary.LittleEndian.PutUint64(buf[i*8:], math.Float64bits(floats[i]))
-	}
-	return buf
+	return encodeLE64Batch(floats, rowCount, math.Float64bits)
 }
 
 // isLittleEndian 检测当前系统是否为小端字节序。
@@ -364,49 +359,36 @@ func decodePlain(enc *EncodedColumn) (any, *common.Bitmap, error) {
 	}
 }
 
-// decodePlainInt64 从小端字节序列解码 int64 切片。
-func decodePlainInt64(data []byte) []int64 {
+// decodeLE64Batch 从小端字节序列解码为 8 字节定长切片。
+// 在小端架构上使用 unsafe 零拷贝转换。
+// 调用方需保证 T 为 8 字节定长类型（int64/float64），否则小端快路径的内存视图长度不正确。
+func decodeLE64Batch[T any](data []byte, fromBits func(uint64) T) []T {
 	count := len(data) / 8
-	ints := make([]int64, count)
+	vals := make([]T, count)
 	if count > 0 && isLittleEndian() {
-		dst := unsafe.Slice((*byte)(unsafe.Pointer(&ints[0])), count*8)
+		dst := unsafe.Slice((*byte)(unsafe.Pointer(&vals[0])), count*8)
 		copy(dst, data)
 	} else {
 		for i := 0; i < count; i++ {
-			ints[i] = int64(binary.LittleEndian.Uint64(data[i*8:]))
+			vals[i] = fromBits(binary.LittleEndian.Uint64(data[i*8:]))
 		}
 	}
-	return ints
+	return vals
+}
+
+// decodePlainInt64 从小端字节序列解码 int64 切片。
+func decodePlainInt64(data []byte) []int64 {
+	return decodeLE64Batch(data, func(v uint64) int64 { return int64(v) })
 }
 
 // decodePlainFloat64 从小端字节序列解码 float64 切片。
 func decodePlainFloat64(data []byte) []float64 {
-	count := len(data) / 8
-	floats := make([]float64, count)
-	if count > 0 && isLittleEndian() {
-		dst := unsafe.Slice((*byte)(unsafe.Pointer(&floats[0])), count*8)
-		copy(dst, data)
-	} else {
-		for i := 0; i < count; i++ {
-			floats[i] = math.Float64frombits(binary.LittleEndian.Uint64(data[i*8:]))
-		}
-	}
-	return floats
+	return decodeLE64Batch(data, math.Float64frombits)
 }
 
 // decodePlainTimestamp 从小端字节序列解码 timestamp（int64）切片。
 func decodePlainTimestamp(data []byte) []int64 {
-	count := len(data) / 8
-	times := make([]int64, count)
-	if count > 0 && isLittleEndian() {
-		dst := unsafe.Slice((*byte)(unsafe.Pointer(&times[0])), count*8)
-		copy(dst, data)
-	} else {
-		for i := 0; i < count; i++ {
-			times[i] = int64(binary.LittleEndian.Uint64(data[i*8:]))
-		}
-	}
-	return times
+	return decodeLE64Batch(data, func(v uint64) int64 { return int64(v) })
 }
 
 func decodeRLE(enc *EncodedColumn) (any, *common.Bitmap, error) {
