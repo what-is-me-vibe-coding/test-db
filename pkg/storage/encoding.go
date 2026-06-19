@@ -347,10 +347,20 @@ func decodePlain(enc *EncodedColumn) (any, *common.Bitmap, error) {
 	case common.TypeTimestamp:
 		return decodePlainTimestamp(enc.Data), nulls, nil
 	case common.TypeString:
+		// 校验 Offsets 长度，防止损坏的列块触发越界 panic。
+		// 使用 uint64 比较以避免 enc.RowCount == math.MaxUint32 时
+		// RowCount+1 回绕为 0 导致校验被绕过的问题。
+		if uint64(len(enc.Offsets)) < uint64(enc.RowCount)+1 {
+			return nil, nil, fmt.Errorf("plain decode: offsets length %d < rowcount+1 %d", len(enc.Offsets), uint64(enc.RowCount)+1)
+		}
 		strs := make([]string, enc.RowCount)
+		dataLen := uint32(len(enc.Data))
 		for i := uint32(0); i < enc.RowCount; i++ {
 			start := enc.Offsets[i]
 			end := enc.Offsets[i+1]
+			if start > end || end > dataLen {
+				return nil, nil, fmt.Errorf("plain decode: invalid string offset [%d:%d] for data len %d", start, end, dataLen)
+			}
 			strs[i] = string(enc.Data[start:end])
 		}
 		return strs, nulls, nil
