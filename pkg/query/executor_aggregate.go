@@ -140,6 +140,12 @@ func (e *Executor) executeAggregate(agg *AggregateNode) (*execResult, error) {
 }
 
 func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, inputSchema []ColumnDef, colIdxMap map[string]int) (map[string][]accumulator, map[string]*groupRow, []string) {
+	// 快速路径：当所有 GROUP BY 与聚合参数均为列引用（或 COUNT(*)）时，
+	// 直接按列索引读取列向量，跳过逐行 map 构建与全列读取，对宽表显著降低每行开销。
+	if plan, ok := trySimpleAggregatePlan(agg, colIdxMap); ok {
+		return e.aggregateRowsFast(agg, childResult, plan)
+	}
+
 	groupAccum := make(map[string][]accumulator)
 	groupRows := make(map[string]*groupRow)
 	groupOrder := make([]string, 0)
@@ -169,6 +175,132 @@ func (e *Executor) aggregateRows(agg *AggregateNode, childResult *execResult, in
 	}
 
 	return groupAccum, groupRows, groupOrder
+}
+
+// simpleAggPlan 描述可走快速路径的聚合计划。
+// gbIdx 为 GROUP BY 列在 inputSchema 中的索引；argIdx 为聚合参数列索引，
+// COUNT(*) 的参数为 nil，对应位置存 -1（实际更新时按 Arg==nil 判定，不访问该索引）。
+type simpleAggPlan struct {
+	gbIdx  []int
+	argIdx []int
+}
+
+// trySimpleAggregatePlan 检查聚合是否可走快速路径。
+// 条件：所有 GROUP BY 表达式与聚合参数均为 *ResolvedColumnExpr（COUNT(*) 参数为 nil）。
+// 列索引按名称从 colIdxMap 解析，兼容列裁剪后的子集 schema（不依赖 ResolvedColumnExpr.Idx）。
+func trySimpleAggregatePlan(agg *AggregateNode, colIdxMap map[string]int) (simpleAggPlan, bool) {
+	plan := simpleAggPlan{
+		gbIdx:  make([]int, len(agg.GroupBy)),
+		argIdx: make([]int, len(agg.Aggregates)),
+	}
+	for i, gb := range agg.GroupBy {
+		rc, ok := gb.(*ResolvedColumnExpr)
+		if !ok {
+			return simpleAggPlan{}, false
+		}
+		idx, ok := colIdxMap[rc.Name]
+		if !ok {
+			return simpleAggPlan{}, false
+		}
+		plan.gbIdx[i] = idx
+	}
+	for i, a := range agg.Aggregates {
+		if a.Arg == nil {
+			plan.argIdx[i] = -1
+			continue
+		}
+		rc, ok := a.Arg.(*ResolvedColumnExpr)
+		if !ok {
+			return simpleAggPlan{}, false
+		}
+		idx, ok := colIdxMap[rc.Name]
+		if !ok {
+			return simpleAggPlan{}, false
+		}
+		plan.argIdx[i] = idx
+	}
+	return plan, true
+}
+
+// aggregateRowsFast 聚合快速路径：直接按列索引读取列向量，跳过逐行 map 构建。
+// 仅读取 GROUP BY 与聚合参数引用的列，对宽表（列多但聚合引用少）显著减少每行工作量。
+// 语义与慢速路径一致：分组键格式、首行分组值、累加器更新规则均保持相同。
+func (e *Executor) aggregateRowsFast(agg *AggregateNode, childResult *execResult, plan simpleAggPlan) (map[string][]accumulator, map[string]*groupRow, []string) {
+	groupAccum := make(map[string][]accumulator)
+	groupRows := make(map[string]*groupRow)
+	groupOrder := make([]string, 0)
+	gbNames := simpleAggGroupByNames(agg)
+
+	for _, chunk := range childResult.chunks {
+		cols := chunk.Columns()
+		rowCount := chunk.RowCount()
+		for row := uint32(0); row < rowCount; row++ {
+			groupKey := buildSimpleGroupKey(cols, plan.gbIdx, row)
+			if _, ok := groupAccum[groupKey]; !ok {
+				groupAccum[groupKey] = newAccumulators(agg.Aggregates)
+				groupRows[groupKey] = newSimpleGroupRow(groupKey, cols, plan.gbIdx, gbNames, row)
+				groupOrder = append(groupOrder, groupKey)
+			}
+			updateAccumulatorsFromCols(groupAccum[groupKey], agg.Aggregates, cols, plan.argIdx, row)
+		}
+	}
+
+	if len(groupOrder) == 0 {
+		groupOrder = append(groupOrder, "")
+		groupAccum[""] = newAccumulators(agg.Aggregates)
+		groupRows[""] = &groupRow{key: "", values: nil}
+	}
+
+	return groupAccum, groupRows, groupOrder
+}
+
+// simpleAggGroupByNames 提取 GROUP BY 列引用的名称，用于构建分组行的值映射。
+// 调用前已由 trySimpleAggregatePlan 保证所有 GROUP BY 均为 *ResolvedColumnExpr。
+func simpleAggGroupByNames(agg *AggregateNode) []string {
+	names := make([]string, len(agg.GroupBy))
+	for i, gb := range agg.GroupBy {
+		names[i] = gb.(*ResolvedColumnExpr).Name
+	}
+	return names
+}
+
+// buildSimpleGroupKey 直接从列向量构建分组键，格式与 buildGroupKey 完全一致：
+// 各分组列值的 String() 以 '\x00' 分隔，无分组列时返回空串。
+func buildSimpleGroupKey(cols []*storage.ColumnVector, gbIdx []int, row uint32) string {
+	if len(gbIdx) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, idx := range gbIdx {
+		if i > 0 {
+			b.WriteByte('\x00')
+		}
+		b.WriteString(cols[idx].GetValue(row).String())
+	}
+	return b.String()
+}
+
+// newSimpleGroupRow 创建分组行，仅保存 GROUP BY 列的值（按名称映射），
+// 供 buildAggregateOutput 重新求值分组表达式。语义等价于慢速路径的 newGroupRow
+// （后者保存全部列，但输出阶段仅读取 GROUP BY 列）。
+func newSimpleGroupRow(key string, cols []*storage.ColumnVector, gbIdx []int, gbNames []string, row uint32) *groupRow {
+	values := make(map[string]common.Value, len(gbIdx))
+	for i, idx := range gbIdx {
+		values[gbNames[i]] = cols[idx].GetValue(row)
+	}
+	return &groupRow{key: key, values: values}
+}
+
+// updateAccumulatorsFromCols 直接从列向量更新累加器，跳过 evalExpr 的 map 查找。
+// COUNT(*)（Arg==nil）以 NewNull 更新（与慢速路径一致，updateCount 忽略入参）。
+func updateAccumulatorsFromCols(accs []accumulator, aggs []AggregateExpr, cols []*storage.ColumnVector, argIdx []int, row uint32) {
+	for i := range accs {
+		if aggs[i].Arg == nil {
+			accs[i].update(common.NewNull())
+			continue
+		}
+		accs[i].update(cols[argIdx[i]].GetValue(row))
+	}
 }
 
 // newGroupRow 创建分组行，复制当前行值避免后续行覆盖。
