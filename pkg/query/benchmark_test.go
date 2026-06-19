@@ -339,3 +339,88 @@ func BenchmarkFilterStringFastPathWithNulls(b *testing.B) {
 	}
 	b.ReportAllocs()
 }
+
+// --- 聚合基准测试 ---
+//
+// 以下基准直接对预构建的 Chunk 调用 aggregateRows，隔离聚合算子开销，
+// 用于度量列引用快速路径（跳过逐行 map 构建与全列读取）的吞吐收益。
+// 数据规模 8192 行，分组列循环 0..7 共 8 个分组，覆盖典型 GROUP BY + SUM 场景。
+
+// buildBenchAggChunk 构建一个 numCols 列 INT64、benchFilterRows 行的 Chunk。
+// 第 0 列为分组键（循环 0..7，共 8 个分组），其余列为行号（用于 SUM 求值）。
+func buildBenchAggChunk(numCols uint32) *storage.Chunk {
+	rowCount := uint32(benchFilterRows)
+	chunk := storage.NewChunk(rowCount)
+	for c := uint32(0); c < numCols; c++ {
+		col := storage.NewColumnVector(c, common.TypeInt64, rowCount)
+		for r := uint32(0); r < rowCount; r++ {
+			if c == 0 {
+				col.SetInt64(r, int64(r%8))
+			} else {
+				col.SetInt64(r, int64(r))
+			}
+		}
+		col.SetLen(rowCount)
+		_ = chunk.AddColumn(col)
+	}
+	return chunk
+}
+
+// benchAggSchema 构建与 buildBenchAggChunk 同结构的 schema，列名 c0..cN。
+func benchAggSchema(numCols uint32) []ColumnDef {
+	schema := make([]ColumnDef, numCols)
+	for i := uint32(0); i < numCols; i++ {
+		schema[i] = ColumnDef{Name: "c" + fmtIntKey(int(i)), Type: common.TypeInt64, Nullable: false}
+	}
+	return schema
+}
+
+// benchAggNode 构建一个 GROUP BY c0, SUM c1 的 AggregateNode，直接用于 aggregateRows。
+func benchAggNode(schema []ColumnDef) *AggregateNode {
+	return &AggregateNode{
+		GroupBy: []Expression{&ResolvedColumnExpr{Name: schema[0].Name, Idx: 0, typ: common.TypeInt64}},
+		Aggregates: []AggregateExpr{
+			{Func: AggSum, Arg: &ResolvedColumnExpr{Name: schema[1].Name, Idx: 1, typ: common.TypeInt64}},
+		},
+	}
+}
+
+// BenchmarkAggregateGroupBySum 度量窄表（3 列）GROUP BY + SUM 聚合吞吐。
+func BenchmarkAggregateGroupBySum(b *testing.B) {
+	schema := benchAggSchema(3)
+	chunk := buildBenchAggChunk(3)
+	childResult := &execResult{chunks: []*storage.Chunk{chunk}, schema: schema}
+	colIdxMap := buildColIdxMapFromSchema(schema)
+	agg := benchAggNode(schema)
+	exec := NewExecutor(&benchStorageProvider{})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, order := exec.aggregateRows(agg, childResult, schema, colIdxMap)
+		if len(order) != 8 {
+			b.Fatalf("expected 8 groups, got %d", len(order))
+		}
+	}
+	b.ReportAllocs()
+}
+
+// BenchmarkAggregateWideGroupBySum 度量宽表（32 列）GROUP BY + SUM 聚合吞吐。
+// 宽表场景下慢速路径需为每行构建包含全部 32 列的 map，而快速路径仅读取 2 个引用列，
+// 用以验证列引用快速路径对宽表的显著收益。
+func BenchmarkAggregateWideGroupBySum(b *testing.B) {
+	schema := benchAggSchema(32)
+	chunk := buildBenchAggChunk(32)
+	childResult := &execResult{chunks: []*storage.Chunk{chunk}, schema: schema}
+	colIdxMap := buildColIdxMapFromSchema(schema)
+	agg := benchAggNode(schema)
+	exec := NewExecutor(&benchStorageProvider{})
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _, order := exec.aggregateRows(agg, childResult, schema, colIdxMap)
+		if len(order) != 8 {
+			b.Fatalf("expected 8 groups, got %d", len(order))
+		}
+	}
+	b.ReportAllocs()
+}
