@@ -1,6 +1,9 @@
 package server
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 // runSQL 是 handleQuery 的测试辅助函数，失败时 fatal 并返回响应。
 func runSQL(t *testing.T, srv *Server, sql string) *Response {
@@ -276,5 +279,148 @@ func TestSQLCRUDFlow(t *testing.T) {
 	resp = runSQL(t, srv, "SELECT id FROM users")
 	if resp.Rows != 1 {
 		t.Errorf("DELETE 后剩余 %d 行, 期望 1", resp.Rows)
+	}
+}
+
+// queryInt64 执行 SELECT 并返回首行指定列的 int64 值，简化断言。
+func queryInt64(t *testing.T, srv *Server, sql, col string) int64 {
+	t.Helper()
+	resp := runSQL(t, srv, sql)
+	rows := resp.Data.([]map[string]any)
+	if len(rows) == 0 {
+		t.Fatalf("SQL %q 无结果行", sql)
+	}
+	v, ok := rows[0][col].(int64)
+	if !ok {
+		t.Fatalf("SQL %q 列 %s = %v（类型 %T），期望 int64", sql, col, rows[0][col], rows[0][col])
+	}
+	return v
+}
+
+// queryFloat64 执行 SELECT 并返回首行指定列的 float64 值。
+func queryFloat64(t *testing.T, srv *Server, sql, col string) float64 {
+	t.Helper()
+	resp := runSQL(t, srv, sql)
+	rows := resp.Data.([]map[string]any)
+	if len(rows) == 0 {
+		t.Fatalf("SQL %q 无结果行", sql)
+	}
+	v, ok := rows[0][col].(float64)
+	if !ok {
+		t.Fatalf("SQL %q 列 %s = %v（类型 %T），期望 float64", sql, col, rows[0][col], rows[0][col])
+	}
+	return v
+}
+
+// TestSQLUpdateArithmeticExpr 验证 UPDATE SET 支持列与字面量的算术表达式。
+// 覆盖 issue #192：update <table> set <column>=<complex expr>。
+func TestSQLUpdateArithmeticExpr(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	runSQL(t, srv, "CREATE TABLE t (id INT64, v INT64, PRIMARY KEY (id))")
+	runSQL(t, srv, "INSERT INTO t (id, v) VALUES (1, 10), (2, 20), (3, 30)")
+
+	resp := runSQL(t, srv, "UPDATE t SET v = id + 1")
+	if resp.Rows != 3 {
+		t.Errorf("UPDATE 影响行数 = %d, 期望 3", resp.Rows)
+	}
+
+	want := map[int64]int64{1: 2, 2: 3, 3: 4}
+	for id, exp := range want {
+		if got := queryInt64(t, srv, "SELECT v FROM t WHERE id = "+strconv.FormatInt(id, 10), "v"); got != exp {
+			t.Errorf("id=%d 的 v = %d, 期望 %d", id, got, exp)
+		}
+	}
+}
+
+// TestSQLUpdateArithmeticAllOps 验证 UPDATE SET 四则运算均正确求值。
+func TestSQLUpdateArithmeticAllOps(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want int64
+	}{
+		{"add", "UPDATE t SET v = id + 5 WHERE id = 10", 15},
+		{"sub", "UPDATE t SET v = id - 3 WHERE id = 10", 7},
+		{"mul", "UPDATE t SET v = id * 2 WHERE id = 10", 20},
+		{"div", "UPDATE t SET v = id / 3 WHERE id = 10", 3},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := newTestServer(t)
+			defer func() { _ = srv.Stop() }()
+
+			runSQL(t, srv, "CREATE TABLE t (id INT64, v INT64, PRIMARY KEY (id))")
+			runSQL(t, srv, "INSERT INTO t (id, v) VALUES (10, 0)")
+
+			runSQL(t, srv, c.sql)
+			if got := queryInt64(t, srv, "SELECT v FROM t WHERE id = 10", "v"); got != c.want {
+				t.Errorf("%s: v = %d, 期望 %d", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// TestSQLUpdateMultiColumnArithmetic 验证多列 UPDATE 同时使用算术表达式。
+// 覆盖 issue #192：update <table> set <c1>=<expr1>, <c2>=<expr2>。
+// 所有 SET 赋值基于原始行值求值（标准 SQL 语义）。
+func TestSQLUpdateMultiColumnArithmetic(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	runSQL(t, srv, "CREATE TABLE t (id INT64, a INT64, b INT64, PRIMARY KEY (id))")
+	runSQL(t, srv, "INSERT INTO t (id, a, b) VALUES (1, 10, 100)")
+
+	runSQL(t, srv, "UPDATE t SET a = b + 1, b = a * 2")
+
+	// a 基于原 b：100 + 1 = 101
+	if got := queryInt64(t, srv, "SELECT a FROM t WHERE id = 1", "a"); got != 101 {
+		t.Errorf("a = %d, 期望 101（原 b+1）", got)
+	}
+	// b 基于原 a：10 * 2 = 20
+	if got := queryInt64(t, srv, "SELECT b FROM t WHERE id = 1", "b"); got != 20 {
+		t.Errorf("b = %d, 期望 20（原 a*2）", got)
+	}
+}
+
+// TestSQLUpdateArithmeticFloatCoercion 验证算术结果（INT64）写入 FLOAT64 列时自动类型转换。
+func TestSQLUpdateArithmeticFloatCoercion(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	runSQL(t, srv, "CREATE TABLE t (id INT64, score FLOAT64, PRIMARY KEY (id))")
+	runSQL(t, srv, "INSERT INTO t (id, score) VALUES (5, 0.0)")
+
+	// id + 1 求值为 INT64(6)，写入 FLOAT64 列时强制转换为 6.0
+	runSQL(t, srv, "UPDATE t SET score = id + 1")
+	if got := queryFloat64(t, srv, "SELECT score FROM t WHERE id = 5", "score"); got != 6.0 {
+		t.Errorf("score = %g, 期望 6.0", got)
+	}
+}
+
+// TestSQLUpdateArithmeticExprWithWhere 验证带 WHERE 的算术 UPDATE 只更新匹配行。
+func TestSQLUpdateArithmeticExprWithWhere(t *testing.T) {
+	srv := newTestServer(t)
+	defer func() { _ = srv.Stop() }()
+
+	runSQL(t, srv, "CREATE TABLE t (id INT64, v INT64, PRIMARY KEY (id))")
+	runSQL(t, srv, "INSERT INTO t (id, v) VALUES (1, 10), (2, 20), (3, 30)")
+
+	resp := runSQL(t, srv, "UPDATE t SET v = v + 100 WHERE id > 1")
+	if resp.Rows != 2 {
+		t.Errorf("UPDATE 影响行数 = %d, 期望 2", resp.Rows)
+	}
+
+	// id=1 未被更新
+	if got := queryInt64(t, srv, "SELECT v FROM t WHERE id = 1", "v"); got != 10 {
+		t.Errorf("id=1 的 v = %d, 期望 10（不应更新）", got)
+	}
+	// id=2、3 被更新
+	if got := queryInt64(t, srv, "SELECT v FROM t WHERE id = 2", "v"); got != 120 {
+		t.Errorf("id=2 的 v = %d, 期望 120", got)
+	}
+	if got := queryInt64(t, srv, "SELECT v FROM t WHERE id = 3", "v"); got != 130 {
+		t.Errorf("id=3 的 v = %d, 期望 130", got)
 	}
 }

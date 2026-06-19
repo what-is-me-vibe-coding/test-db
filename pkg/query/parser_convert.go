@@ -41,12 +41,41 @@ func (p *Parser) convertExpr(expr sqlparser.Expr) (Expression, error) {
 		return p.convertExpr(e.Expr)
 	case *sqlparser.FuncExpr:
 		return p.convertFuncExpr(e)
+	case *sqlparser.BinaryExpr:
+		return p.convertArithmeticExpr(e)
 	default:
 		return nil, fmt.Errorf("query parse: unsupported expr type %T", expr)
 	}
 }
 
-// convertBinaryExpr 转换二元逻辑表达式（AND/OR）。
+// convertArithmeticExpr 转换算术二元表达式（+、-、*、/）。
+// sqlparser.BinaryExpr 仅承载算术运算；逻辑 AND/OR 由 *sqlparser.AndExpr/*sqlparser.OrExpr 表达。
+func (p *Parser) convertArithmeticExpr(expr *sqlparser.BinaryExpr) (*BinaryExpr, error) {
+	op, err := p.convertArithmeticOp(expr.Operator)
+	if err != nil {
+		return nil, err
+	}
+	return p.convertBinaryExpr(expr.Left, expr.Right, op)
+}
+
+// convertArithmeticOp 转换算术运算符。
+// 仅支持四则运算；位运算与整除（div）暂不支持，返回错误以便上层报告。
+func (p *Parser) convertArithmeticOp(op string) (BinaryOp, error) {
+	switch op {
+	case sqlparser.PlusStr:
+		return OpAdd, nil
+	case sqlparser.MinusStr:
+		return OpSub, nil
+	case sqlparser.MultStr:
+		return OpMul, nil
+	case sqlparser.DivStr:
+		return OpDiv, nil
+	default:
+		return 0, fmt.Errorf("query parse: unsupported arithmetic operator %q", op)
+	}
+}
+
+// convertBinaryExpr 转换二元表达式（逻辑 AND/OR 与算术 +、-、*、/ 共用）。
 func (p *Parser) convertBinaryExpr(left, right sqlparser.Expr, op BinaryOp) (*BinaryExpr, error) {
 	l, err := p.convertExpr(left)
 	if err != nil {
