@@ -16,6 +16,7 @@ package integration
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"testing"
@@ -50,6 +51,7 @@ const (
 	cdmMixedBaseID    = 20000
 	cdmSharedTable    = "shared_evt"
 	cdmUpdatedAmount  = 999.0 // 混合客户端 UPDATE 后 amount 的期望值
+	cdmFloatEpsilon   = 1e-9  // 浮点数比较容差，避免 == 直接判等引入不稳定
 )
 
 // cdmRoleSpec 描述单个客户端的角色与协议。
@@ -147,11 +149,14 @@ func (c *cdmClient) write(table string, rows []map[string]any) (*server.Response
 	return httpWrite(c.srv.httpAddr, table, rows)
 }
 
-// checkResp 统一校验响应：err 非 nil 或 resp.Code != 0 时返回带 name 的错误，
+// checkResp 统一校验响应：resp 为 nil、err 非 nil 或 resp.Code != 0 时返回带 name 的错误，
 // 减少各工作负载中重复的错误格式化代码。
 func checkResp(name string, resp *server.Response, err error) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", name, err)
+	}
+	if resp == nil {
+		return fmt.Errorf("%s: nil response", name)
 	}
 	if resp.Code != 0 {
 		return fmt.Errorf("%s: code=%d msg=%s", name, resp.Code, resp.Message)
@@ -183,13 +188,27 @@ func cdmAssertRoleCounts(t *testing.T) {
 	}
 }
 
+// cdmMixedBaseIDAt 返回第 mixedIdx（从 0 开始）个混合客户端的 base 行 ID。
+//
+// 集中此计算可保证 cdmMixedClientWork 写入的 base ID 与 cdmMixedBaseIDs 校验时
+// 取出的 base ID 完全一致，避免「分配与校验漂移」。
+func cdmMixedBaseIDAt(mixedIdx int) int {
+	return cdmMixedBaseID + mixedIdx*cdmRowsPerMixed
+}
+
 // cdmMixedBaseIDs 返回所有混合客户端的 base 行 ID，用于最终校验 UPDATE 结果。
+//
+// 使用「在 cdmRoles 中遇到 cdmRoleMixed 的次序」作为乘数（mixedIdx * cdmRowsPerMixed），
+// 而非全局下标 i。这样即使调整 cdmRoles 顺序，混合客户端的 base ID 分配依然稳定。
 func cdmMixedBaseIDs() []int {
 	var ids []int
-	for i, sp := range cdmRoles {
-		if sp.role == cdmRoleMixed {
-			ids = append(ids, cdmMixedBaseID+i*cdmRowsPerMixed)
+	mixedIdx := 0
+	for _, sp := range cdmRoles {
+		if sp.role != cdmRoleMixed {
+			continue
 		}
+		ids = append(ids, cdmMixedBaseIDAt(mixedIdx))
+		mixedIdx++
 	}
 	return ids
 }
@@ -231,7 +250,11 @@ func cdmWriteAndVerify(c *cdmClient, table string, rows []map[string]any) error 
 	if err := checkResp(fmt.Sprintf("COUNT %s", table), cresp, err); err != nil {
 		return err
 	}
-	cnt, _ := toInt64(firstRow(cresp)["cnt"])
+	rs := respRows(cresp)
+	if len(rs) == 0 {
+		return fmt.Errorf("COUNT %s: 响应无数据行", table)
+	}
+	cnt, _ := toInt64(rs[0]["cnt"])
 	if cnt != int64(len(rows)) {
 		return fmt.Errorf("COUNT %s: 期望 %d 得到 %d", table, len(rows), cnt)
 	}
@@ -288,15 +311,19 @@ func cdmWriterClientWork(c *cdmClient, clientID int) error {
 // cdmMixedClientWork 执行混合 DML 客户端工作负载：
 // 写入 → UPDATE 一行 → DELETE 一行 → 读回校验剩余行数。
 //
+// mixedIdx 是该客户端在 cdmRoles 中「混合角色序号」（从 0 开始），
+// 而非全局 clientID。base ID 通过 cdmMixedBaseIDAt(mixedIdx) 计算，
+// 与 cdmMixedBaseIDs 校验时使用的公式保持一致，避免分配与校验漂移。
+//
 // UPDATE 将区间首行 amount 改为 cdmUpdatedAmount，最终校验阶段会验证该值生效。
-func cdmMixedClientWork(c *cdmClient, clientID int) error {
-	base := cdmMixedBaseID + clientID*cdmRowsPerMixed
+func cdmMixedClientWork(c *cdmClient, mixedIdx int) error {
+	base := cdmMixedBaseIDAt(mixedIdx)
 	rows := make([]map[string]any, cdmRowsPerMixed)
 	for i := 0; i < cdmRowsPerMixed; i++ {
 		id := base + i
 		rows[i] = map[string]any{
 			"id":       id,
-			"category": fmt.Sprintf("m-%d", clientID),
+			"category": fmt.Sprintf("m-%d", mixedIdx),
 			"amount":   float64(id),
 			"active":   true,
 		}
@@ -359,14 +386,16 @@ func cdmAggregateClientWork(c *cdmClient, _ int) error {
 }
 
 // cdmRunClient 按角色分发客户端工作负载。
-func cdmRunClient(c *cdmClient, clientID int, role cdmRole) error {
+//
+// 对混合角色单独传入 mixedIdx（混合序号）以保证写入与校验的 base ID 计算一致。
+func cdmRunClient(c *cdmClient, clientID int, role cdmRole, mixedIdx int) error {
 	switch role {
 	case cdmRoleDDL:
 		return cdmDDLClientWork(c, clientID)
 	case cdmRoleWriter:
 		return cdmWriterClientWork(c, clientID)
 	case cdmRoleMixed:
-		return cdmMixedClientWork(c, clientID)
+		return cdmMixedClientWork(c, mixedIdx)
 	default:
 		return cdmAggregateClientWork(c, clientID)
 	}
@@ -394,9 +423,15 @@ func TestConcurrentDDLAndDML(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
+	mixedIdx := 0 // 累计到当前位置为止的混合角色客户端数
 	for i, spec := range cdmRoles {
 		wg.Add(1)
-		go func(clientID int, sp cdmRoleSpec) {
+		// 捕获循环变量与当前 mixedIdx，避免闭包共享
+		clientID, sp, mi := i, spec, mixedIdx
+		if sp.role == cdmRoleMixed {
+			mixedIdx++
+		}
+		go func() {
 			defer wg.Done()
 			c, err := newCDMClient(s, sp.via)
 			if err != nil {
@@ -404,10 +439,10 @@ func TestConcurrentDDLAndDML(t *testing.T) {
 				return
 			}
 			defer c.close()
-			if err := cdmRunClient(c, clientID, sp.role); err != nil {
+			if err := cdmRunClient(c, clientID, sp.role, mi); err != nil {
 				recordErr(clientID, sp, err)
 			}
-		}(i, spec)
+		}()
 	}
 	wg.Wait()
 
@@ -435,7 +470,11 @@ func cdmVerifyFinalState(t *testing.T, s *sqlServer) {
 	if resp.Code != 0 {
 		t.Fatalf("最终 COUNT 失败: %s", resp.Message)
 	}
-	got, _ := toInt64(firstRow(resp)["cnt"])
+	rows := respRows(resp)
+	if len(rows) == 0 {
+		t.Fatalf("最终 COUNT: 响应无数据行")
+	}
+	got, _ := toInt64(rows[0]["cnt"])
 	if got != wantShared {
 		t.Errorf("共享表行数: 期望 %d 得到 %d", wantShared, got)
 	}
@@ -445,10 +484,19 @@ func cdmVerifyFinalState(t *testing.T, s *sqlServer) {
 }
 
 // cdmVerifyTmpTablesDropped 校验所有 DDL 临时表已从 catalog 清理。
+//
+// 通过 SHOW TABLES SQL 走 server 端而非直接读取 catalog snapshot，更端到端
+// （验证的是 server 暴露的元数据视图，而非内部数据结构），且解除了测试对
+// pkg/catalog 内部 API 的依赖。
 func cdmVerifyTmpTablesDropped(t *testing.T, s *sqlServer) {
 	t.Helper()
-	snap := s.srv.Catalog().Snapshot()
-	for name := range snap.Tables {
+	resp := queryVia(t, s, "tcp", "SHOW TABLES")
+	if resp.Code != 0 {
+		t.Fatalf("SHOW TABLES 失败: %s", resp.Message)
+	}
+	for _, row := range respRows(resp) {
+		// SHOW TABLES 返回的列名是 "table"（见 server.handleShowTables）。
+		name, _ := row["table"].(string)
 		if strings.HasPrefix(name, "tmp_ddl_") {
 			t.Errorf("临时表未删除: %s", name)
 		}
@@ -472,7 +520,7 @@ func cdmVerifyUpdates(t *testing.T, s *sqlServer) {
 			continue
 		}
 		amt, _ := toFloat64(row["amount"])
-		if amt != cdmUpdatedAmount {
+		if math.Abs(amt-cdmUpdatedAmount) >= cdmFloatEpsilon {
 			t.Errorf("UPDATE 校验 id=%d: amount 期望 %v 得到 %v",
 				bid, cdmUpdatedAmount, row["amount"])
 		}
@@ -496,7 +544,11 @@ func cdmVerifyAggregates(t *testing.T, s *sqlServer) {
 	if sresp.Code != 0 {
 		t.Fatalf("最终 SUM 失败: %s", sresp.Message)
 	}
-	if firstRow(sresp)["s"] == nil {
+	srows := respRows(sresp)
+	if len(srows) == 0 {
+		t.Fatalf("最终 SUM: 响应无数据行")
+	}
+	if srows[0]["s"] == nil {
 		t.Errorf("SUM(amount): 期望非 nil，得到 nil")
 	}
 }
