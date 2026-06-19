@@ -282,29 +282,31 @@ func runREPLTTY(srv *server.Server, format string, writer io.Writer) int {
 // handleCommandTTY 在 TTY 模式下处理反斜杠命令。
 // 返回 (shouldExit, handled)。当 handled=false 时表示该行不是命令，由 SQL 路径处理。
 func handleCommandTTY(srv *server.Server, formatState *cli.FormatState, writer io.Writer, cmd string) (bool, bool) {
-	if strings.HasPrefix(cmd, "\\format") {
+	switch cli.ParseMetaCmd(cmd) {
+	case cli.MetaCmdFormat:
 		before := formatState.Current()
 		formatState.HandleCommand(writer, cmd)
 		if formatState.Current() != before {
 			formatState.Set(formatState.Current())
 		}
 		return false, true
-	}
-	switch cmd {
-	case "\\q", "\\quit":
+	case cli.MetaCmdQuit:
 		return true, true
-	case "\\h", "\\help":
+	case cli.MetaCmdHelp:
 		_, _ = fmt.Fprintln(writer, helpText)
 		return false, true
-	case "\\status":
+	case cli.MetaCmdStatus:
 		_, _ = fmt.Fprintf(writer, "服务状态: 正常 (%s)\n", srv.Ping())
 		return false, true
-	case "\\addrs":
+	case cli.MetaCmdAddrs:
 		_, _ = fmt.Fprintf(writer, "TCP: %s\nHTTP: %s\nPG: %s\n", srv.TCPAddr(), srv.HTTPAddr(), srv.PGAddr())
 		return false, true
+	default:
+		// MetaCmdNotCommand: 调用方已过滤。
+		// MetaCmdUnknown / MetaCmdUseTCP / MetaCmdUseHTTP: 一键启动模式不支持。
+		_, _ = fmt.Fprintf(writer, "%s: %s，输入 \\h 查看帮助\n", cli.ColorizeError("未知命令"), cmd)
+		return false, true
 	}
-	_, _ = fmt.Fprintf(writer, "%s: %s，输入 \\h 查看帮助\n", cli.ColorizeError("未知命令"), cmd)
-	return false, true
 }
 
 // executeAndPrintTTY 在 TTY 模式下执行 SQL 并打印结果，错误信息用红色高亮。
@@ -319,19 +321,20 @@ func executeAndPrintTTY(srv *server.Server, formatState *cli.FormatState, writer
 
 // handleCommand 处理反斜杠命令，返回 true 表示应退出 REPL。
 func handleCommand(srv *server.Server, format *string, writer io.Writer, cmd string) bool {
-	if strings.HasPrefix(cmd, "\\format") {
-		return handleFormatCommand(format, writer, cmd)
-	}
-	switch cmd {
-	case "\\q", "\\quit":
+	switch cli.ParseMetaCmd(cmd) {
+	case cli.MetaCmdQuit:
 		return true
-	case "\\h", "\\help":
+	case cli.MetaCmdHelp:
 		_, _ = fmt.Fprintln(writer, helpText)
-	case "\\status":
+	case cli.MetaCmdStatus:
 		_, _ = fmt.Fprintf(writer, "服务状态: 正常 (%s)\n", srv.Ping())
-	case "\\addrs":
+	case cli.MetaCmdAddrs:
 		_, _ = fmt.Fprintf(writer, "TCP: %s\nHTTP: %s\nPG: %s\n", srv.TCPAddr(), srv.HTTPAddr(), srv.PGAddr())
+	case cli.MetaCmdFormat:
+		return handleFormatCommand(format, writer, cmd)
 	default:
+		// MetaCmdNotCommand: 不会进入本函数（外层已过滤）。
+		// MetaCmdUnknown / MetaCmdUseTCP / MetaCmdUseHTTP: 一键启动模式不支持。
 		_, _ = fmt.Fprintf(writer, "未知命令: %s，输入 \\h 查看帮助\n", cmd)
 	}
 	return false
