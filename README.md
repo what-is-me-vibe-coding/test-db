@@ -283,7 +283,7 @@ test-db/
 │   ├── api.md          # API 参考
 │   ├── performance.md  # 性能调优指南
 │   ├── tutorial.md     # 端到端上手教程（场景化示例）
-│   ├── sql-reference.md# SQL 语法权威参考
+│   ├── sql-reference.md  # SQL 语法权威参考
 │   ├── cookbook.md     # 常见 SQL 套路与最佳实践
 │   └── troubleshooting.md # 故障排查指南
 └── .agent_plan/        # 开发设计文档

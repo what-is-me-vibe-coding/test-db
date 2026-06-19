@@ -76,7 +76,7 @@ psql -h 127.0.0.1 -p 5432 -U postgres -d postgres
 |----------|----------|----------|
 | `ValTuple` | `IN (a, b, c)` | 用 `OR` 链：`a=1 OR a=2 OR a=3` |
 | `RangeCond` | `BETWEEN a AND b` | 用 `>=` + `<=`：`col >= a AND col <= b` |
-| `IsExpr` | `IS NULL` / `IS NOT NULL` | 用 `col = NULL`（语义上仍按三值逻辑过滤行） |
+| `IsExpr` | `IS NULL` / `IS NOT NULL` | **无 SQL 替代方案**：`WHERE col = NULL` 会因 NULL 三值逻辑过滤掉所有行（既不匹配 NULL 也不匹配非 NULL），**无法**用于筛选 NULL 行。需在客户端对返回结果的 `valid` 字段自行判断，或改写 schema 把 NULL 替换为哨兵值 |
 | `JoinTableExpr` | `INNER JOIN` / `LEFT JOIN` | 多次查询后客户端合并 |
 | `Union` | `UNION ALL` | 多次查询后客户端合并 |
 | `OrderBy` 静默丢弃 | `ORDER BY` | 客户端排序 |

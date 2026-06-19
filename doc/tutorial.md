@@ -165,13 +165,18 @@ widb> SELECT device_id,
 
 ### 6.2 离线设备的台数
 
+> 当前 parser **不支持** `DISTINCT`，如下写法会被静默丢弃 `DISTINCT`，实际执行 `COUNT(device_id)`（统计非 NULL 值）。如需真正去重，请在客户端聚合或改用 `GROUP BY`：
+
 ```sql
+-- 实际执行的是 COUNT(device_id) 而不是 COUNT(DISTINCT device_id)
 widb> SELECT COUNT(DISTINCT device_id) AS offline_devices
   ...> FROM sensor
   ...> WHERE online = false;
-```
 
-> `COUNT(DISTINCT ...)` 当前实现为 `COUNT(col)`，会去重（与 MySQL 不一致，但符合 OLAP 直觉）；生产前请验证数据。
+-- 推荐：等价且显式
+widb> SELECT COUNT(*) AS offline_devices
+  ...> FROM (SELECT DISTINCT device_id FROM sensor WHERE online = false) t;
+```
 
 ### 6.3 时段内的最高温
 

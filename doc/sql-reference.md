@@ -69,8 +69,7 @@ CREATE TABLE [IF NOT EXISTS] table_name (
 - **必须** 显式声明 `PRIMARY KEY`；支持单列主键与**多列复合主键**。
 - **可选** `ENGINE=memory`：使用内存引擎（重启后数据丢失）；不指定或 `ENGINE=lsm` 则使用 LSM 引擎（持久化 + 崩溃恢复）。
 - **可选** `IF NOT EXISTS`：表已存在时不报错；不带则同名表会触发错误。
-- 整数族类型（`INT8/INT16/INT32/INT64/UINT64`）与 `STRING/TIMESTAMP` 默认允许 `NULL`；如需非空可显式写 `NOT NULL`。
-- 浮点与布尔类型允许 `NULL`，不可写 `NOT NULL`（语义上 NaN 已是「无效」表示）。
+- 整数族类型（`INT8/INT16/INT32/INT64/UINT64`）、`FLOAT64` / `DOUBLE`、`BOOL` / `BOOLEAN`、`STRING` / `VARCHAR`、`TIMESTAMP` 默认均允许 `NULL`；如需非空可显式写 `NOT NULL`（所有内置类型都支持）。
 
 #### 示例
 
@@ -442,7 +441,7 @@ CREATE TABLE dim_region (
 | 限制 | 影响 | 临时方案 |
 |------|------|----------|
 | `IN` / `BETWEEN` 子句不被支持 | `WHERE col IN (...)` / `col BETWEEN a AND b` 返回错误码 | 用 `OR` 链或 `>=` + `<=` 组合替代 |
-| `IS NULL` / `IS NOT NULL` 不被支持 | 返回错误码 | 用 `col = NULL`（语义上仍按 NULL 三值逻辑过滤行） |
+| `IS NULL` / `IS NOT NULL` 不被支持 | 返回错误码 | `WHERE col = NULL` 会因 NULL 三值逻辑而**过滤掉所有行**（包括 NULL 行与非 NULL 行），**不可作为 IS NULL 的替代**。如需识别 NULL 行，请在客户端对返回结果自行判断 `valid` 字段 |
 | `ORDER BY` 不保证排序 | 客户端需自行排序或接受任意顺序 | 加 LIMIT 后客户端排序 |
 | `DISTINCT` / `HAVING` 静默丢弃 | 不会报错但无效 | 用 `GROUP BY` 替代 `DISTINCT`；用子查询替代 `HAVING` |
 | `EXPLAIN` 仅支持 SELECT | DDL/DML 返回错误 | 无 |
