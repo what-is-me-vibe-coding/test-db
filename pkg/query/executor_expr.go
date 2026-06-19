@@ -205,6 +205,12 @@ func evalIntArithmetic(li, ri int64, op arithOp) (common.Value, error) {
 		if ri == 0 {
 			return common.NewNull(), nil
 		}
+		// MinInt64 / -1 在 int64 中不可表示（真值为 2^63），Go 运行时会静默
+		// 回绕为 MinInt64 而非 panic。此处显式判定为溢出，与加/减/乘保持一致
+		// 地返回 NULL + 错误，避免静默返回错误结果。
+		if ri == -1 && li == math.MinInt64 {
+			return common.NewNull(), fmt.Errorf("executor: integer overflow in division")
+		}
 		return common.NewInt64(li / ri), nil
 	}
 	return common.NewNull(), nil
@@ -245,11 +251,15 @@ func mulOverflows(li, ri int64) bool {
 	return false
 }
 
+// toFloat64 返回 Value 的 float64 数值表示，仅供跨类型数值比较与算术使用。
+// FLOAT64 直接取 Float64 字段；整数族（含 DATE）将 Int64 转为 float64；
+// BOOL 按 0/1 转换，使 `true + 1.5` 等布尔参与浮点算术的场景得到正确结果；
+// 非数值类型返回 0，调用方需确保仅在数值/布尔类型间使用。
 func toFloat64(v common.Value) float64 {
 	if v.Typ == common.TypeFloat64 {
 		return v.Float64
 	}
-	if v.Typ.IsIntFamily() {
+	if v.Typ.IsIntFamily() || v.Typ == common.TypeBool {
 		return float64(v.Int64)
 	}
 	return 0
