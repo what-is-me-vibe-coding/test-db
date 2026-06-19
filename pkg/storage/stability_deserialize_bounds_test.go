@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"math"
 	"strings"
 	"testing"
 
@@ -198,5 +199,26 @@ func TestBlockCacheUpdateToOversizedEvictsSelf(t *testing.T) {
 	}
 	if _, ok := cache.get(key); ok {
 		t.Fatal("self-evicted entry should not be retrievable")
+	}
+}
+
+// TestDecodePlainStringOffsetsLengthOverflowGuard 验证当 enc.RowCount == math.MaxUint32
+// 时，长度校验不会因 uint32 加法回绕而被绕过。修复前 `enc.RowCount+1` 回绕为 0，
+// `len(enc.Offsets) < 0` 恒为 false，导致后续 make([]string, math.MaxUint32) 触发 OOM/panic。
+func TestDecodePlainStringOffsetsLengthOverflowGuard(t *testing.T) {
+	enc := &EncodedColumn{
+		Encoding: EncodingPlain,
+		Type:     common.TypeString,
+		RowCount: math.MaxUint32,
+		Data:     []byte("abc"),
+		// 仅提供极少的 offsets；若校验失效，下游会尝试分配约 16GB 内存。
+		Offsets: []uint32{0, 1, 2},
+	}
+	_, _, err := decodePlain(enc)
+	if err == nil {
+		t.Fatal("expected error for RowCount=MaxUint32 with short offsets (overflow guard), got nil")
+	}
+	if !strings.Contains(err.Error(), "offsets length") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
