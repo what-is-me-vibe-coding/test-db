@@ -84,7 +84,10 @@ test-db/
 │   ├── index/          # 索引：主键/布隆/稀疏（依赖 common、catalog、storage）
 │   ├── query/          # 查询引擎：解析/分析/优化/执行（依赖 common、catalog、index、storage）
 │   ├── server/         # 服务层：TCP/HTTP/pgwire/监控（依赖所有 pkg）
-│   └── config/         # YAML 配置
+│   ├── render/         # 结果格式化（pretty/vertical/json/csv）
+│   ├── config/         # YAML 配置
+│   ├── cli/            # REPL 原语：多行 SQL、格式状态（依赖 common、render）
+│   └── cmdutil/        # 入口二进制共享的 flag 与配置加载（依赖 config、server、storage）
 ├── tests/integration/  # 端到端集成测试
 ├── doc/                # 用户与开发文档
 ├── .agent_plan/        # 设计文档与路线图
@@ -107,6 +110,8 @@ common ← catalog ← storage ← index ← query ← server
 | `pkg/index` | 可依赖 `common`、`catalog`、`storage` |
 | `pkg/query` | 可依赖 `common`、`catalog`、`index`、`storage` |
 | `pkg/server` | 可依赖所有 pkg，是接入层聚合点 |
+| `pkg/cli` | REPL 原语，被 `cmd/cli`、`cmd/widb` 复用 |
+| `pkg/cmdutil` | 入口二进制共享的 flag 与配置加载，被 `cmd/server`、`cmd/widb` 复用 |
 
 ## 4. 测试
 

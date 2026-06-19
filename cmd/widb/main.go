@@ -5,6 +5,11 @@
 //   - CLI 通过 server.ExecuteQuery/ExecuteWrite 进程内调用，零网络开销
 //   - 外部客户端仍可通过 TCP/HTTP 连接（server 正常监听）
 //   - REPL 退出（\q 或 EOF）或收到信号时优雅关闭 server
+//
+// 重构说明：原 readMultiLineSQL / handleFormatCommand 已迁移到 pkg/cli，
+// 命令行 flag 与配置加载委托给 pkg/cmdutil，与 cmd/server 共享实现。
+// cliFlags / readMultiLineSQL / handleFormatCommand 等符号作为薄包装保留，
+// 现有测试无需迁移。
 package main
 
 import (
@@ -21,10 +26,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/what-is-me-vibe-coding/test-db/pkg/cli"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/cmdutil"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/config"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/render"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
-	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 const (
@@ -41,9 +47,11 @@ const (
   \format <fmt>   切换输出格式: pretty/vertical/json/csv`
 )
 
-// cliFlags 封装命令行参数，语义与 cmd/server 一致。
+// cliFlags 封装命令行参数，server 相关 flag 委托给 cmdutil.ServerFlags，
+// 仅保留 widb 独有的 execute / format 字段。
 type cliFlags struct {
 	fs                *flag.FlagSet
+	cmd               *cmdutil.ServerFlags
 	configPath        *string
 	genConfigPath     *string
 	tcpAddr           *string
@@ -60,90 +68,43 @@ type cliFlags struct {
 	format            *string
 }
 
-// newCLIFlags 构建命令行参数集。
+// newCLIFlags 构建命令行参数集；server 相关 flag 由 cmdutil.ServerFlags 注册，
+// widb 额外注册 -e（执行单条 SQL）和 -format（输出格式）。
 func newCLIFlags() *cliFlags {
-	fs := flag.NewFlagSet("widb", flag.ContinueOnError)
+	cmd := cmdutil.NewServerFlags("widb")
 	return &cliFlags{
-		fs:                fs,
-		configPath:        fs.String("config", "", "配置文件路径（YAML），未指定时依次查找 ./widb.yaml、./config.yaml"),
-		genConfigPath:     fs.String("gen-config", "", "生成带注释的默认配置模板到指定路径后退出"),
-		tcpAddr:           fs.String("tcp", "", "TCP 监听地址（覆盖配置文件）"),
-		httpAddr:          fs.String("http", "", "HTTP 监听地址（覆盖配置文件）"),
-		pgAddr:            fs.String("pg", "", "PostgreSQL wire 协议监听地址（覆盖配置文件，留空禁用）"),
-		dataDir:           fs.String("data", "", "数据目录（覆盖配置文件）"),
-		maxMemTableSize:   fs.Int64("max-memtable", 0, "MemTable 最大字节数（覆盖配置文件）"),
-		enableScheduler:   fs.Bool("scheduler", false, "启用后台调度器（覆盖配置文件）"),
-		flushInterval:     fs.Duration("scheduler.flush-interval", 0, "自动刷盘检查间隔（覆盖配置文件）"),
-		compactInterval:   fs.Duration("scheduler.compact-interval", 0, "自动 Compaction 检查间隔（覆盖配置文件）"),
-		walCleanInterval:  fs.Duration("scheduler.wal-clean-interval", 0, "WAL 清理检查间隔（覆盖配置文件）"),
-		walCleanThreshold: fs.Int64("scheduler.wal-clean-threshold", 0, "WAL 文件大小阈值（覆盖配置文件）"),
-		execute:           fs.String("e", "", "执行单条 SQL 语句后退出"),
-		format:            fs.String("format", render.FormatPretty, "输出格式: pretty/vertical/json/csv"),
+		fs:                cmd.FS,
+		cmd:               cmd,
+		configPath:        cmd.ConfigPath,
+		genConfigPath:     cmd.GenConfigPath,
+		tcpAddr:           cmd.TCPAddr,
+		httpAddr:          cmd.HTTPAddr,
+		pgAddr:            cmd.PGAddr,
+		dataDir:           cmd.DataDir,
+		maxMemTableSize:   cmd.MaxMemTableSize,
+		enableScheduler:   cmd.EnableScheduler,
+		flushInterval:     cmd.FlushInterval,
+		compactInterval:   cmd.CompactInterval,
+		walCleanInterval:  cmd.WALCleanInterval,
+		walCleanThreshold: cmd.WALCleanThreshold,
+		execute:           cmd.FS.String("e", "", "执行单条 SQL 语句后退出"),
+		format:            cmd.FS.String("format", render.FormatPretty, "输出格式: pretty/vertical/json/csv"),
 	}
 }
 
 // applyOverrides 将显式设置的命令行参数覆盖到配置上。
 func (c *cliFlags) applyOverrides(cfg *config.Config) {
-	set := make(map[string]bool, 11)
-	c.fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if set["tcp"] {
-		cfg.Server.TCPAddr = *c.tcpAddr
-	}
-	if set["http"] {
-		cfg.Server.HTTPAddr = *c.httpAddr
-	}
-	if set["pg"] {
-		cfg.Server.PGAddr = *c.pgAddr
-	}
-	if set["data"] {
-		cfg.Storage.DataDir = *c.dataDir
-	}
-	if set["max-memtable"] {
-		cfg.Storage.MaxMemTableSize = *c.maxMemTableSize
-	}
-	if set["scheduler"] {
-		cfg.Scheduler.Enabled = *c.enableScheduler
-	}
-	if set["scheduler.flush-interval"] {
-		cfg.Scheduler.FlushInterval = config.Duration(*c.flushInterval)
-	}
-	if set["scheduler.compact-interval"] {
-		cfg.Scheduler.CompactInterval = config.Duration(*c.compactInterval)
-	}
-	if set["scheduler.wal-clean-interval"] {
-		cfg.Scheduler.WALCleanInterval = config.Duration(*c.walCleanInterval)
-	}
-	if set["scheduler.wal-clean-threshold"] {
-		cfg.Scheduler.WALCleanThreshold = *c.walCleanThreshold
-	}
+	c.cmd.ApplyOverrides(cfg)
 }
 
 // toServerConfig 将 YAML 配置转换为服务层配置。
 func toServerConfig(cfg config.Config) server.Config {
-	return server.Config{
-		TCPAddr:         cfg.Server.TCPAddr,
-		HTTPAddr:        cfg.Server.HTTPAddr,
-		PGAddr:          cfg.Server.PGAddr,
-		DataDir:         cfg.Storage.DataDir,
-		MaxMemTableSize: cfg.Storage.MaxMemTableSize,
-		EnableScheduler: cfg.Scheduler.Enabled,
-		SchedulerConfig: storage.SchedulerConfig{
-			FlushInterval:     time.Duration(cfg.Scheduler.FlushInterval),
-			CompactInterval:   time.Duration(cfg.Scheduler.CompactInterval),
-			WALCleanInterval:  time.Duration(cfg.Scheduler.WALCleanInterval),
-			WALCleanThreshold: cfg.Scheduler.WALCleanThreshold,
-		},
-	}
+	return cmdutil.ToServerConfig(cfg)
 }
 
 // loadConfig 按分层策略加载配置：默认值 < 配置文件。
 func loadConfig(configPath string) (config.Config, error) {
-	resolved := config.ResolvePath(configPath, ".")
-	if resolved == "" {
-		log.Printf("未找到配置文件，使用默认配置（可用 -gen-config widb.yaml 生成模板）")
-		return config.Default(), nil
-	}
-	return config.Load(resolved)
+	return cmdutil.LoadConfig(configPath)
 }
 
 // runMainWithArgs 解析参数、启动服务并运行 REPL，返回退出码。
@@ -253,16 +214,9 @@ func runREPL(srv *server.Server, format string, reader io.Reader, writer io.Writ
 }
 
 // readMultiLineSQL 收集多行 SQL（以分号结尾），返回去除分号后的完整语句。
+// 实际逻辑由 pkg/cli.ReadMultiLineSQL 提供，本函数为保持历史 API 兼容而保留。
 func readMultiLineSQL(scanner *bufio.Scanner, writer io.Writer, firstLine string) string {
-	sql := firstLine
-	for !strings.HasSuffix(sql, ";") {
-		_, _ = fmt.Fprint(writer, "  ...> ")
-		if !scanner.Scan() {
-			break
-		}
-		sql += " " + scanner.Text()
-	}
-	return strings.TrimSuffix(strings.TrimSpace(sql), ";")
+	return cli.ReadMultiLineSQL(scanner, writer, firstLine)
 }
 
 // handleCommand 处理反斜杠命令，返回 true 表示应退出 REPL。
@@ -286,18 +240,16 @@ func handleCommand(srv *server.Server, format *string, writer io.Writer, cmd str
 }
 
 // handleFormatCommand 处理 \format 命令：无参数显示当前格式，有参数切换格式。
+// 实际逻辑由 pkg/cli.FormatState 提供，本函数为保持历史 API 兼容而保留。
 func handleFormatCommand(format *string, writer io.Writer, cmd string) bool {
-	arg := strings.TrimSpace(strings.TrimPrefix(cmd, "\\format"))
-	if arg == "" {
-		_, _ = fmt.Fprintf(writer, "当前格式: %s（支持: %s）\n", *format, strings.Join(render.SupportedFormats, ", "))
-		return false
+	state := &cli.FormatState{}
+	state.Set(*format)
+	before := state.Current()
+	state.HandleCommand(writer, cmd)
+	// 仅当 FormatState 内部真正修改了格式时才回写到 *format，避免无参/非法命令覆盖。
+	if state.Current() != before {
+		*format = state.Current()
 	}
-	if !render.IsValidFormat(arg) {
-		_, _ = fmt.Fprintf(writer, "未知格式: %s，支持: %s\n", arg, strings.Join(render.SupportedFormats, ", "))
-		return false
-	}
-	*format = arg
-	_, _ = fmt.Fprintf(writer, "已切换到 %s 格式\n", arg)
 	return false
 }
 

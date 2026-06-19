@@ -1,4 +1,7 @@
 // Package main 是 widb-cli 命令行客户端的入口点。
+//
+// 重构说明：readMultiLineSQL 与 handleFormatCommand 已迁移到 pkg/cli，
+// 本文件保留同名方法作为薄包装，便于现有测试直接调用。
 package main
 
 import (
@@ -14,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	clishared "github.com/what-is-me-vibe-coding/test-db/pkg/cli"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/render"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
 )
@@ -219,16 +223,9 @@ func (c *cli) runInteractive(reader io.Reader, writer io.Writer) error {
 }
 
 // readMultiLineSQL 收集多行 SQL（以分号结尾），返回去除分号后的完整语句。
+// 实际逻辑由 pkg/cli.ReadMultiLineSQL 提供，本方法为保持历史 API 兼容而保留。
 func (c *cli) readMultiLineSQL(scanner *bufio.Scanner, writer io.Writer, firstLine string) string {
-	sql := firstLine
-	for !strings.HasSuffix(sql, ";") {
-		_, _ = fmt.Fprint(writer, "  ...> ")
-		if !scanner.Scan() {
-			break
-		}
-		sql += " " + scanner.Text()
-	}
-	return strings.TrimSuffix(strings.TrimSpace(sql), ";")
+	return clishared.ReadMultiLineSQL(scanner, writer, firstLine)
 }
 
 // handleCommand 处理反斜杠命令。
@@ -263,18 +260,15 @@ func (c *cli) handleCommand(writer io.Writer, cmd string) error {
 }
 
 // handleFormatCommand 处理 \format 命令：无参数显示当前格式，有参数切换格式。
+// 实际逻辑由 pkg/cli.FormatState 提供，本方法为保持历史 API 兼容而保留。
 func (c *cli) handleFormatCommand(writer io.Writer, cmd string) error {
-	arg := strings.TrimSpace(strings.TrimPrefix(cmd, "\\format"))
-	if arg == "" {
-		_, _ = fmt.Fprintf(writer, "当前格式: %s（支持: %s）\n", c.format, strings.Join(render.SupportedFormats, ", "))
-		return nil
+	state := &clishared.FormatState{}
+	state.Set(c.format)
+	before := state.Current()
+	state.HandleCommand(writer, cmd)
+	if state.Current() != before {
+		c.format = state.Current()
 	}
-	if !render.IsValidFormat(arg) {
-		_, _ = fmt.Fprintf(writer, "未知格式: %s，支持: %s\n", arg, strings.Join(render.SupportedFormats, ", "))
-		return nil
-	}
-	c.format = arg
-	_, _ = fmt.Fprintf(writer, "已切换到 %s 格式\n", arg)
 	return nil
 }
 
