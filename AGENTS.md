@@ -31,6 +31,8 @@
 | `pkg/index` 可依赖 `pkg/common`、`pkg/catalog`、`pkg/storage` | 索引需读取 Segment 元数据 |
 | `pkg/query` 可依赖 `pkg/common`、`pkg/catalog`、`pkg/index`、`pkg/storage` | 查询引擎调用存储与索引 |
 | `pkg/server` 可依赖所有 pkg | 接入层聚合所有能力 |
+| `pkg/cli` 可依赖 `pkg/common`、`pkg/render` | REPL 原语（多行 SQL、格式状态） |
+| `pkg/cmdutil` 可依赖 `pkg/common`、`pkg/config`、`pkg/server`、`pkg/storage` | 入口二进制共享的 flag/配置加载逻辑 |
 | 禁止循环依赖 | 出现循环依赖时，提取公共接口到 `pkg/common` |
 
 ### 3.3 并发安全

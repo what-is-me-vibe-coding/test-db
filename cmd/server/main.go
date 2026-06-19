@@ -1,4 +1,9 @@
 // Package main 是 test-db 服务器的入口点。
+//
+// 命令行参数与配置加载逻辑委托给 pkg/cmdutil.ServerFlags / LoadConfig / ToServerConfig，
+// 避免与 cmd/widb 重复维护同一套 flag 定义。本文件保留 cliFlags / newCLIFlags /
+// applyOverrides / toServerConfig / loadConfig 等历史符号作为薄包装，
+// 现有测试无需迁移。
 package main
 
 import (
@@ -9,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/what-is-me-vibe-coding/test-db/pkg/cmdutil"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/config"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
@@ -43,10 +49,11 @@ func run(tcpAddr, httpAddr, dataDir string, maxMemTableSize int64, enableSchedul
 	return srv.Stop()
 }
 
-// cliFlags 封装命令行参数。
-// 命令行参数的默认值留空（或零值），由配置文件提供默认值；显式传入的参数覆盖配置文件。
+// cliFlags 是 cmd/server 历史测试所依赖的命令行参数封装，内部委托给 pkg/cmdutil.ServerFlags。
+// 保留 cliFlags 名称与字段（fs / configPath / ...）以便现有测试代码无需修改。
 type cliFlags struct {
 	fs                *flag.FlagSet
+	cmd               *cmdutil.ServerFlags
 	configPath        *string
 	genConfigPath     *string
 	tcpAddr           *string
@@ -61,89 +68,41 @@ type cliFlags struct {
 	walCleanThreshold *int64
 }
 
-// newCLIFlags 构建命令行参数集。
+// newCLIFlags 构建命令行参数集，实际逻辑由 cmdutil.ServerFlags 提供。
 func newCLIFlags() *cliFlags {
-	fs := flag.NewFlagSet("test-db", flag.ContinueOnError)
+	cmd := cmdutil.NewServerFlags("test-db")
 	return &cliFlags{
-		fs:                fs,
-		configPath:        fs.String("config", "", "配置文件路径（YAML），未指定时依次查找 ./widb.yaml、./config.yaml"),
-		genConfigPath:     fs.String("gen-config", "", "生成带注释的默认配置模板到指定路径后退出"),
-		tcpAddr:           fs.String("tcp", "", "TCP 监听地址（覆盖配置文件）"),
-		httpAddr:          fs.String("http", "", "HTTP 监听地址（覆盖配置文件）"),
-		pgAddr:            fs.String("pg", "", "PostgreSQL wire 协议监听地址（覆盖配置文件，留空禁用）"),
-		dataDir:           fs.String("data", "", "数据目录（覆盖配置文件）"),
-		maxMemTableSize:   fs.Int64("max-memtable", 0, "MemTable 最大字节数（覆盖配置文件）"),
-		enableScheduler:   fs.Bool("scheduler", false, "启用后台调度器（覆盖配置文件）"),
-		flushInterval:     fs.Duration("scheduler.flush-interval", 0, "自动刷盘检查间隔（覆盖配置文件）"),
-		compactInterval:   fs.Duration("scheduler.compact-interval", 0, "自动 Compaction 检查间隔（覆盖配置文件）"),
-		walCleanInterval:  fs.Duration("scheduler.wal-clean-interval", 0, "WAL 清理检查间隔（覆盖配置文件）"),
-		walCleanThreshold: fs.Int64("scheduler.wal-clean-threshold", 0, "WAL 文件大小阈值（覆盖配置文件）"),
+		fs:                cmd.FS,
+		cmd:               cmd,
+		configPath:        cmd.ConfigPath,
+		genConfigPath:     cmd.GenConfigPath,
+		tcpAddr:           cmd.TCPAddr,
+		httpAddr:          cmd.HTTPAddr,
+		pgAddr:            cmd.PGAddr,
+		dataDir:           cmd.DataDir,
+		maxMemTableSize:   cmd.MaxMemTableSize,
+		enableScheduler:   cmd.EnableScheduler,
+		flushInterval:     cmd.FlushInterval,
+		compactInterval:   cmd.CompactInterval,
+		walCleanInterval:  cmd.WALCleanInterval,
+		walCleanThreshold: cmd.WALCleanThreshold,
 	}
+}
+
+// applyOverrides 将显式设置的命令行参数覆盖到配置上。
+func (c *cliFlags) applyOverrides(cfg *config.Config) {
+	c.cmd.ApplyOverrides(cfg)
+}
+
+// toServerConfig 将 YAML 配置转换为服务层配置。
+func toServerConfig(cfg config.Config) server.Config {
+	return cmdutil.ToServerConfig(cfg)
 }
 
 // loadConfig 按分层策略加载配置：默认值 < 配置文件。
 // configPath 非空时必须存在；为空时依次查找 ./widb.yaml、./config.yaml，均不存在则使用默认值。
 func loadConfig(configPath string) (config.Config, error) {
-	resolved := config.ResolvePath(configPath, ".")
-	if resolved == "" {
-		log.Printf("未找到配置文件，使用默认配置（可用 -gen-config widb.yaml 生成模板）")
-		return config.Default(), nil
-	}
-	return config.Load(resolved)
-}
-
-// applyOverrides 将显式设置的命令行参数覆盖到配置上。
-func (c *cliFlags) applyOverrides(cfg *config.Config) {
-	set := make(map[string]bool, 11)
-	c.fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	if set["tcp"] {
-		cfg.Server.TCPAddr = *c.tcpAddr
-	}
-	if set["http"] {
-		cfg.Server.HTTPAddr = *c.httpAddr
-	}
-	if set["pg"] {
-		cfg.Server.PGAddr = *c.pgAddr
-	}
-	if set["data"] {
-		cfg.Storage.DataDir = *c.dataDir
-	}
-	if set["max-memtable"] {
-		cfg.Storage.MaxMemTableSize = *c.maxMemTableSize
-	}
-	if set["scheduler"] {
-		cfg.Scheduler.Enabled = *c.enableScheduler
-	}
-	if set["scheduler.flush-interval"] {
-		cfg.Scheduler.FlushInterval = config.Duration(*c.flushInterval)
-	}
-	if set["scheduler.compact-interval"] {
-		cfg.Scheduler.CompactInterval = config.Duration(*c.compactInterval)
-	}
-	if set["scheduler.wal-clean-interval"] {
-		cfg.Scheduler.WALCleanInterval = config.Duration(*c.walCleanInterval)
-	}
-	if set["scheduler.wal-clean-threshold"] {
-		cfg.Scheduler.WALCleanThreshold = *c.walCleanThreshold
-	}
-}
-
-// toServerConfig 将 YAML 配置转换为服务层配置。
-func toServerConfig(cfg config.Config) server.Config {
-	return server.Config{
-		TCPAddr:         cfg.Server.TCPAddr,
-		HTTPAddr:        cfg.Server.HTTPAddr,
-		PGAddr:          cfg.Server.PGAddr,
-		DataDir:         cfg.Storage.DataDir,
-		MaxMemTableSize: cfg.Storage.MaxMemTableSize,
-		EnableScheduler: cfg.Scheduler.Enabled,
-		SchedulerConfig: storage.SchedulerConfig{
-			FlushInterval:     time.Duration(cfg.Scheduler.FlushInterval),
-			CompactInterval:   time.Duration(cfg.Scheduler.CompactInterval),
-			WALCleanInterval:  time.Duration(cfg.Scheduler.WALCleanInterval),
-			WALCleanThreshold: cfg.Scheduler.WALCleanThreshold,
-		},
-	}
+	return cmdutil.LoadConfig(configPath)
 }
 
 // runMainWithArgs 解析命令行参数并启动服务器，返回退出码。
