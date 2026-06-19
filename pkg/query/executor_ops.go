@@ -1,6 +1,7 @@
 package query
 
 import (
+	"cmp"
 	"fmt"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
@@ -134,71 +135,24 @@ func tryFastFilter(input *storage.Chunk, cond Expression, schema []ColumnDef, ro
 func fastFilterTyped(col *storage.ColumnVector, op BinaryOp, lit common.Value, rowCount uint32) ([]uint32, bool) {
 	switch {
 	case col.Typ.IsIntFamily() && lit.Typ.IsIntFamily():
-		return fastFilterInt64(col, op, lit.Int64, rowCount), true
+		return fastFilterOrdered(col, op, lit.Int64, col.Int64Data(), rowCount), true
 	case col.Typ == common.TypeFloat64 && lit.Typ == common.TypeFloat64:
-		return fastFilterFloat64(col, op, lit.Float64, rowCount), true
+		return fastFilterOrdered(col, op, lit.Float64, col.Float64Data(), rowCount), true
 	case col.Typ == common.TypeString && lit.Typ == common.TypeString:
-		return fastFilterString(col, op, lit.Str, rowCount), true
+		return fastFilterOrdered(col, op, lit.Str, col.StringData(), rowCount), true
 	}
 	return nil, false
 }
 
-// fastFilterInt64 对整数族列与 int64 字面量执行向量化比较。
-// 直接访问 int64s 底层数组与 null bitmap，跳过 GetValue 的类型分发与 Value 构造。
+// fastFilterOrdered 对有序标量类型（int64/float64/string）列与字面量执行向量化比较。
+// 直接访问强类型底层数组 data 与 null bitmap，跳过 GetValue 的类型分发与 Value 构造，
+// 以及 compareValues 的方法分发。仅在列与字面量类型同构时由 fastFilterTyped 调用，
+// 语义与通用路径完全一致。
+//
 // 多数 OLAP 列无 NULL：先用 IsEmpty 整体判断，无 NULL 时跳过逐行 nulls.Get
 // 的边界检查+除法+取模+位与开销（与 ColumnVector.CopySelected 的优化一致）。
-func fastFilterInt64(col *storage.ColumnVector, op BinaryOp, lit int64, rowCount uint32) []uint32 {
-	data := col.Int64Data()
-	nulls := col.NullBitmap()
-	selection := make([]uint32, 0, rowCount)
-	if !nulls.IsEmpty() {
-		for row := uint32(0); row < rowCount; row++ {
-			if nulls.Get(row) {
-				continue
-			}
-			if compareOrdered(op, data[row], lit) {
-				selection = append(selection, row)
-			}
-		}
-		return selection
-	}
-	for row := uint32(0); row < rowCount; row++ {
-		if compareOrdered(op, data[row], lit) {
-			selection = append(selection, row)
-		}
-	}
-	return selection
-}
-
-// fastFilterFloat64 对 FLOAT64 列与 float64 字面量执行向量化比较。
-// 无 NULL 时跳过逐行 nulls.Get 开销（见 fastFilterInt64 说明）。
-func fastFilterFloat64(col *storage.ColumnVector, op BinaryOp, lit float64, rowCount uint32) []uint32 {
-	data := col.Float64Data()
-	nulls := col.NullBitmap()
-	selection := make([]uint32, 0, rowCount)
-	if !nulls.IsEmpty() {
-		for row := uint32(0); row < rowCount; row++ {
-			if nulls.Get(row) {
-				continue
-			}
-			if compareOrdered(op, data[row], lit) {
-				selection = append(selection, row)
-			}
-		}
-		return selection
-	}
-	for row := uint32(0); row < rowCount; row++ {
-		if compareOrdered(op, data[row], lit) {
-			selection = append(selection, row)
-		}
-	}
-	return selection
-}
-
-// fastFilterString 对 STRING 列与 string 字面量执行向量化比较。
-// 无 NULL 时跳过逐行 nulls.Get 开销（见 fastFilterInt64 说明）。
-func fastFilterString(col *storage.ColumnVector, op BinaryOp, lit string, rowCount uint32) []uint32 {
-	data := col.StringData()
+// 编译器对每个具现化类型单态化，无运行时分发开销。
+func fastFilterOrdered[T cmp.Ordered](col *storage.ColumnVector, op BinaryOp, lit T, data []T, rowCount uint32) []uint32 {
 	nulls := col.NullBitmap()
 	selection := make([]uint32, 0, rowCount)
 	if !nulls.IsEmpty() {
