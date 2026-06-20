@@ -132,7 +132,7 @@ func mrpcmRunOnce(t *testing.T, dataDir string) (*server.Server, int) {
 	return s.srv, int(got)
 }
 
-// mrpcmAssignProtocol 按 clientID 分发协议：0/1→tcp、2/3→http、4/5→pg。
+// mrpcmAssignProtocol 按 clientID 分发协议：0,3→tcp、1,4→http、2,5→pg（每协议恰好 2 个客户端）。
 func mrpcmAssignProtocol(clientID int) string {
 	switch clientID % 3 {
 	case 0:
@@ -377,7 +377,7 @@ func mrpcmRestartRound(t *testing.T, dir string, round int, wantRows int) int {
 	updateID := mrpcmPeerBase
 	fixAmount := float64(round+1) * 7.0 // 每轮使用不同固定值，便于检测 UPDATE 是否生效
 	if _, err := httpQuery(s.httpAddr, fmt.Sprintf(
-		"UPDATE %s SET amount = %v WHERE id >= %d AND id < %d",
+		"UPDATE %s SET amount = %.2f WHERE id >= %d AND id < %d",
 		mrpcmTable, fixAmount, updateID, updateID+4)); err != nil {
 		t.Fatalf("[round %d] UPDATE 失败: %v", round, err)
 	}
