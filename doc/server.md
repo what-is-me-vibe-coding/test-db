@@ -212,6 +212,8 @@ type Packet struct {
 | `/write` | POST | `httpWrite` | 批量写入数据 |
 | `/health` | GET | `httpHealth` | 健康检查 |
 | `/metrics` | GET | `promhttp.Handler` | Prometheus 指标 |
+| `/admin/flush` | POST | `handleAdminFlush` | 强制把所有 LSM 表的活跃/不可变 MemTable 刷为 Segment |
+| `/admin/compact` | POST | `handleAdminCompact` | 强制把每张 LSM 表的多层 Segment 合并到下一层 |
 
 ### 4.2 通用 POST 处理
 

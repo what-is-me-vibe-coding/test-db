@@ -23,6 +23,8 @@ func (s *Server) registerHTTPHandlers() *http.ServeMux {
 	mux.HandleFunc("/query", s.httpQuery)
 	mux.HandleFunc("/write", s.httpWrite)
 	mux.HandleFunc("/health", s.httpHealth)
+	mux.HandleFunc("/admin/flush", s.handleAdminFlush)
+	mux.HandleFunc("/admin/compact", s.handleAdminCompact)
 
 	gatherer := prometheus.DefaultGatherer
 	if s.registry != nil {
