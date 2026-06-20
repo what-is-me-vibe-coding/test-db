@@ -222,61 +222,87 @@ func mrpcmVerifyAcrossProtocols(t *testing.T, s *sqlServer) {
 	t.Helper()
 	// 抽样：clientID=0 seq=0 → id=mrpcmPeerBase；其它客户端同理
 	for _, clientID := range []int{0, 3, 5} {
-		id := mrpcmPeerBase + clientID*mrpcmRowsPerPeer
-		wantSQL := fmt.Sprintf("SELECT region, amount, active FROM %s WHERE id = %d", mrpcmTable, id)
+		mrpcmVerifyClientIDAcrossProtocols(t, s, clientID)
+	}
+}
 
-		// TCP
-		tcpResp := queryVia(t, s, "tcp", wantSQL)
-		if tcpResp.Code != 0 {
-			t.Fatalf("[tcp c%d] 查询失败: %s", clientID, tcpResp.Message)
-		}
-		tcpRows := respRows(tcpResp)
-		if len(tcpRows) != 1 {
-			t.Fatalf("[tcp c%d] 期望 1 行，得到 %d", clientID, len(tcpRows))
-		}
+// mrpcmVerifyClientIDAcrossProtocols 单个客户端 ID 的跨协议读一致性校验。
+// 拆出此函数是为了把"循环调度"与"单 ID 的多协议校验"解耦，便于通过认知复杂度阈值。
+func mrpcmVerifyClientIDAcrossProtocols(t *testing.T, s *sqlServer, clientID int) {
+	t.Helper()
+	id := mrpcmPeerBase + clientID*mrpcmRowsPerPeer
+	wantSQL := fmt.Sprintf("SELECT region, amount, active FROM %s WHERE id = %d", mrpcmTable, id)
 
-		// HTTP
-		httpResp, err := httpQuery(s.httpAddr, wantSQL)
-		if err != nil {
-			t.Fatalf("[http c%d] 请求失败: %v", clientID, err)
-		}
-		if httpResp.Code != 0 {
-			t.Fatalf("[http c%d] 返回错误: %s", clientID, httpResp.Message)
-		}
-		httpRows := respRows(httpResp)
-		if len(httpRows) != 1 {
-			t.Fatalf("[http c%d] 期望 1 行，得到 %d", clientID, len(httpRows))
-		}
+	// TCP 与 HTTP 字段必须完全一致
+	tcpRows, httpRows := mrpcmReadSameIDOverTCPAndHTTP(t, s, clientID, wantSQL)
+	mrpcmAssertRowFieldEqual(t, clientID, tcpRows[0], httpRows[0])
 
-		// 校验 TCP 与 HTTP 字段一致
-		for k := range tcpRows[0] {
-			if tcpRows[0][k] != httpRows[0][k] {
-				t.Errorf("[c%d] %s 字段不一致: tcp=%v http=%v",
-					clientID, k, tcpRows[0][k], httpRows[0][k])
-			}
-		}
+	// PG wire（仅在 PG 端口启用时执行）
+	if s.srv.PGAddr() == "" {
+		return
+	}
+	mrpcmVerifySameIDOverPG(t, s, clientID, wantSQL)
+}
 
-		// PG wire（额外验证：仅在 PG 端口启用时执行）
-		if s.srv.PGAddr() != "" {
-			c, err := dialPGWireErr(s.srv.PGAddr())
-			if err != nil {
-				t.Fatalf("[pg c%d] 拨号失败: %v", clientID, err)
-			}
-			if err := c.handshakeErr(); err != nil {
-				t.Fatalf("[pg c%d] 握手失败: %v", clientID, err)
-			}
-			res, err := c.sendQueryRead(wantSQL)
-			c.close()
-			if err != nil {
-				t.Fatalf("[pg c%d] 查询失败: %v", clientID, err)
-			}
-			if res.errMsg != "" {
-				t.Fatalf("[pg c%d] 返回错误: %s", clientID, res.errMsg)
-			}
-			if len(res.rows) != 1 {
-				t.Fatalf("[pg c%d] 期望 1 行，得到 %d", clientID, len(res.rows))
-			}
+// mrpcmReadSameIDOverTCPAndHTTP 分别通过 TCP/HTTP 读同一 ID，返回两边的行切片。
+// 任一协议出错时直接 t.Fatalf。
+func mrpcmReadSameIDOverTCPAndHTTP(t *testing.T, s *sqlServer, clientID int, sql string) ([]map[string]any, []map[string]any) {
+	t.Helper()
+	tcpResp := queryVia(t, s, "tcp", sql)
+	if tcpResp.Code != 0 {
+		t.Fatalf("[tcp c%d] 查询失败: %s", clientID, tcpResp.Message)
+	}
+	tcpRows := respRows(tcpResp)
+	if len(tcpRows) != 1 {
+		t.Fatalf("[tcp c%d] 期望 1 行，得到 %d", clientID, len(tcpRows))
+	}
+	httpResp, err := httpQuery(s.httpAddr, sql)
+	if err != nil {
+		t.Fatalf("[http c%d] 请求失败: %v", clientID, err)
+	}
+	if httpResp.Code != 0 {
+		t.Fatalf("[http c%d] 返回错误: %s", clientID, httpResp.Message)
+	}
+	httpRows := respRows(httpResp)
+	if len(httpRows) != 1 {
+		t.Fatalf("[http c%d] 期望 1 行，得到 %d", clientID, len(httpRows))
+	}
+	return tcpRows, httpRows
+}
+
+// mrpcmAssertRowFieldEqual 校验两个 map 行的所有字段值一致，差异时 t.Errorf。
+func mrpcmAssertRowFieldEqual(t *testing.T, clientID int, a, b map[string]any) {
+	t.Helper()
+	for k := range a {
+		if a[k] != b[k] {
+			t.Errorf("[c%d] %s 字段不一致: tcp=%v http=%v",
+				clientID, k, a[k], b[k])
 		}
+	}
+}
+
+// mrpcmVerifySameIDOverPG 通过 PG wire 协议读同一 ID 并验证返回 1 行。
+// 任一步骤出错时直接 t.Fatalf。
+func mrpcmVerifySameIDOverPG(t *testing.T, s *sqlServer, clientID int, sql string) {
+	t.Helper()
+	c, err := dialPGWireErr(s.srv.PGAddr())
+	if err != nil {
+		t.Fatalf("[pg c%d] 拨号失败: %v", clientID, err)
+	}
+	if err := c.handshakeErr(); err != nil {
+		c.close()
+		t.Fatalf("[pg c%d] 握手失败: %v", clientID, err)
+	}
+	res, err := c.sendQueryRead(sql)
+	c.close()
+	if err != nil {
+		t.Fatalf("[pg c%d] 查询失败: %v", clientID, err)
+	}
+	if res.errMsg != "" {
+		t.Fatalf("[pg c%d] 返回错误: %s", clientID, res.errMsg)
+	}
+	if len(res.rows) != 1 {
+		t.Fatalf("[pg c%d] 期望 1 行，得到 %d", clientID, len(res.rows))
 	}
 }
 
@@ -510,63 +536,12 @@ func mrpcmReadRows(ctx context.Context, s *sqlServer, via, sql string) ([]map[st
 	done := make(chan []map[string]any, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		var resp *server.Response
-		var err error
-		switch via {
-		case "tcp":
-			tc, e := dialTCP(s.tcpAddr)
-			if e != nil {
-				errCh <- e
-				return
-			}
-			defer tc.close()
-			resp, err = tc.query(sql)
-		case "http":
-			resp, err = httpQuery(s.httpAddr, sql)
-		case "pg":
-			c, e := dialPGWireErr(s.srv.PGAddr())
-			if e != nil {
-				errCh <- e
-				return
-			}
-			defer c.close()
-			if e := c.handshakeErr(); e != nil {
-				errCh <- e
-				return
-			}
-			res, e := c.sendQueryRead(sql)
-			if e != nil {
-				errCh <- e
-				return
-			}
-			if res.errMsg != "" {
-				errCh <- fmt.Errorf("%s", res.errMsg)
-				return
-			}
-			// PG wire 返回列名 + 文本值
-			cols := res.columns
-			out := make([]map[string]any, 0, len(res.rows))
-			for _, r := range res.rows {
-				m := make(map[string]any, len(cols))
-				for i, col := range cols {
-					if i < len(r) {
-						m[col] = r[i]
-					}
-				}
-				out = append(out, m)
-			}
-			done <- out
-			return
-		}
+		rows, err := mrpcmReadRowsByProtocol(s, via, sql)
 		if err != nil {
 			errCh <- err
 			return
 		}
-		if resp.Code != 0 {
-			errCh <- fmt.Errorf("%s", resp.Message)
-			return
-		}
-		done <- respRows(resp)
+		done <- rows
 	}()
 	select {
 	case rows := <-done:
@@ -578,63 +553,87 @@ func mrpcmReadRows(ctx context.Context, s *sqlServer, via, sql string) ([]map[st
 	}
 }
 
+// mrpcmReadRowsByProtocol 按协议路由读 SELECT 并返回行（map 形式）。
+// 拆出此函数是为了把"协议分发"与"context 超时等待"解耦，便于通过 cyclomatic 阈值。
+func mrpcmReadRowsByProtocol(s *sqlServer, via, sql string) ([]map[string]any, error) {
+	switch via {
+	case "tcp":
+		return mrpcmReadRowsTCP(s, sql)
+	case "http":
+		return mrpcmReadRowsHTTP(s, sql)
+	case "pg":
+		return mrpcmReadRowsPG(s, sql)
+	default:
+		return nil, fmt.Errorf("未知协议: %s", via)
+	}
+}
+
+// mrpcmReadRowsTCP 走 TCP 协议读 SELECT。
+func mrpcmReadRowsTCP(s *sqlServer, sql string) ([]map[string]any, error) {
+	tc, err := dialTCP(s.tcpAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer tc.close()
+	resp, err := tc.query(sql)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("%s", resp.Message)
+	}
+	return respRows(resp), nil
+}
+
+// mrpcmReadRowsHTTP 走 HTTP 协议读 SELECT。
+func mrpcmReadRowsHTTP(s *sqlServer, sql string) ([]map[string]any, error) {
+	resp, err := httpQuery(s.httpAddr, sql)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("%s", resp.Message)
+	}
+	return respRows(resp), nil
+}
+
+// mrpcmReadRowsPG 走 PG wire 协议读 SELECT，把文本行转换为列名 → 值 的 map 列表。
+func mrpcmReadRowsPG(s *sqlServer, sql string) ([]map[string]any, error) {
+	c, err := dialPGWireErr(s.srv.PGAddr())
+	if err != nil {
+		return nil, err
+	}
+	defer c.close()
+	if err := c.handshakeErr(); err != nil {
+		return nil, err
+	}
+	res, err := c.sendQueryRead(sql)
+	if err != nil {
+		return nil, err
+	}
+	if res.errMsg != "" {
+		return nil, fmt.Errorf("%s", res.errMsg)
+	}
+	// PG wire 返回列名 + 文本值，组装为列名 → 值 的 map
+	cols := res.columns
+	out := make([]map[string]any, 0, len(res.rows))
+	for _, r := range res.rows {
+		m := make(map[string]any, len(cols))
+		for i, col := range cols {
+			if i < len(r) {
+				m[col] = r[i]
+			}
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
 // mrpcmExec 通过指定协议执行任意 SQL。
 func mrpcmExec(ctx context.Context, s *sqlServer, via, sql string) error {
 	done := make(chan error, 1)
 	go func() {
-		var err error
-		switch via {
-		case "tcp":
-			tc, e := dialTCP(s.tcpAddr)
-			if e != nil {
-				done <- e
-				return
-			}
-			defer tc.close()
-			resp, e := tc.query(sql)
-			if e != nil {
-				done <- e
-				return
-			}
-			if resp.Code != 0 {
-				done <- fmt.Errorf("%s", resp.Message)
-				return
-			}
-		case "http":
-			resp, e := httpQuery(s.httpAddr, sql)
-			if e != nil {
-				done <- e
-				return
-			}
-			if resp.Code != 0 {
-				done <- fmt.Errorf("%s", resp.Message)
-				return
-			}
-		case "pg":
-			c, e := dialPGWireErr(s.srv.PGAddr())
-			if e != nil {
-				done <- e
-				return
-			}
-			defer c.close()
-			if e := c.handshakeErr(); e != nil {
-				done <- e
-				return
-			}
-			res, e := c.sendQueryRead(sql)
-			if e != nil {
-				done <- e
-				return
-			}
-			if res.errMsg != "" {
-				done <- fmt.Errorf("%s", res.errMsg)
-				return
-			}
-		default:
-			done <- fmt.Errorf("未知协议: %s", via)
-			return
-		}
-		done <- err
+		done <- mrpcmExecByProtocol(s, via, sql)
 	}()
 	select {
 	case err := <-done:
@@ -642,4 +641,68 @@ func mrpcmExec(ctx context.Context, s *sqlServer, via, sql string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// mrpcmExecByProtocol 按协议路由执行任意 SQL。
+// 拆出此函数是为了把"context 超时等待"与"协议分发"解耦，便于通过认知复杂度阈值。
+func mrpcmExecByProtocol(s *sqlServer, via, sql string) error {
+	switch via {
+	case "tcp":
+		return mrpcmExecTCP(s, sql)
+	case "http":
+		return mrpcmExecHTTP(s, sql)
+	case "pg":
+		return mrpcmExecPG(s, sql)
+	default:
+		return fmt.Errorf("未知协议: %s", via)
+	}
+}
+
+// mrpcmExecTCP 走 TCP 协议执行 SQL。
+func mrpcmExecTCP(s *sqlServer, sql string) error {
+	tc, err := dialTCP(s.tcpAddr)
+	if err != nil {
+		return err
+	}
+	defer tc.close()
+	resp, err := tc.query(sql)
+	if err != nil {
+		return err
+	}
+	if resp.Code != 0 {
+		return fmt.Errorf("%s", resp.Message)
+	}
+	return nil
+}
+
+// mrpcmExecHTTP 走 HTTP 协议执行 SQL。
+func mrpcmExecHTTP(s *sqlServer, sql string) error {
+	resp, err := httpQuery(s.httpAddr, sql)
+	if err != nil {
+		return err
+	}
+	if resp.Code != 0 {
+		return fmt.Errorf("%s", resp.Message)
+	}
+	return nil
+}
+
+// mrpcmExecPG 走 PG wire 协议执行 SQL。
+func mrpcmExecPG(s *sqlServer, sql string) error {
+	c, err := dialPGWireErr(s.srv.PGAddr())
+	if err != nil {
+		return err
+	}
+	defer c.close()
+	if err := c.handshakeErr(); err != nil {
+		return err
+	}
+	res, err := c.sendQueryRead(sql)
+	if err != nil {
+		return err
+	}
+	if res.errMsg != "" {
+		return fmt.Errorf("%s", res.errMsg)
+	}
+	return nil
 }
