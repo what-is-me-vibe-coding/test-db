@@ -304,22 +304,21 @@ func (c *cli) executeTTY(writer io.Writer, sql string) {
 // handleCommandTTY 在 TTY 模式下处理反斜杠命令。
 // 返回 (handled, shouldExit)。当 handled=false 时表示该行不是命令，由 SQL 路径处理。
 func (c *cli) handleCommandTTY(writer io.Writer, cmd string, formatState *clishared.FormatState) (bool, bool) {
-	// \format 委托给 FormatState
-	if strings.HasPrefix(cmd, "\\format") {
+	switch clishared.ParseMetaCmd(cmd) {
+	case clishared.MetaCmdFormat:
+		// \format 委托给 FormatState
 		before := formatState.Current()
 		formatState.HandleCommand(writer, cmd)
 		if formatState.Current() != before {
 			c.format = formatState.Current()
 		}
 		return true, false
-	}
-	switch cmd {
-	case "\\q", "\\quit":
+	case clishared.MetaCmdQuit:
 		return true, true
-	case "\\h", "\\help":
+	case clishared.MetaCmdHelp:
 		_, _ = fmt.Fprintln(writer, helpText)
 		return true, false
-	case "\\status":
+	case clishared.MetaCmdStatus:
 		result, err := c.pingTCP()
 		if err != nil {
 			_, _ = fmt.Fprintf(writer, "%s: 不可达 (%v)\n", clishared.ColorizeError("服务器状态"), err)
@@ -327,47 +326,51 @@ func (c *cli) handleCommandTTY(writer io.Writer, cmd string, formatState *clisha
 			_, _ = fmt.Fprintf(writer, "服务器状态: 正常 (%s)\n", result)
 		}
 		return true, false
-	case "\\use TCP":
+	case clishared.MetaCmdUseTCP:
 		c.mode = modeTCP
 		c.conn = nil
 		_, _ = fmt.Fprintln(writer, clishared.ColorizeSuccess("已切换到 TCP 模式"))
 		return true, false
-	case "\\use HTTP":
+	case clishared.MetaCmdUseHTTP:
 		c.mode = modeHTTP
 		c.conn = nil
 		_, _ = fmt.Fprintln(writer, clishared.ColorizeSuccess("已切换到 HTTP 模式"))
 		return true, false
+	default:
+		// MetaCmdNotCommand: 调用方已过滤。
+		// MetaCmdUnknown / MetaCmdAddrs: 独立 CLI 不支持 \addrs。
+		_, _ = fmt.Fprintf(writer, "%s: %s，输入 \\h 查看帮助\n", clishared.ColorizeError("未知命令"), cmd)
+		return true, false
 	}
-	_, _ = fmt.Fprintf(writer, "%s: %s，输入 \\h 查看帮助\n", clishared.ColorizeError("未知命令"), cmd)
-	return true, false
 }
 
 // handleCommand 处理反斜杠命令。
 func (c *cli) handleCommand(writer io.Writer, cmd string) error {
-	if strings.HasPrefix(cmd, "\\format") {
-		return c.handleFormatCommand(writer, cmd)
-	}
-	switch cmd {
-	case "\\q", "\\quit":
+	switch clishared.ParseMetaCmd(cmd) {
+	case clishared.MetaCmdQuit:
 		_, _ = fmt.Fprintln(writer, "再见!")
 		return io.EOF
-	case "\\h", "\\help":
+	case clishared.MetaCmdHelp:
 		_, _ = fmt.Fprintln(writer, helpText)
-	case "\\status":
+	case clishared.MetaCmdStatus:
 		result, err := c.pingTCP()
 		if err != nil {
 			_, _ = fmt.Fprintf(writer, "服务器状态: 不可达 (%v)\n", err)
 		} else {
 			_, _ = fmt.Fprintf(writer, "服务器状态: 正常 (%s)\n", result)
 		}
-	case "\\use TCP":
+	case clishared.MetaCmdUseTCP:
 		c.mode = modeTCP
 		c.conn = nil
 		_, _ = fmt.Fprintln(writer, "已切换到 TCP 模式")
-	case "\\use HTTP":
+	case clishared.MetaCmdUseHTTP:
 		c.mode = modeHTTP
 		_, _ = fmt.Fprintln(writer, "已切换到 HTTP 模式")
+	case clishared.MetaCmdFormat:
+		return c.handleFormatCommand(writer, cmd)
 	default:
+		// MetaCmdNotCommand: 调用方已过滤。
+		// MetaCmdUnknown / MetaCmdAddrs: 独立 CLI 不支持 \addrs。
 		_, _ = fmt.Fprintf(writer, "未知命令: %s，输入 \\h 查看帮助\n", cmd)
 	}
 	return nil

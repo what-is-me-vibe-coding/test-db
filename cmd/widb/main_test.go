@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
+	clishared "github.com/what-is-me-vibe-coding/test-db/pkg/cli"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/config"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/render"
@@ -572,5 +573,140 @@ func TestRunMainWithArgsFormatInvalid(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "未知输出格式") {
 		t.Errorf("stderr 应包含错误: %q", errOut.String())
+	}
+}
+
+// --- TTY 路径测试（handleCommandTTY）---
+
+// withColorDisabled 在测试中临时关闭颜色输出，使 TTY 帮助函数退化为普通字符串，
+// 便于在非 TTY 环境下对 handleCommandTTY 等含 ColorizeError 的代码路径做断言。
+func withColorDisabled(t *testing.T) {
+	t.Helper()
+	clishared.DisableColorGlobally()
+	t.Cleanup(clishared.EnableColorGlobally)
+}
+
+// TestHandleCommandTTYQuitVariants 验证 \q / \quit 在 TTY 模式下均返回 (true, true)。
+func TestHandleCommandTTYQuitVariants(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	for _, cmd := range []string{"\\q", "\\quit"} {
+		exit, handled := handleCommandTTY(srv, formatState, &out, cmd)
+		if !exit || !handled {
+			t.Errorf("handleCommandTTY(%q) = (%v, %v), want (true, true)", cmd, exit, handled)
+		}
+	}
+}
+
+// TestHandleCommandTTYHelp 验证 \h / \help 在 TTY 模式下输出帮助文本。
+func TestHandleCommandTTYHelp(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	for _, cmd := range []string{"\\h", "\\help"} {
+		out.Reset()
+		exit, handled := handleCommandTTY(srv, formatState, &out, cmd)
+		if exit || !handled {
+			t.Errorf("handleCommandTTY(%q) = (%v, %v), want (false, true)", cmd, exit, handled)
+		}
+		if !strings.Contains(out.String(), "可用命令") {
+			t.Errorf("handleCommandTTY(%q) 输出应包含帮助文本，实际: %q", cmd, out.String())
+		}
+	}
+}
+
+// TestHandleCommandTTYStatus 验证 \status 在 TTY 模式下输出服务状态。
+func TestHandleCommandTTYStatus(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	exit, handled := handleCommandTTY(srv, formatState, &out, "\\status")
+	if exit || !handled {
+		t.Errorf("\\status 应返回 (false, true)，实际 (%v, %v)", exit, handled)
+	}
+	if !strings.Contains(out.String(), "服务状态") {
+		t.Errorf("\\status 输出应包含服务状态，实际: %q", out.String())
+	}
+}
+
+// TestHandleCommandTTYAddrs 验证 \addrs 在 TTY 模式下输出三个监听地址。
+func TestHandleCommandTTYAddrs(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	exit, handled := handleCommandTTY(srv, formatState, &out, "\\addrs")
+	if exit || !handled {
+		t.Errorf("\\addrs 应返回 (false, true)，实际 (%v, %v)", exit, handled)
+	}
+	got := out.String()
+	if !strings.Contains(got, "TCP:") {
+		t.Errorf("\\addrs 输出应包含 TCP:，实际: %q", got)
+	}
+	if !strings.Contains(got, "HTTP:") {
+		t.Errorf("\\addrs 输出应包含 HTTP:，实际: %q", got)
+	}
+	if !strings.Contains(got, "PG:") {
+		t.Errorf("\\addrs 输出应包含 PG:，实际: %q", got)
+	}
+}
+
+// TestHandleCommandTTYUnknownCommand 验证未知命令在 TTY 模式下输出错误提示。
+func TestHandleCommandTTYUnknownCommand(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	exit, handled := handleCommandTTY(srv, formatState, &out, "\\foo")
+	if exit || !handled {
+		t.Errorf("未知命令应返回 (false, true)，实际 (%v, %v)", exit, handled)
+	}
+	if !strings.Contains(out.String(), "未知命令") {
+		t.Errorf("输出应包含未知命令提示，实际: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "\\foo") {
+		t.Errorf("输出应回显未知命令 \\foo，实际: %q", out.String())
+	}
+}
+
+// TestHandleCommandTTYUnsupportedInWidb 验证一键启动模式对 \use TCP/HTTP / \addrs 之外的命令
+// 一律回退到未知命令提示（避免静默吞掉错误）。
+func TestHandleCommandTTYUnsupportedInWidb(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	for _, cmd := range []string{"\\use TCP", "\\use HTTP"} {
+		out.Reset()
+		exit, handled := handleCommandTTY(srv, formatState, &out, cmd)
+		if exit || !handled {
+			t.Errorf("handleCommandTTY(%q) = (%v, %v), want (false, true)", cmd, exit, handled)
+		}
+		if !strings.Contains(out.String(), "未知命令") {
+			t.Errorf("handleCommandTTY(%q) 应提示未知命令，实际: %q", cmd, out.String())
+		}
+	}
+}
+
+// TestHandleCommandTTYFormat 验证 \format 子命令通过 FormatState 切换格式。
+func TestHandleCommandTTYFormat(t *testing.T) {
+	srv := newTestServer(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	formatState.Set(render.FormatPretty)
+	var out bytes.Buffer
+	exit, handled := handleCommandTTY(srv, formatState, &out, "\\format csv")
+	if exit || !handled {
+		t.Errorf("\\format 应返回 (false, true)，实际 (%v, %v)", exit, handled)
+	}
+	if formatState.Current() != "csv" {
+		t.Errorf("\\format csv 后格式应为 csv，实际 %q", formatState.Current())
+	}
+	if !strings.Contains(out.String(), "已切换到 csv") {
+		t.Errorf("\\format csv 输出应包含切换提示，实际: %q", out.String())
 	}
 }

@@ -10,7 +10,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
+	clishared "github.com/what-is-me-vibe-coding/test-db/pkg/cli"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/render"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/server"
 )
 
@@ -408,5 +410,166 @@ func TestRunCLIHTTPMode(t *testing.T) {
 	code := runCLI([]string{testFlagTCP, tcpAddr, testFlagHTTP, httpAddr, testFlagMode, testModeHTTP, "-e", testSQL}, strings.NewReader(""), &stdout, &stderr)
 	if code != 0 {
 		t.Errorf("exit code = %d, stderr: %s", code, stderr.String())
+	}
+}
+
+// --- TTY 路径测试（handleCommandTTY）---
+
+// withColorDisabled 在测试中临时关闭 fatih/color 的全局颜色输出，
+// 使 handleCommandTTY 等含 ColorizeError 的代码路径可断言。
+func withColorDisabled(t *testing.T) {
+	t.Helper()
+	clishared.DisableColorGlobally()
+	t.Cleanup(clishared.EnableColorGlobally)
+}
+
+// newTestCLI 构造一个绑定到临时服务器的 cli 实例，便于直接调用 handleCommandTTY。
+func newTestCLI(t *testing.T) *cli {
+	t.Helper()
+	tcpAddr, httpAddr := startServer(t)
+	c := newCLI(tcpAddr, httpAddr, testModeTCP)
+	t.Cleanup(c.close)
+	return c
+}
+
+// TestCLIHandleCommandTTYQuitVariants 验证 \q / \quit 在 TTY 模式下返回 (true, true)。
+func TestCLIHandleCommandTTYQuitVariants(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	for _, cmd := range []string{"\\q", "\\quit"} {
+		handled, shouldExit := c.handleCommandTTY(&out, cmd, formatState)
+		if !handled || !shouldExit {
+			t.Errorf("handleCommandTTY(%q) = (%v, %v), want (true, true)", cmd, handled, shouldExit)
+		}
+	}
+}
+
+// TestCLIHandleCommandTTYHelp 验证 \h / \help 输出帮助文本并返回 (true, false)。
+func TestCLIHandleCommandTTYHelp(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	for _, cmd := range []string{"\\h", "\\help"} {
+		out.Reset()
+		handled, shouldExit := c.handleCommandTTY(&out, cmd, formatState)
+		if !handled || shouldExit {
+			t.Errorf("handleCommandTTY(%q) = (%v, %v), want (true, false)", cmd, handled, shouldExit)
+		}
+		if !strings.Contains(out.String(), "可用命令") {
+			t.Errorf("handleCommandTTY(%q) 输出应包含帮助文本，实际: %q", cmd, out.String())
+		}
+	}
+}
+
+// TestCLIHandleCommandTTYStatus 验证 \status 成功时输出服务器状态。
+func TestCLIHandleCommandTTYStatus(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	handled, shouldExit := c.handleCommandTTY(&out, "\\status", formatState)
+	if !handled || shouldExit {
+		t.Errorf("\\status 应返回 (true, false)，实际 (%v, %v)", handled, shouldExit)
+	}
+	if !strings.Contains(out.String(), "服务器状态") {
+		t.Errorf("\\status 输出应包含服务器状态，实际: %q", out.String())
+	}
+}
+
+// TestCLIHandleCommandTTYStatusUnreachable 验证 \status 服务器不可达时给出友好提示。
+func TestCLIHandleCommandTTYStatusUnreachable(t *testing.T) {
+	c := newCLI("127.0.0.1:1", "127.0.0.1:1", testModeTCP)
+	defer c.close()
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	handled, shouldExit := c.handleCommandTTY(&out, "\\status", formatState)
+	if !handled || shouldExit {
+		t.Errorf("\\status 不可达应返回 (true, false)，实际 (%v, %v)", handled, shouldExit)
+	}
+	if !strings.Contains(out.String(), "不可达") {
+		t.Errorf("\\status 不可达应输出提示，实际: %q", out.String())
+	}
+}
+
+// TestCLIHandleCommandTTYUseMode 验证 \use TCP / \use HTTP 切换模式。
+func TestCLIHandleCommandTTYUseMode(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	for _, want := range []struct {
+		cmd  string
+		mode string
+	}{
+		{"\\use HTTP", testModeHTTP},
+		{"\\use TCP", testModeTCP},
+	} {
+		out.Reset()
+		handled, shouldExit := c.handleCommandTTY(&out, want.cmd, formatState)
+		if !handled || shouldExit {
+			t.Errorf("handleCommandTTY(%q) = (%v, %v), want (true, false)", want.cmd, handled, shouldExit)
+		}
+		if c.mode != want.mode {
+			t.Errorf("handleCommandTTY(%q) 后 c.mode = %q, want %q", want.cmd, c.mode, want.mode)
+		}
+		if !strings.Contains(out.String(), "已切换到") {
+			t.Errorf("handleCommandTTY(%q) 应输出切换提示，实际: %q", want.cmd, out.String())
+		}
+	}
+}
+
+// TestCLIHandleCommandTTYUnknown 验证未知命令在 TTY 模式下输出错误提示。
+func TestCLIHandleCommandTTYUnknown(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	handled, shouldExit := c.handleCommandTTY(&out, "\\foo", formatState)
+	if !handled || shouldExit {
+		t.Errorf("未知命令应返回 (true, false)，实际 (%v, %v)", handled, shouldExit)
+	}
+	if !strings.Contains(out.String(), "未知命令") {
+		t.Errorf("输出应包含未知命令提示，实际: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "\\foo") {
+		t.Errorf("输出应回显未知命令 \\foo，实际: %q", out.String())
+	}
+}
+
+// TestCLIHandleCommandTTYAddrsUnsupported 验证独立 CLI 不支持 \addrs。
+func TestCLIHandleCommandTTYAddrsUnsupported(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	var out bytes.Buffer
+	handled, shouldExit := c.handleCommandTTY(&out, "\\addrs", formatState)
+	if !handled || shouldExit {
+		t.Errorf("\\addrs 应返回 (true, false)，实际 (%v, %v)", handled, shouldExit)
+	}
+	if !strings.Contains(out.String(), "未知命令") {
+		t.Errorf("\\addrs 应提示未知命令，实际: %q", out.String())
+	}
+}
+
+// TestCLIHandleCommandTTYFormat 验证 \format 子命令通过 FormatState 切换格式。
+func TestCLIHandleCommandTTYFormat(t *testing.T) {
+	c := newTestCLI(t)
+	withColorDisabled(t)
+	formatState := clishared.NewFormatState()
+	formatState.Set(render.FormatPretty)
+	var out bytes.Buffer
+	handled, shouldExit := c.handleCommandTTY(&out, "\\format json", formatState)
+	if !handled || shouldExit {
+		t.Errorf("\\format 应返回 (true, false)，实际 (%v, %v)", handled, shouldExit)
+	}
+	if c.format != "json" {
+		t.Errorf("\\format json 后 c.format = %q, want json", c.format)
+	}
+	if !strings.Contains(out.String(), "已切换到 json") {
+		t.Errorf("\\format json 应输出切换提示，实际: %q", out.String())
 	}
 }
