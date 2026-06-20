@@ -240,28 +240,40 @@ func appendProjectValue(col *storage.ColumnVector, val common.Value, colDef Colu
 }
 
 // projectChunk 对单个 Chunk 执行投影。
+//
+// 优化：行优先迭代。原实现对每个 (表达式, 行) 组合都调用 fillRowVals
+// 重建整张 rowVals map，对于 N 个投影表达式 × M 行的 chunk 共有 N×M 次
+// map 重建。优化后每行仅重建 1 次 rowVals，对 N 个表达式复用，map 重建
+// 从 N×M 次降为 M 次；表达式求值次数不变 (N×M)。在宽表 + 多列投影场景
+// 下收益线性放大（参见 BenchmarkProjectWide）。
+//
+// 此外，预先分配所有输出列向量并按行调用 Append，避免每列末尾的扩容与
+// 多次 ensureCapacity 开销。
 func projectChunk(input *storage.Chunk, exprs []Expression, inputSchema, outputSchema []ColumnDef, colIdxMap map[string]int) (*storage.Chunk, error) {
 	rowCount := input.RowCount()
 	output := storage.NewChunk(defaultChunkSize)
 
+	cols := make([]*storage.ColumnVector, len(exprs))
+	for exprIdx, colDef := range outputSchema {
+		cols[exprIdx] = storage.NewColumnVector(uint32(exprIdx), colDef.Type, rowCount)
+	}
+
 	rowVals := make(map[string]common.Value, len(inputSchema))
-
-	for exprIdx, expr := range exprs {
-		colDef := outputSchema[exprIdx]
-		newCol := storage.NewColumnVector(uint32(exprIdx), colDef.Type, rowCount)
-
-		for row := uint32(0); row < rowCount; row++ {
-			fillRowVals(rowVals, input, inputSchema, row)
+	for row := uint32(0); row < rowCount; row++ {
+		fillRowVals(rowVals, input, inputSchema, row)
+		for exprIdx, expr := range exprs {
 			val, err := evalExpr(expr, rowVals, colIdxMap)
 			if err != nil {
 				return nil, fmt.Errorf("executor project: row %d: %w", row, err)
 			}
-			if err := appendProjectValue(newCol, val, colDef, row); err != nil {
+			if err := appendProjectValue(cols[exprIdx], val, outputSchema[exprIdx], row); err != nil {
 				return nil, err
 			}
 		}
+	}
 
-		if err := output.AddColumn(newCol); err != nil {
+	for _, col := range cols {
+		if err := output.AddColumn(col); err != nil {
 			return nil, fmt.Errorf("executor project: %w", err)
 		}
 	}
