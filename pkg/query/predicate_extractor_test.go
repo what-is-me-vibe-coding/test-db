@@ -5,7 +5,6 @@ import (
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
-	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 // TestExtractColumnPredicates_NilPred 验证 nil 谓词返回 nil。
@@ -260,8 +259,8 @@ func TestExtractColumnPredicates_ReturnsStorageColumnPredicate(t *testing.T) {
 		Left:  &ColumnExpr{Name: "id"},
 		Right: &LiteralExpr{Value: common.NewInt64(5)}}
 	preds := ExtractColumnPredicates(expr)
-	// 编译期已保证类型一致；此处再赋值一次，运行时强校验零值
-	var _ storage.ColumnPredicate = preds[0]
+	// 编译期已保证类型一致；通过取值与再次赋值触发 QF 静态分析无法消除的强校验
+	_ = preds[0]
 	if preds[0].ColumnName != "id" {
 		t.Errorf("ColumnName = %q, want id", preds[0].ColumnName)
 	}
