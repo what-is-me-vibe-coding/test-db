@@ -709,9 +709,9 @@ systemctl start widb
 
 | 任务 | 命令 | 注意事项 |
 |------|------|---------|
-| 查看监听地址 | `curl http://127.0.0.1:8080/status` | 或 `ss -tlnp` |
-| 强制 flush（刷盘） | `curl -X POST http://127.0.0.1:8080/admin/flush` | 当前可能未实现，需重启 |
-| 强制 compaction | 同上 | 同上 |
+| 查看监听地址 | `ss -tlnp \| grep widb` | — |
+| 强制 flush（刷盘） | `curl -X POST http://127.0.0.1:8080/admin/flush` | 把每张 LSM 表的活跃/不可变 MemTable 立即刷为 Segment；无 LSM 表时 `affected=0` |
+| 强制 compaction | `curl -X POST http://127.0.0.1:8080/admin/compact` | 立即尝试把每张 LSM 表的多层 Segment 合并到下一层；`ShouldCompact=false` 的表仍计入 `affected` |
 | 查看 Segment 数量 | `curl http://127.0.0.1:8080/metrics \| grep widb_segment_count` | — |
 | 查看 WAL 大小 | `curl http://127.0.0.1:8080/metrics \| grep widb_wal_size_bytes` | — |
 | 查表 | `SELECT * FROM t LIMIT 10`（widb-cli） | — |
@@ -721,6 +721,23 @@ systemctl start widb
 | 回滚 | 见 [8.3](#83-回滚) | — |
 | 主动清空内存表 | 重启 widb | 内存表数据会丢 |
 | 重置整库 | `rm -rf /var/lib/widb && systemctl start widb` | **不可逆**，先备份 |
+
+### 10.1 强制运维端点
+
+`/admin/flush` 与 `/admin/compact` 用于在后台调度器未及时触发时，由运维人员手动把数据刷盘或合并 LSM 段，避免恢复时间窗口超出 RPO。
+
+| 端点 | 方法 | 行为 | 失败语义 |
+|------|------|------|----------|
+| `/admin/flush` | POST | 遍历全部 LSM 表，调用 `engine.Flush(ColumnMeta)` | 任一表失败返回 500 + 错误信息，其余表不再处理 |
+| `/admin/compact` | POST | 遍历全部 LSM 表，先 `ShouldCompact` 后 `engine.Compact(ColumnMeta)` | 同上；无需压缩的表记入 `affected` 但不视为错误 |
+
+响应 JSON 格式：
+
+```json
+{ "code": 0, "message": "强制 flush 成功", "affected": 3 }
+```
+
+`affected` 表示被检查/处理过的 LSM 引擎数；`affected=0` 意味着库里没有 LSM 表（只有内存表或空库）。该端点仅影响 LSM 表，内存表（`ENGINE=memory`）不参与，因其数据驻内存、关闭即丢。
 
 ## 11. 安全建议
 
