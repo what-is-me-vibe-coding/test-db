@@ -603,3 +603,7 @@ A: LSM 引擎表不会丢失。WAL 保证已确认写入的数据零丢失，服
 | [dml.md](dml.md) | DML（INSERT/UPDATE/DELETE）详解 |
 | [api.md](api.md) | API 参考 |
 | [performance.md](performance.md) | 性能调优指南 |
+| [tutorial.md](tutorial.md) | 端到端上手教程（场景化示例） |
+| [sql-reference.md](sql-reference.md) | SQL 语法权威参考 |
+| [cookbook.md](cookbook.md) | 常见 SQL 套路与最佳实践 |
+| [troubleshooting.md](troubleshooting.md) | 故障排查指南 |

@@ -329,7 +329,9 @@ git checkout -b docs/简述
 - 代码变更导致接口变动时，同步更新对应 `.agent_plan/*.md` 中的接口定义与 `doc/` 下的模块文档。
 - 新增模块需新建 `.agent_plan/模块名.md`，并在 `plan.md` 中追加索引。
 - 设计文档使用中文，与代码注释语言保持一致。
-- 文档索引统一维护在 [index.md](index.md)。
+- 文档目录与索引见 [doc/getting-started.md §15](getting-started.md) 与 [README.md](../README.md)；其中：
+  - 模块详解以「模块名.md」命名（如 `index.md` 为索引模块文档，**不是文档索引**）；
+  - 用户/教程类文档以用途命名（`tutorial.md` / `sql-reference.md` / `cookbook.md` / `troubleshooting.md`）。
 
 ## 10. 常见开发问题
 

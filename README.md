@@ -281,7 +281,11 @@ test-db/
 │   ├── types.md        # 数据类型参考
 │   ├── dml.md          # DML（INSERT/UPDATE/DELETE）详解
 │   ├── api.md          # API 参考
-│   └── performance.md  # 性能调优指南
+│   ├── performance.md  # 性能调优指南
+│   ├── tutorial.md     # 端到端上手教程（场景化示例）
+│   ├── sql-reference.md  # SQL 语法权威参考
+│   ├── cookbook.md     # 常见 SQL 套路与最佳实践
+│   └── troubleshooting.md # 故障排查指南
 └── .agent_plan/        # 开发设计文档
 ```
 
