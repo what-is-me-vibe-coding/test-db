@@ -224,10 +224,12 @@ func TestEngineAdapterPrimaryAndSparseIndex(t *testing.T) {
 // query.StorageProvider 接口（编译期断言 + 运行期调用全部方法）。
 // 若接口签名变更或 engineAdapter 缺失某方法，本测试在编译期即可发现。
 func TestEngineAdapterStorageProviderInterface(t *testing.T) {
-	srv := newTestServer(t)
 	// 编译期断言：若 engineAdapter 不实现 query.StorageProvider 接口，本行
-	// 编译失败。运行期触发所有方法以提升覆盖率，任一 panic 即说明实现缺失。
-	sp := query.StorageProvider(srv.adapter.ForTable("compile_check"))
+	// 编译失败（_ blank identifier 不影响运行期）。运行期触发所有方法以提升
+	// 覆盖率，任一 panic 即说明实现缺失。
+	var _ query.StorageProvider = (*engineAdapter)(nil)
+	srv := newTestServer(t)
+	sp := srv.adapter.ForTable("compile_check")
 	_ = sp.ScanRange("", "\xff")
 	_ = sp.ScanRangeWithPruning("", "\xff", nil)
 	_ = sp.ColumnMeta()
