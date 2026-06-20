@@ -1,9 +1,12 @@
 package query
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 func TestExecutorProjectBasic(t *testing.T) {
@@ -193,6 +196,139 @@ func TestExecutorProjectTypeCoercion(t *testing.T) {
 		if val.Float64 != 30.0 {
 			t.Errorf("expected 30.0 (coerced to float), got %g", val.Float64)
 		}
+	}
+}
+
+// TestProjectChunkRowMajor 验证 projectChunk 行优先迭代在「多表达式 + 多列」
+// 场景下产出与列优先实现完全一致的结果，回归保护：投影值与列序均不应变化。
+//
+// 该测试直接调用 projectChunk 构造 6 列输入、6 个表达式（其中含算术与
+// 类型 coercion），并按行核对所有列值，验证行优先迭代未导致跨列错位。
+func TestProjectChunkRowMajor(t *testing.T) {
+	inputSchema, chunk, exprs, outputSchema := buildRowMajorTestFixture()
+	colIdxMap := buildColIdxMapFromSchema(inputSchema)
+
+	out, err := projectChunk(chunk, exprs, inputSchema, outputSchema, colIdxMap)
+	if err != nil {
+		t.Fatalf("projectChunk: %v", err)
+	}
+	if out.RowCount() != chunk.RowCount() {
+		t.Fatalf("rowCount: got %d, want %d", out.RowCount(), chunk.RowCount())
+	}
+	if out.ColumnCount() != len(outputSchema) {
+		t.Fatalf("columnCount: got %d, want %d", out.ColumnCount(), len(outputSchema))
+	}
+	assertRowMajorProjectValues(t, out.Columns(), chunk.RowCount())
+}
+
+// buildRowMajorTestFixture 构造 TestProjectChunkRowMajor 所需的 6 列、64 行
+// 测试数据：id/name/age/score/active/ts，投影包含 ResolvedColumnExpr 引用、
+// 算术表达式 age*2 与 score+1.0 浮点 coercion，类型覆盖 INT64/STRING/
+// FLOAT64/BOOL/TIMESTAMP。
+func buildRowMajorTestFixture() ([]ColumnDef, *storage.Chunk, []Expression, []ColumnDef) {
+	inputSchema := []ColumnDef{
+		{Name: "id", Type: common.TypeInt64, Nullable: false},
+		{Name: "name", Type: common.TypeString, Nullable: true},
+		{Name: "age", Type: common.TypeInt64, Nullable: true},
+		{Name: "score", Type: common.TypeFloat64, Nullable: true},
+		{Name: "active", Type: common.TypeBool, Nullable: true},
+		{Name: "ts", Type: common.TypeTimestamp, Nullable: true},
+	}
+	rowCount := uint32(64)
+	chunk := storage.NewChunk(rowCount)
+	cols := []*storage.ColumnVector{
+		storage.NewColumnVector(0, common.TypeInt64, rowCount),
+		storage.NewColumnVector(1, common.TypeString, rowCount),
+		storage.NewColumnVector(2, common.TypeInt64, rowCount),
+		storage.NewColumnVector(3, common.TypeFloat64, rowCount),
+		storage.NewColumnVector(4, common.TypeBool, rowCount),
+		storage.NewColumnVector(5, common.TypeTimestamp, rowCount),
+	}
+	for r := uint32(0); r < rowCount; r++ {
+		cols[0].SetInt64(r, int64(r))
+		cols[1].SetString(r, fmt.Sprintf("name-%d", r))
+		cols[2].SetInt64(r, int64(20+r%40))
+		cols[3].SetFloat64(r, float64(r)*0.5)
+		cols[4].SetBool(r, r%2 == 0)
+		cols[5].SetTimestamp(r, time.Unix(int64(r)*60, 0))
+	}
+	for _, c := range cols {
+		c.SetLen(rowCount)
+		_ = chunk.AddColumn(c)
+	}
+	exprs := []Expression{
+		&ResolvedColumnExpr{Name: "id", Idx: 0, typ: common.TypeInt64},
+		&ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString},
+		&BinaryExpr{Op: OpMul, Left: &ResolvedColumnExpr{Name: "age", Idx: 2, typ: common.TypeInt64}, Right: &LiteralExpr{Value: common.NewInt64(2)}},
+		&BinaryExpr{Op: OpAdd, Left: &ResolvedColumnExpr{Name: "score", Idx: 3, typ: common.TypeFloat64}, Right: &LiteralExpr{Value: common.NewFloat64(1.0)}},
+		&ResolvedColumnExpr{Name: "active", Idx: 4, typ: common.TypeBool},
+		&ResolvedColumnExpr{Name: "ts", Idx: 5, typ: common.TypeTimestamp},
+	}
+	outputSchema := []ColumnDef{
+		{Name: "id", Type: common.TypeInt64, Nullable: false},
+		{Name: "name", Type: common.TypeString, Nullable: true},
+		{Name: "double_age", Type: common.TypeInt64, Nullable: true},
+		{Name: "score_plus_one", Type: common.TypeFloat64, Nullable: true},
+		{Name: "active", Type: common.TypeBool, Nullable: true},
+		{Name: "ts", Type: common.TypeTimestamp, Nullable: true},
+	}
+	return inputSchema, chunk, exprs, outputSchema
+}
+
+// assertRowMajorProjectValues 验证 6 列输出列向量逐行值与 buildRowMajorTestFixture
+// 的构造规则完全一致：id=r、name="name-r"、age*2、score+1.0、active=(r%2==0)、ts=r*60s。
+func assertRowMajorProjectValues(t *testing.T, outCols []*storage.ColumnVector, rowCount uint32) {
+	t.Helper()
+	for r := uint32(0); r < rowCount; r++ {
+		if got := outCols[0].GetValue(r).Int64; got != int64(r) {
+			t.Fatalf("row %d: id got %d, want %d", r, got, r)
+		}
+		if got := outCols[1].GetValue(r).Str; got != fmt.Sprintf("name-%d", r) {
+			t.Fatalf("row %d: name got %q", r, got)
+		}
+		if got := outCols[2].GetValue(r).Int64; got != int64(20+r%40)*2 {
+			t.Fatalf("row %d: double_age got %d, want %d", r, got, int64(20+r%40)*2)
+		}
+		wantScore := float64(r)*0.5 + 1.0
+		if got := outCols[3].GetValue(r).Float64; got != wantScore {
+			t.Fatalf("row %d: score_plus_one got %g, want %g", r, got, wantScore)
+		}
+		if got := outCols[4].GetValue(r).Int64; got != int64(1-(r%2)) {
+			t.Fatalf("row %d: active got %d, want %d", r, got, 1-(r%2))
+		}
+		wantTs := time.Unix(int64(r)*60, 0)
+		if got := outCols[5].GetValue(r).Time; !got.Equal(wantTs) {
+			t.Fatalf("row %d: ts got %v, want %v", r, got, wantTs)
+		}
+	}
+}
+
+// TestProjectChunkRowMajorEmpty 验证空输入 chunk 下不会执行 rowVals
+// 填充与表达式求值，但仍按表达式数量预留空列结构（与旧实现语义一致）。
+func TestProjectChunkRowMajorEmpty(t *testing.T) {
+	inputSchema := []ColumnDef{
+		{Name: "id", Type: common.TypeInt64, Nullable: false},
+		{Name: "name", Type: common.TypeString, Nullable: true},
+	}
+	outputSchema := []ColumnDef{
+		{Name: "id", Type: common.TypeInt64, Nullable: false},
+		{Name: "name", Type: common.TypeString, Nullable: true},
+	}
+	chunk := storage.NewChunk(0)
+	colIdxMap := buildColIdxMapFromSchema(inputSchema)
+	exprs := []Expression{
+		&ResolvedColumnExpr{Name: "id", Idx: 0, typ: common.TypeInt64},
+		&ResolvedColumnExpr{Name: "name", Idx: 1, typ: common.TypeString},
+	}
+	out, err := projectChunk(chunk, exprs, inputSchema, outputSchema, colIdxMap)
+	if err != nil {
+		t.Fatalf("projectChunk empty: %v", err)
+	}
+	if out.RowCount() != 0 {
+		t.Fatalf("expected 0 rows, got %d", out.RowCount())
+	}
+	if out.ColumnCount() != len(outputSchema) {
+		t.Fatalf("expected %d columns, got %d", len(outputSchema), out.ColumnCount())
 	}
 }
 

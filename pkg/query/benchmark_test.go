@@ -448,3 +448,115 @@ func BenchmarkAggregateWideGroupBySum(b *testing.B) {
 	}
 	b.ReportAllocs()
 }
+
+// --- 投影算子基准测试 ---
+//
+// 以下基准直接对预构建的 Chunk 调用 projectChunk，隔离投影算子开销，
+// 用于度量行优先迭代（每行构建一次 rowVals，按列求值所有表达式）
+// 相对列优先迭代（每个表达式 + 每行都重新构建 rowVals）的吞吐收益。
+// 数据规模 8192 行，覆盖典型 OLAP 投影场景。
+
+// buildBenchProjectChunk 构建一个 numCols 列混合类型、benchFilterRows 行的 Chunk。
+// 第 0 列 INT64 主键，其余列 INT64/FLOAT64/STRING 循环。
+func buildBenchProjectChunk(numCols uint32) *storage.Chunk {
+	rowCount := uint32(benchFilterRows)
+	chunk := storage.NewChunk(rowCount)
+	for c := uint32(0); c < numCols; c++ {
+		var typ common.DataType
+		switch c % 3 {
+		case 0:
+			typ = common.TypeInt64
+		case 1:
+			typ = common.TypeFloat64
+		case 2:
+			typ = common.TypeString
+		}
+		col := storage.NewColumnVector(c, typ, rowCount)
+		for r := uint32(0); r < rowCount; r++ {
+			switch typ {
+			case common.TypeInt64:
+				col.SetInt64(r, int64(r))
+			case common.TypeFloat64:
+				col.SetFloat64(r, float64(r))
+			case common.TypeString:
+				col.SetString(r, fmtBenchName(r))
+			}
+		}
+		col.SetLen(rowCount)
+		_ = chunk.AddColumn(col)
+	}
+	return chunk
+}
+
+// benchProjectSchema 构建与 buildBenchProjectChunk 同结构的 schema。
+func benchProjectSchema(numCols uint32) []ColumnDef {
+	schema := make([]ColumnDef, numCols)
+	for i := uint32(0); i < numCols; i++ {
+		var typ common.DataType
+		switch i % 3 {
+		case 0:
+			typ = common.TypeInt64
+		case 1:
+			typ = common.TypeFloat64
+		case 2:
+			typ = common.TypeString
+		}
+		schema[i] = ColumnDef{Name: "c" + fmtIntKey(int(i)), Type: typ, Nullable: true}
+	}
+	return schema
+}
+
+// benchProjectNode 构建一个选取 c0..cN-1 的 ProjectNode。
+// 使用 ResolvedColumnExpr 引用 chunk 中的列，模拟典型 OLAP「SELECT c0, c1, ...」场景。
+func benchProjectNode(schema []ColumnDef) *ProjectNode {
+	exprs := make([]Expression, len(schema))
+	for i := range schema {
+		exprs[i] = &ResolvedColumnExpr{Name: schema[i].Name, Idx: i, typ: schema[i].Type}
+	}
+	return &ProjectNode{
+		Expressions: exprs,
+		schema:      schema,
+	}
+}
+
+// BenchmarkProjectNarrow 度量窄表（3 列）3 个投影表达式的吞吐。
+func BenchmarkProjectNarrow(b *testing.B) {
+	schema := benchProjectSchema(3)
+	chunk := buildBenchProjectChunk(3)
+	colIdxMap := buildColIdxMapFromSchema(schema)
+	proj := benchProjectNode(schema)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out, err := projectChunk(chunk, proj.Expressions, schema, schema, colIdxMap)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if out.RowCount() != benchFilterRows {
+			b.Fatalf("expected %d rows, got %d", benchFilterRows, out.RowCount())
+		}
+	}
+	b.ReportAllocs()
+}
+
+// BenchmarkProjectWide 度量宽表（32 列）32 个投影表达式的吞吐。
+// 宽表场景下旧实现对每个 (expr, row) 都会重建 32 项 map，
+// 行优先迭代仅每行构建 1 次 map，差距与列数线性放大。
+func BenchmarkProjectWide(b *testing.B) {
+	schema := benchProjectSchema(32)
+	chunk := buildBenchProjectChunk(32)
+	colIdxMap := buildColIdxMapFromSchema(schema)
+	proj := benchProjectNode(schema)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out, err := projectChunk(chunk, proj.Expressions, schema, schema, colIdxMap)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if out.RowCount() != benchFilterRows {
+			b.Fatalf("expected %d rows, got %d", benchFilterRows, out.RowCount())
+		}
+	}
+	b.ReportAllocs()
+}
