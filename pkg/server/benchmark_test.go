@@ -315,3 +315,61 @@ func newBenchServerWithTable(b *testing.B) *Server {
 
 	return srv
 }
+
+// --- DELETE/UPDATE 主键等值快路径基准测试 ---
+
+// benchPKRowCount 控制基准测试中预置数据行数，使 DELETE/UPDATE 全表扫描
+// 路径与 PK 等值快路径的耗时差距在不同规模下都可观察。
+const benchPKRowCount = 1000
+
+// seedBenchPKTable 预置 N 行 id=i 的数据用于基准测试。
+func seedBenchPKTable(b *testing.B, srv *Server) {
+	b.Helper()
+	rows := make([]map[string]any, benchPKRowCount)
+	for i := 0; i < benchPKRowCount; i++ {
+		rows[i] = map[string]any{"id": int64(i + 1), "v": "x"}
+	}
+	body, _ := json.Marshal(map[string]any{"table": benchTableName, "rows": rows})
+	req := httptest.NewRequest(http.MethodPost, "/write", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.httpWrite(w, req)
+	if w.Code != http.StatusOK {
+		b.Fatalf("seed data failed: code=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// BenchmarkDeleteByPK 衡量「DELETE FROM t WHERE id = lit」在不同数据规模下
+// 的耗时。主键等值快路径使耗时与行数 N 解耦（O(log n)），全表扫描路径则线性增长。
+func BenchmarkDeleteByPK(b *testing.B) {
+	srv := newBenchServerWithTable(b)
+	defer func() { _ = srv.Stop() }()
+	seedBenchPKTable(b, srv)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		id := int64((i % benchPKRowCount) + 1)
+		sql := fmt.Sprintf(`{"sql":"DELETE FROM %s WHERE id = %d"}`, benchTableName, id)
+		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(sql))
+		w := httptest.NewRecorder()
+		srv.httpQuery(w, req)
+	}
+	b.ReportAllocs()
+}
+
+// BenchmarkUpdateByPK 衡量「UPDATE t SET v = lit WHERE id = pk」耗时，
+// 与 BenchmarkDeleteByPK 同样验证点查快路径的开销稳定性。
+func BenchmarkUpdateByPK(b *testing.B) {
+	srv := newBenchServerWithTable(b)
+	defer func() { _ = srv.Stop() }()
+	seedBenchPKTable(b, srv)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		id := int64((i % benchPKRowCount) + 1)
+		sql := fmt.Sprintf(`{"sql":"UPDATE %s SET v = 'y' WHERE id = %d"}`, benchTableName, id)
+		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(sql))
+		w := httptest.NewRecorder()
+		srv.httpQuery(w, req)
+	}
+	b.ReportAllocs()
+}
