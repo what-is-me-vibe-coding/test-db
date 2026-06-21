@@ -64,6 +64,7 @@ func TestParseSilentlyDroppedClauses(t *testing.T) {
 				t.Fatalf("Parse(%q) 失败: %v（这些子句当前被静默丢弃，parse 不应失败）", c.sql, err)
 			}
 			sel, ok := stmt.(*SelectStatement)
+			_ = sel // 保留变量名以表达意图：当前 AST 不暴露 OrderBy/Distinct/Having
 			if !ok {
 				t.Fatalf("Parse(%q): 期望 *SelectStatement，得到 %T", c.sql, stmt)
 			}
@@ -72,17 +73,12 @@ func TestParseSilentlyDroppedClauses(t *testing.T) {
 			//   1. 为 SelectStatement 添加 OrderBy / Distinct / Having 字段
 			//   2. 在 convertSelect 中提取 sel.OrderBy/sel.Distinct/sel.Having
 			//   3. 更新本测试：拆分为「已被支持」与「仍被静默丢弃」两组用例
-			if sel.Where == nil && !hasAggregateOrGroupBy(sel) {
-				// 保留 noop，仅触发编译期检查
-			}
+			//
+			// 显式断言保留子句的「无」元信息：当前 SelectStatement 仅有 Where / GroupBy /
+			// Columns 等字段，OrderBy/Distinct/Having 字段在 AST 上不存在（编译期可见），
+			// 因此运行期无需再追加断言。
 		})
 	}
-}
-
-// hasAggregateOrGroupBy 返回 SELECT 是否包含 GROUP BY 子句；用于在测试中
-// 区分「基础 SELECT」与「聚合 SELECT」两类样本，避免误判。
-func hasAggregateOrGroupBy(sel *SelectStatement) bool {
-	return len(sel.GroupBy) > 0
 }
 
 // TestParseOrderByNotExposedToString 文档化 SelectStatement.String() 不输出
