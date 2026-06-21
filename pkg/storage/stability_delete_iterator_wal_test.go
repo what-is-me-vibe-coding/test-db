@@ -139,18 +139,32 @@ func TestEngineDelete_ConcurrentWithWrite(t *testing.T) {
 	const deleters = 2
 	const iterations = 200
 
-	var wg sync.WaitGroup
 	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	startDeleteWorkers(&wg, eng, key, writers, deleters, iterations, stop)
 
+	// 周期性检查：Get 不 panic、返回合法结果
+	runConcurrentChecker(eng, key, stop, t)
+
+	wg.Wait()
+	close(stop)
+
+	// 最终一致性：要么命中（非空列），要么 miss
+	row, ok := eng.Get(key)
+	if ok && row.Columns == nil {
+		t.Error("final state: Get hit but Columns is nil (race?)")
+	}
+}
+
+// startDeleteWorkers 启动 writers + deleters 协程，stop 关闭时各协程退出。
+func startDeleteWorkers(wg *sync.WaitGroup, eng *Engine, key string, writers, deleters, iterations int, stop <-chan struct{}) {
 	for w := 0; w < writers; w++ {
 		wg.Add(1)
 		go func(_ int) {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				select {
-				case <-stop:
+				if !continueOrStop(stop) {
 					return
-				default:
 				}
 				_ = eng.Write(key, map[string]common.Value{colVal: common.NewInt64(int64(i))})
 			}
@@ -161,17 +175,27 @@ func TestEngineDelete_ConcurrentWithWrite(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				select {
-				case <-stop:
+				if !continueOrStop(stop) {
 					return
-				default:
 				}
 				_ = eng.Delete(key)
 			}
 		}()
 	}
+}
 
-	// 周期性检查：Get 不 panic、返回合法结果
+// continueOrStop 报告 stop 通道未关闭。true = 继续；false = 收到停止信号。
+func continueOrStop(stop <-chan struct{}) bool {
+	select {
+	case <-stop:
+		return false
+	default:
+		return true
+	}
+}
+
+// runConcurrentChecker 启动 50 次 Get 校验协程，捕获 panic 防止测试崩溃。
+func runConcurrentChecker(eng *Engine, key string, stop <-chan struct{}, t *testing.T) {
 	checker := func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -179,27 +203,18 @@ func TestEngineDelete_ConcurrentWithWrite(t *testing.T) {
 			}
 		}()
 		row, ok := eng.Get(key)
-		if ok {
-			// 命中时必须有 val 列存在
-			if row.Columns == nil {
-				t.Error("Get hit but Columns is nil")
-			}
+		if ok && row.Columns == nil {
+			t.Error("Get hit but Columns is nil")
 		}
 	}
 	go func() {
 		for i := 0; i < 50; i++ {
+			if !continueOrStop(stop) {
+				return
+			}
 			checker()
 		}
 	}()
-
-	wg.Wait()
-	close(stop)
-
-	// 最终一致性：要么命中（非空列），要么 miss
-	row, ok := eng.Get(key)
-	if ok && row.Columns == nil {
-		t.Error("final state: Get hit but Columns is nil (race?)")
-	}
 }
 
 // ---------------------------------------------------------------------------
