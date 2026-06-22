@@ -1,12 +1,13 @@
 package server
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/catalog"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/index"
 	"github.com/what-is-me-vibe-coding/test-db/pkg/query"
+	"github.com/what-is-me-vibe-coding/test-db/pkg/storage"
 )
 
 // --- 主键等值快路径的端到端测试 ---
@@ -427,6 +428,37 @@ func TestExtractEqColumnLiteral(t *testing.T) {
 	}
 }
 
+// fakeEngineNoGet 实现 TableEngine 但未实现 Get，验证 tryEngineGetter
+// 在引擎缺失 Get 能力时返回 nil，让调用方安全回退到扫描路径。
+type fakeEngineNoGet struct{}
+
+func (fakeEngineNoGet) Write(_ string, _ map[string]common.Value) error { return nil }
+func (fakeEngineNoGet) WriteBatch(_ []storage.WriteRow) error            { return nil }
+func (fakeEngineNoGet) Delete(_ string) error                            { return nil }
+func (fakeEngineNoGet) ScanRange(_, _ string) []storage.ScanEntry        { return nil }
+func (fakeEngineNoGet) ScanRangeWithPruning(_ string, _ string, _ []storage.ColumnPredicate) []storage.ScanEntry {
+	return nil
+}
+func (fakeEngineNoGet) ColumnMeta() []storage.ColumnMeta  { return nil }
+func (fakeEngineNoGet) PrimaryIndex() *index.PrimaryIndex { return nil }
+func (fakeEngineNoGet) SparseIndex() *index.SparseIndex   { return nil }
+func (fakeEngineNoGet) Close() error                      { return nil }
+
+// TestTryEngineGetterNotSupported 验证 tryEngineGetter 对不实现 Get 的
+// TableEngine 返回 nil，调用方应回退到 ScanRange 路径。
+func TestTryEngineGetterNotSupported(t *testing.T) {
+	if got := tryEngineGetter(fakeEngineNoGet{}); got != nil {
+		t.Errorf("tryEngineGetter(fakeEngineNoGet) = %v, want nil", got)
+	}
+}
+
+// TestCheckPKConflictNoGet 验证 checkPKConflict 在引擎无 Get 能力时直接返回 nil。
+func TestCheckPKConflictNoGet(t *testing.T) {
+	if err := checkPKConflict(fakeEngineNoGet{}, "any-key"); err != nil {
+		t.Errorf("checkPKConflict(fakeEngineNoGet) = %v, want nil", err)
+	}
+}
+
 // --- 测试辅助 ---
 
 // eqExpr 构造等值比较表达式。
@@ -464,6 +496,3 @@ func queryStringOrEmpty(t *testing.T, srv *Server, sql, col string) string {
 	}
 	return v
 }
-
-// 避免编译器告警：strconv 当前仅用于未来扩展，便于按需保留。
-var _ = strconv.Itoa

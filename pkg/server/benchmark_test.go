@@ -323,11 +323,12 @@ func newBenchServerWithTable(b *testing.B) *Server {
 const benchPKRowCount = 1000
 
 // seedBenchPKTable 预置 N 行 id=i 的数据用于基准测试。
+// 列名使用 benchColName（"name"）与 newBenchServerWithTable 创建的表结构一致。
 func seedBenchPKTable(b *testing.B, srv *Server) {
 	b.Helper()
 	rows := make([]map[string]any, benchPKRowCount)
 	for i := 0; i < benchPKRowCount; i++ {
-		rows[i] = map[string]any{"id": int64(i + 1), "v": "x"}
+		rows[i] = map[string]any{"id": int64(i + 1), benchColName: "x"}
 	}
 	body, _ := json.Marshal(map[string]any{"table": benchTableName, "rows": rows})
 	req := httptest.NewRequest(http.MethodPost, "/write", bytes.NewReader(body))
@@ -356,7 +357,7 @@ func BenchmarkDeleteByPK(b *testing.B) {
 	b.ReportAllocs()
 }
 
-// BenchmarkUpdateByPK 衡量「UPDATE t SET v = lit WHERE id = pk」耗时，
+// BenchmarkUpdateByPK 衡量「UPDATE t SET name = lit WHERE id = pk」耗时，
 // 与 BenchmarkDeleteByPK 同样验证点查快路径的开销稳定性。
 func BenchmarkUpdateByPK(b *testing.B) {
 	srv := newBenchServerWithTable(b)
@@ -366,7 +367,7 @@ func BenchmarkUpdateByPK(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		id := int64((i % benchPKRowCount) + 1)
-		sql := fmt.Sprintf(`{"sql":"UPDATE %s SET v = 'y' WHERE id = %d"}`, benchTableName, id)
+		sql := fmt.Sprintf(`{"sql":"UPDATE %s SET %s = 'y' WHERE id = %d"}`, benchTableName, benchColName, id)
 		req := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(sql))
 		w := httptest.NewRecorder()
 		srv.httpQuery(w, req)

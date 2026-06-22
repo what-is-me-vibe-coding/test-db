@@ -110,7 +110,10 @@ func (s *Server) handleUpdate(upd *query.UpdateStatement) (*Response, error) {
 			if conflictErr := checkPKConflict(eng, newKey); conflictErr != nil {
 				return s.queryErrResp(MetricQueryExecuteError, "%v", conflictErr), nil
 			}
-			_ = eng.Delete(entry.Key)
+			// 主键变更：先删旧行。失败时不再写入新行，避免旧行与新行并存。
+			if delErr := eng.Delete(entry.Key); delErr != nil {
+				return s.queryErrResp(MetricQueryExecuteError, "删除旧主键错误: %v", delErr), nil
+			}
 		}
 		if wErr := eng.Write(newKey, newValues); wErr != nil {
 			return s.queryErrResp(MetricQueryExecuteError, "写入错误: %v", wErr), nil
@@ -147,11 +150,9 @@ func (s *Server) applyUpdateAssignments(
 
 // checkPKConflict 检查主键是否已存在，存在则返回冲突错误。
 // 通过引擎的 Get 接口检查；不支持 Get 的引擎（无该接口）则跳过检查。
-// INSERT 与 UPDATE 主键变更路径共享此实现。
+// INSERT 与 UPDATE 主键变更路径共享此实现，复用 engineGetter 抽象。
 func checkPKConflict(eng TableEngine, key string) error {
-	if getter, ok := eng.(interface {
-		Get(string) (storage.Row, bool)
-	}); ok {
+	if getter := tryEngineGetter(eng); getter != nil {
 		if _, exists := getter.Get(key); exists {
 			return fmt.Errorf("PRIMARY KEY CONFLICT: key %q 已存在", key)
 		}
@@ -161,7 +162,8 @@ func checkPKConflict(eng TableEngine, key string) error {
 
 // engineGetter 抽象支持点查接口（Get(key) (Row, bool)）的 TableEngine。
 // LSM 引擎与内存引擎均实现此方法，路由适配器返回的 TableEngine 通过
-// 类型断言自动获得此能力。DELETE/UPDATE 主键等值快路径依赖此接口。
+// 类型断言自动获得此能力。DELETE/UPDATE 主键等值快路径与 INSERT 主键冲突
+// 检查共享此接口。
 type engineGetter interface {
 	Get(string) (storage.Row, bool)
 }
@@ -291,20 +293,20 @@ func (s *Server) deleteByPK(eng TableEngine, key string) (bool, *Response) {
 		return false, nil
 	}
 	if _, exists := getter.Get(key); !exists {
-		s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+		s.querySuccessInc()
 		return true, &Response{Code: 0, Rows: 0}
 	}
 	if err := eng.Delete(key); err != nil {
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return true, &Response{Code: -1, Message: fmt.Sprintf("删除错误: %v", err)}
+		return true, s.queryErrResp(MetricQueryExecuteError, "删除错误: %v", err)
 	}
-	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+	s.querySuccessInc()
 	return true, &Response{Code: 0, Rows: 1}
 }
 
 // updateByPK 通过点查接口按主键更新单行，返回 (true, resp) 表示快路径已生效。
 // 引擎不支持 Get 时返回 (false, nil) 让调用方回退到扫描路径。
-// 未命中：返回 Rows=0（与历史语义一致）。主键变更时检查目标 key 是否被占用。
+// 未命中：返回 Rows=0（与历史语义一致）。主键变更时检查目标 key 是否被占用；
+// 删除旧主键失败时直接返回错误，避免旧行与新行并存导致数据不一致。
 func (s *Server) updateByPK(eng TableEngine, tbl *catalog.Table, key string, upd *query.UpdateStatement) (bool, *Response) {
 	getter := tryEngineGetter(eng)
 	if getter == nil {
@@ -312,32 +314,31 @@ func (s *Server) updateByPK(eng TableEngine, tbl *catalog.Table, key string, upd
 	}
 	entry, exists := getter.Get(key)
 	if !exists {
-		s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+		s.querySuccessInc()
 		return true, &Response{Code: 0, Rows: 0}
 	}
 	scanEntry := storage.ScanEntry{Key: key, Value: entry}
 	newValues, uErr := s.applyUpdateAssignments(scanEntry, upd.Assignments, tbl.ColTypeMap())
 	if uErr != nil {
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return true, &Response{Code: -1, Message: uErr.Error()}
+		return true, s.queryErrResp(MetricQueryExecuteError, "%v", uErr)
 	}
 	newKey, keyErr := buildPrimaryKeyFromValues(tbl, newValues)
 	if keyErr != nil {
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return true, &Response{Code: -1, Message: keyErr.Error()}
+		return true, s.queryErrResp(MetricQueryExecuteError, "%v", keyErr)
 	}
 	if newKey != key {
 		if conflictErr := checkPKConflict(eng, newKey); conflictErr != nil {
-			s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-			return true, &Response{Code: -1, Message: conflictErr.Error()}
+			return true, s.queryErrResp(MetricQueryExecuteError, "%v", conflictErr)
 		}
-		_ = eng.Delete(key)
+		// 主键变更：先删旧行。失败时不再写入新行，避免旧行与新行并存。
+		if delErr := eng.Delete(key); delErr != nil {
+			return true, s.queryErrResp(MetricQueryExecuteError, "删除旧主键错误: %v", delErr)
+		}
 	}
 	if wErr := eng.Write(newKey, newValues); wErr != nil {
-		s.metrics.QueriesTotal.WithLabelValues("execute_error").Inc()
-		return true, &Response{Code: -1, Message: fmt.Sprintf("写入错误: %v", wErr)}
+		return true, s.queryErrResp(MetricQueryExecuteError, "写入错误: %v", wErr)
 	}
-	s.metrics.QueriesTotal.WithLabelValues("success").Inc()
+	s.querySuccessInc()
 	return true, &Response{Code: 0, Rows: 1}
 }
 
