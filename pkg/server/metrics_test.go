@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // TestNewMetrics 验证 NewMetrics 初始化后所有字段非 nil。
@@ -228,11 +229,26 @@ func TestMetricsHTTPDurationObserve(t *testing.T) {
 
 	m.HTTPDuration.WithLabelValues("/query", "POST").Observe(0.123)
 
-	mfs, err := registry.Gather()
+	h, ok := findHTTPHistogram(t, registry, "/query", "POST")
+	if !ok {
+		t.Fatal("应包含 widb_http_request_duration_seconds 指标 (endpoint=/query, method=POST)")
+	}
+	if h.GetSampleCount() < 1 {
+		t.Errorf("样本数 = %d, 期望 >= 1", h.GetSampleCount())
+	}
+	if h.GetSampleSum() < 0.123 {
+		t.Errorf("样本 sum = %v, 期望 >= 0.123", h.GetSampleSum())
+	}
+}
+
+// findHTTPHistogram 在 Gather 结果中查找指定 (endpoint, method) 的 HTTP 耗时直方图。
+// 为满足 gocognit -over 20 阈值，断言与查找逻辑分离。
+func findHTTPHistogram(t *testing.T, reg *prometheus.Registry, ep, method string) (*dto.Histogram, bool) {
+	t.Helper()
+	mfs, err := reg.Gather()
 	if err != nil {
 		t.Fatalf("Gather 失败: %v", err)
 	}
-	found := false
 	for _, mf := range mfs {
 		if mf.GetName() != "widb_http_request_duration_seconds" {
 			continue
@@ -242,23 +258,13 @@ func TestMetricsHTTPDurationObserve(t *testing.T) {
 			for _, lp := range metric.Label {
 				labels[lp.GetName()] = lp.GetValue()
 			}
-			if labels["endpoint"] != "/query" || labels["method"] != "POST" {
+			if labels["endpoint"] != ep || labels["method"] != method {
 				continue
 			}
-			h := metric.GetHistogram()
-			if h == nil {
-				continue
-			}
-			found = true
-			if h.GetSampleCount() < 1 {
-				t.Errorf("样本数 = %d, 期望 >= 1", h.GetSampleCount())
-			}
-			if h.GetSampleSum() < 0.123 {
-				t.Errorf("样本 sum = %v, 期望 >= 0.123", h.GetSampleSum())
+			if h := metric.GetHistogram(); h != nil {
+				return h, true
 			}
 		}
 	}
-	if !found {
-		t.Error("应包含 widb_http_request_duration_seconds 指标 (endpoint=/query, method=POST)")
-	}
+	return nil, false
 }
