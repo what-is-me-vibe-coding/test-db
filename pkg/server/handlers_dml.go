@@ -82,47 +82,79 @@ func (s *Server) handleUpdate(upd *query.UpdateStatement) (*Response, error) {
 		}
 	}
 
-	colTypes := tbl.ColTypeMap()
-	// 优化 2：谓词下推：让存储层利用稀疏索引跳过无关 Segment
-	columnPreds := query.ExtractColumnPredicates(upd.Where)
-	var entries []storage.ScanEntry
-	if len(columnPreds) > 0 {
-		entries = eng.ScanRangeWithPruning("", "\xff\xff\xff\xff", columnPreds)
-	} else {
-		entries = eng.ScanRange("", "\xff\xff\xff\xff")
+	// 优化 2/3：段裁剪或全表扫描路径
+	entries := scanEntriesForUpdate(eng, upd.Where)
+	updated, resp := s.applyUpdatesWithScan(eng, tbl, entries, upd)
+	if resp != nil {
+		return resp, nil
 	}
-
-	updated := 0
-	for _, entry := range entries {
-		// 仍需逐行求值完整 WHERE：下推仅过滤了 Segment，未覆盖复杂谓词（OR、LIKE 等）
-		if !query.EvalRowPredicate(upd.Where, entry.Value.Columns) {
-			continue
-		}
-		newValues, uErr := s.applyUpdateAssignments(entry, upd.Assignments, colTypes)
-		if uErr != nil {
-			return s.queryErrResp(MetricQueryExecuteError, "%v", uErr), nil
-		}
-		newKey, keyErr := buildPrimaryKeyFromValues(tbl, newValues)
-		if keyErr != nil {
-			return s.queryErrResp(MetricQueryExecuteError, "%v", keyErr), nil
-		}
-		if newKey != entry.Key {
-			if conflictErr := checkPKConflict(eng, newKey); conflictErr != nil {
-				return s.queryErrResp(MetricQueryExecuteError, "%v", conflictErr), nil
-			}
-			// 主键变更：先删旧行。失败时不再写入新行，避免旧行与新行并存。
-			if delErr := eng.Delete(entry.Key); delErr != nil {
-				return s.queryErrResp(MetricQueryExecuteError, "删除旧主键错误: %v", delErr), nil
-			}
-		}
-		if wErr := eng.Write(newKey, newValues); wErr != nil {
-			return s.queryErrResp(MetricQueryExecuteError, "写入错误: %v", wErr), nil
-		}
-		updated++
-	}
-
 	s.querySuccessInc()
 	return &Response{Code: 0, Rows: updated}, nil
+}
+
+// scanEntriesForUpdate 根据 WHERE 谓词返回候选 ScanEntry 列表。
+// 谓词可下推时走段裁剪路径；否则退化为全范围扫描。
+func scanEntriesForUpdate(eng TableEngine, where query.Expression) []storage.ScanEntry {
+	columnPreds := query.ExtractColumnPredicates(where)
+	if len(columnPreds) > 0 {
+		return eng.ScanRangeWithPruning("", "\xff\xff\xff\xff", columnPreds)
+	}
+	return eng.ScanRange("", "\xff\xff\xff\xff")
+}
+
+// applyUpdatesWithScan 对 ScanEntry 列表执行完整的 UPDATE 流程：
+// 谓词求值 → SET 赋值 → 主键冲突检查 → 主键变更处理 → 写入。
+// 返回 (updated, nil) 表示成功；返回 (0, resp) 表示中途发生错误。
+func (s *Server) applyUpdatesWithScan(
+	eng TableEngine, tbl *catalog.Table,
+	entries []storage.ScanEntry, upd *query.UpdateStatement,
+) (int, *Response) {
+	colTypes := tbl.ColTypeMap()
+	updated := 0
+	for _, entry := range entries {
+		ok, resp := s.applyOneUpdate(eng, tbl, entry, upd, colTypes)
+		if resp != nil {
+			return 0, resp
+		}
+		if ok {
+			updated++
+		}
+	}
+	return updated, nil
+}
+
+// applyOneUpdate 处理单行 UPDATE：先求值谓词再应用赋值并写入。
+// 返回 (true, nil) 表示成功更新；(false, nil) 表示谓词不命中；
+// 返回 (false, resp) 表示发生错误（含主键冲突、写入失败等）。
+func (s *Server) applyOneUpdate(
+	eng TableEngine, tbl *catalog.Table, entry storage.ScanEntry,
+	upd *query.UpdateStatement, colTypes map[string]common.DataType,
+) (bool, *Response) {
+	// 仍需逐行求值完整 WHERE：下推仅过滤了 Segment，未覆盖复杂谓词（OR、LIKE 等）
+	if !query.EvalRowPredicate(upd.Where, entry.Value.Columns) {
+		return false, nil
+	}
+	newValues, uErr := s.applyUpdateAssignments(entry, upd.Assignments, colTypes)
+	if uErr != nil {
+		return false, s.queryErrResp(MetricQueryExecuteError, "%v", uErr)
+	}
+	newKey, keyErr := buildPrimaryKeyFromValues(tbl, newValues)
+	if keyErr != nil {
+		return false, s.queryErrResp(MetricQueryExecuteError, "%v", keyErr)
+	}
+	if newKey != entry.Key {
+		if conflictErr := checkPKConflict(eng, newKey); conflictErr != nil {
+			return false, s.queryErrResp(MetricQueryExecuteError, "%v", conflictErr)
+		}
+		// 主键变更：先删旧行。失败时不再写入新行，避免旧行与新行并存。
+		if delErr := eng.Delete(entry.Key); delErr != nil {
+			return false, s.queryErrResp(MetricQueryExecuteError, "删除旧主键错误: %v", delErr)
+		}
+	}
+	if wErr := eng.Write(newKey, newValues); wErr != nil {
+		return false, s.queryErrResp(MetricQueryExecuteError, "写入错误: %v", wErr)
+	}
+	return true, nil
 }
 
 // applyUpdateAssignments 将 SET 赋值应用到行数据上，返回更新后的值 map。

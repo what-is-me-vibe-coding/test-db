@@ -433,9 +433,9 @@ func TestExtractEqColumnLiteral(t *testing.T) {
 type fakeEngineNoGet struct{}
 
 func (fakeEngineNoGet) Write(_ string, _ map[string]common.Value) error { return nil }
-func (fakeEngineNoGet) WriteBatch(_ []storage.WriteRow) error            { return nil }
-func (fakeEngineNoGet) Delete(_ string) error                            { return nil }
-func (fakeEngineNoGet) ScanRange(_, _ string) []storage.ScanEntry        { return nil }
+func (fakeEngineNoGet) WriteBatch(_ []storage.WriteRow) error           { return nil }
+func (fakeEngineNoGet) Delete(_ string) error                           { return nil }
+func (fakeEngineNoGet) ScanRange(_, _ string) []storage.ScanEntry       { return nil }
 func (fakeEngineNoGet) ScanRangeWithPruning(_ string, _ string, _ []storage.ColumnPredicate) []storage.ScanEntry {
 	return nil
 }
