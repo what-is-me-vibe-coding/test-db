@@ -272,10 +272,7 @@ func cpkRunOneIteration(c *cpkClient, iter, clientID int) error {
 	if err := cpkUpdateOneRow(c, startOID, cpkSKUs[0]); err != nil {
 		return err
 	}
-	if err := cpkDeleteOneRow(c, startOID+1, cpkSKUs[3]); err != nil {
-		return err
-	}
-	return nil
+	return cpkDeleteOneRow(c, startOID+1, cpkSKUs[3])
 }
 
 // cpkWorker 单个客户端的完整工作负载：每轮 INSERT/UPDATE/DELETE。
