@@ -169,6 +169,7 @@ func TestConcurrent_StressWrite(t *testing.T) {
 
 // TestConcurrent_MemTableRotationUnderLoad 验证高负载下 MemTable 自动轮转的正确性。
 func TestConcurrent_MemTableRotationUnderLoad(t *testing.T) {
+	t.Parallel()
 	eng, err := NewEngine(EngineConfig{
 		DataDir:         t.TempDir(),
 		MaxMemTableSize: 512, // Small size to trigger frequent rotations
@@ -216,6 +217,7 @@ func TestConcurrent_MemTableRotationUnderLoad(t *testing.T) {
 
 // TestConcurrent_MultipleDataTypeWriteRead 验证并发写入不同数据类型的一致性。
 func TestConcurrent_MultipleDataTypeWriteRead(t *testing.T) {
+	t.Parallel()
 	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
@@ -500,6 +502,7 @@ func verifyRecoveredExtraKeys(t *testing.T, eng *Engine, count int) {
 
 // TestConcurrent_WriteAfterFlushRecovery 验证并发写入后 Flush，数据在崩溃恢复后仍然一致。
 func TestConcurrent_WriteAfterFlushRecovery(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
 

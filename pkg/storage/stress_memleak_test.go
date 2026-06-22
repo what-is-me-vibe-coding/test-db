@@ -324,6 +324,7 @@ func TestStress_1MWrites100KReads(t *testing.T) {
 
 // TestStressMemLeak_MemTableRotation uses small MaxMemTableSize to trigger rotations.
 func TestStressMemLeak_MemTableRotation(t *testing.T) {
+	t.Parallel()
 	defer suppressLog()()
 
 	writes := 20000
