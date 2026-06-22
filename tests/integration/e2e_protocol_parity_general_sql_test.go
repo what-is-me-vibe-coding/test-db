@@ -147,67 +147,67 @@ func TestProtocolParitySQLFeatureMatrix(t *testing.T) {
 	}
 
 	// 1) SELECT 全表
-	protocolParityAssertRowsEqual(t, s, tbl,
+	protocolParityAssertRowsEqual(t, s,
 		"SELECT id, region, product, amount, qty, is_member, note FROM "+tbl+" ORDER BY id",
 		"全表扫描")
 
 	// 2) 标量比较（每个 SQL 返回单行单列，列名 c 显式以兼容 PG wire 的文本协议）
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl+" WHERE region = 'cn-east'",
 		"COUNT(=)")
 
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl+" WHERE amount > 50",
 		"COUNT(>)")
 
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl+" WHERE amount <= 30",
 		"COUNT(<=)")
 
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl+" WHERE region != 'us-east'",
 		"COUNT(!=)")
 
 	// 3) 复合条件
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl+
 			" WHERE region = 'cn-east' AND amount >= 30 AND amount <= 70",
 		"COUNT(AND)")
 
 	// 4) 聚合
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT SUM(amount) AS c FROM "+tbl,
 		"SUM")
 
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT AVG(qty) AS c FROM "+tbl,
 		"AVG")
 
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT MIN(amount) AS c FROM "+tbl,
 		"MIN")
 
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT MAX(amount) AS c FROM "+tbl,
 		"MAX")
 
 	// 5) GROUP BY：行数 + SUM(amount) 在三协议之间必须一致
-	protocolParityAssertRowsEqual(t, s, tbl,
+	protocolParityAssertRowsEqual(t, s,
 		"SELECT region, COUNT(*) AS c, SUM(amount) AS s FROM "+tbl+
 			" GROUP BY region ORDER BY region",
 		"GROUP BY region")
 
 	// 6) UPDATE / DELETE 命中行数一致
-	protocolParityAssertUpdateAffectedEqual(t, s, tbl,
+	protocolParityAssertUpdateAffectedEqual(t, s,
 		"UPDATE "+tbl+" SET amount = amount + 1 WHERE region = 'us-east'",
 		"UPDATE")
 
-	protocolParityAssertUpdateAffectedEqual(t, s, tbl,
+	protocolParityAssertUpdateAffectedEqual(t, s,
 		"DELETE FROM "+tbl+" WHERE qty <= 2",
 		"DELETE")
 
 	// 7) LIKE 过滤：含 'flag' 的行数
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl+" WHERE note LIKE '%flag%'",
 		"LIKE flag")
 }
@@ -258,7 +258,7 @@ func TestProtocolParityErrorIsolation(t *testing.T) {
 
 	// 验证错误路径不会影响正常客户端：在所有坏 SQL 执行完后，
 	// 三协议均能正常返回 COUNT(*)=12
-	protocolParityAssertScalarEqual(t, s, tbl,
+	protocolParityAssertScalarEqual(t, s,
 		"SELECT COUNT(*) AS c FROM "+tbl,
 		"错误路径后 COUNT 仍正常")
 }
@@ -276,14 +276,10 @@ func TestProtocolParityConcurrentMixedWorkload(t *testing.T) {
 	s := startPGWireServer(t)
 	tbl := protocolParityTableFor(t.Name())
 
-	// 建表（HTTP）
-	if resp, err := httpQuery(s.httpAddr, protocolParityCreateSQL(tbl)); err != nil {
+	if err := protocolParityCreateTable(t, s, tbl); err != nil {
 		t.Fatalf("建表失败: %v", err)
-	} else if resp.Code != 0 {
-		t.Fatalf("建表返回错误: %s", resp.Message)
 	}
 
-	// 4 客户端 × 3 协议 = 12 客户端
 	const (
 		parityClients = 4
 		parityRowsPer = 3
@@ -292,16 +288,41 @@ func TestProtocolParityConcurrentMixedWorkload(t *testing.T) {
 	)
 	parityWant := parityClients * len(protocolParityProtocols) * parityRowsPer * parityRounds
 
+	failCount := protocolParitySpawnWorkers(t, s, tbl, parityClients, parityRowsPer, parityRounds, parityBaseID)
+	if failCount > 0 {
+		t.Fatalf("%d 个客户端工作负载失败", failCount)
+	}
+
+	protocolParityAssertCountEqual(t, s, tbl, parityWant)
+}
+
+// protocolParityCreateTable 仅经 HTTP 建表（与现有 e2e_server_sql_test 风格一致）。
+func protocolParityCreateTable(t *testing.T, s *sqlServer, tbl string) error {
+	t.Helper()
+	resp, err := httpQuery(s.httpAddr, protocolParityCreateSQL(tbl))
+	if err != nil {
+		return fmt.Errorf("建表: %w", err)
+	}
+	if resp.Code != 0 {
+		return fmt.Errorf("建表: %s", resp.Message)
+	}
+	return nil
+}
+
+// protocolParitySpawnWorkers 启动 clients × len(protocols) 个 goroutine 并发
+// 执行 INSERT 负载，返回失败的客户端数。
+func protocolParitySpawnWorkers(t *testing.T, s *sqlServer, tbl string, clients, rowsPer, rounds, baseID int) int64 {
+	t.Helper()
 	var (
 		wg        sync.WaitGroup
 		failCount int64
 	)
-	for c := 0; c < parityClients; c++ {
+	for c := 0; c < clients; c++ {
 		for _, via := range protocolParityProtocols {
 			wg.Add(1)
 			go func(clientID int, via string) {
 				defer wg.Done()
-				if err := protocolParityConcurrentWorker(s, via, tbl, clientID, parityRounds, parityRowsPer, parityBaseID); err != nil {
+				if err := protocolParityConcurrentWorker(s, via, tbl, clientID, rounds, rowsPer, baseID); err != nil {
 					t.Logf("[%s c%d] 失败: %v", via, clientID, err)
 					atomic.AddInt64(&failCount, 1)
 				}
@@ -309,11 +330,12 @@ func TestProtocolParityConcurrentMixedWorkload(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	if failCount > 0 {
-		t.Fatalf("%d 个客户端工作负载失败", failCount)
-	}
+	return failCount
+}
 
-	// 三协议分别 COUNT，结果应一致
+// protocolParityAssertCountEqual 用 COUNT(*) 校验三协议读到的总行数一致。
+func protocolParityAssertCountEqual(t *testing.T, s *sqlServer, tbl string, want int) {
+	t.Helper()
 	gotByProtocol := make(map[string]int, len(protocolParityProtocols))
 	for _, via := range protocolParityProtocols {
 		r := protocolParityRunSQL(s, via,
@@ -334,9 +356,9 @@ func TestProtocolParityConcurrentMixedWorkload(t *testing.T) {
 		gotByProtocol[via] = int(got)
 	}
 	for _, via := range protocolParityProtocols {
-		if gotByProtocol[via] != parityWant {
+		if gotByProtocol[via] != want {
 			t.Errorf("[%s] 并发写入后 COUNT: 期望 %d，得到 %d",
-				via, parityWant, gotByProtocol[via])
+				via, want, gotByProtocol[via])
 		}
 	}
 }
@@ -426,7 +448,7 @@ func protocolParityRunSQL(s *sqlServer, via, sql string) protocolParityResult {
 //
 // 适用：COUNT/SUM/AVG/MIN/MAX 等单行单列查询。
 // 浮点字段（AVG）使用容差 1e-6 比较。
-func protocolParityAssertScalarEqual(t *testing.T, s *sqlServer, tbl, sql, label string) {
+func protocolParityAssertScalarEqual(t *testing.T, s *sqlServer, sql, label string) {
 	t.Helper()
 	values := make(map[string]float64, len(protocolParityProtocols))
 	for _, via := range protocolParityProtocols {
@@ -476,7 +498,7 @@ func protocolParityAssertScalarEqual(t *testing.T, s *sqlServer, tbl, sql, label
 // 比较策略：
 //  1. 行数必须相同；
 //  2. 各协议按主键排序后，逐行逐字段比较（字符串/数值/布尔按对应规则）。
-func protocolParityAssertRowsEqual(t *testing.T, s *sqlServer, tbl, sql, label string) {
+func protocolParityAssertRowsEqual(t *testing.T, s *sqlServer, sql, label string) {
 	t.Helper()
 	perProtocol := make(map[string][]map[string]any, len(protocolParityProtocols))
 	for _, via := range protocolParityProtocols {
@@ -520,7 +542,7 @@ func protocolParityAssertRowsEqual(t *testing.T, s *sqlServer, tbl, sql, label s
 }
 
 // protocolParityAssertUpdateAffectedEqual 断言 UPDATE/DELETE 三协议影响行数一致。
-func protocolParityAssertUpdateAffectedEqual(t *testing.T, s *sqlServer, tbl, sql, label string) {
+func protocolParityAssertUpdateAffectedEqual(t *testing.T, s *sqlServer, sql, label string) {
 	t.Helper()
 	affected := make(map[string]int, len(protocolParityProtocols))
 	for _, via := range protocolParityProtocols {
