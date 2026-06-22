@@ -182,6 +182,7 @@ func ccScanRangeWorker(eng *Engine, done <-chan struct{}, prefix string, count i
 }
 
 func TestConcurrentCorrectness_Serializability(t *testing.T) {
+	t.Parallel()
 	defer suppressLog()()
 	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
 	if err != nil {
@@ -323,6 +324,7 @@ func TestConcurrentCorrectness_WriteBatchAtomicity(t *testing.T) {
 }
 
 func TestConcurrentCorrectness_RecoveryAfterConcurrentWrite(t *testing.T) {
+	t.Parallel()
 	defer suppressLog()()
 	dir := t.TempDir()
 	cfg := EngineConfig{DataDir: dir}
@@ -356,6 +358,7 @@ func TestConcurrentCorrectness_RecoveryAfterConcurrentWrite(t *testing.T) {
 }
 
 func TestConcurrentCorrectness_LongRunningStress(t *testing.T) {
+	t.Parallel()
 	defer suppressLog()()
 	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
 	if err != nil {
@@ -418,6 +421,7 @@ func TestConcurrentCorrectness_ScanRangeConsistency(t *testing.T) {
 }
 
 func TestConcurrentCorrectness_CompactDataIntegrity(t *testing.T) {
+	t.Parallel()
 	defer suppressLog()()
 	eng, err := NewEngine(EngineConfig{DataDir: t.TempDir()})
 	if err != nil {

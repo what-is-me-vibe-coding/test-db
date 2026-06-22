@@ -41,6 +41,7 @@ func newStressEngine(t *testing.T, maxMemSize int64) *Engine {
 
 // TestStress_LongWriteRead verifies sustained write+read workload stability.
 func TestStress_LongWriteRead(t *testing.T) {
+	t.Parallel()
 	eng := newStressEngine(t, 0)
 	defer func() { _ = eng.Close() }()
 
@@ -243,6 +244,7 @@ func TestStress_MixedWorkload(t *testing.T) {
 
 // TestStress_MemTableRotation uses small MemTable to trigger frequent rotations.
 func TestStress_MemTableRotation(t *testing.T) {
+	t.Parallel()
 	eng := newStressEngine(t, 256) // Very small to trigger rotations
 	defer func() { _ = eng.Close() }()
 
@@ -285,6 +287,7 @@ func TestStress_MemTableRotation(t *testing.T) {
 // TestStress_OverwriteAndDelete tests repeated overwrites for memory reuse.
 // It verifies the engine handles key overwrites without panicking or leaking.
 func TestStress_OverwriteAndDelete(t *testing.T) {
+	t.Parallel()
 	eng := newStressEngine(t, 0)
 	defer func() { _ = eng.Close() }()
 

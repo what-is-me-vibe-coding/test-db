@@ -316,6 +316,7 @@ func TestMergeIteratorAllEmpty(t *testing.T) {
 }
 
 func TestMergeIteratorStress(t *testing.T) {
+	t.Parallel()
 	const numIters = 5
 	const keysPerIter = 100
 
