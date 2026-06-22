@@ -6,48 +6,35 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// TestNewMetrics 验证 NewMetrics 初始化后所有字段非 nil。
+// 为满足 gocyclo -over 15 阈值，断言抽取到 assertNotNil 辅助函数。
 func TestNewMetrics(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	m := NewMetrics(registry)
-
 	if m == nil {
 		t.Fatal("NewMetrics 不应返回 nil")
 	}
-	if m.QueriesTotal == nil {
-		t.Error("QueriesTotal 不应为 nil")
-	}
-	if m.QueryDuration == nil {
-		t.Error("QueryDuration 不应为 nil")
-	}
-	if m.WritesTotal == nil {
-		t.Error("WritesTotal 不应为 nil")
-	}
-	if m.WriteDuration == nil {
-		t.Error("WriteDuration 不应为 nil")
-	}
-	if m.MemTableSize == nil {
-		t.Error("MemTableSize 不应为 nil")
-	}
-	if m.SegmentCount == nil {
-		t.Error("SegmentCount 不应为 nil")
-	}
-	if m.L0SegmentCount == nil {
-		t.Error("L0SegmentCount 不应为 nil")
-	}
-	if m.WALSizeBytes == nil {
-		t.Error("WALSizeBytes 不应为 nil")
-	}
-	if m.ActiveConns == nil {
-		t.Error("ActiveConns 不应为 nil")
-	}
-	if m.FlushTotal == nil {
-		t.Error("FlushTotal 不应为 nil")
-	}
-	if m.CompactTotal == nil {
-		t.Error("CompactTotal 不应为 nil")
-	}
-	if m.WALCleanTotal == nil {
-		t.Error("WALCleanTotal 不应为 nil")
+	assertNotNil(t, "QueriesTotal", m.QueriesTotal)
+	assertNotNil(t, "QueryDuration", m.QueryDuration)
+	assertNotNil(t, "WritesTotal", m.WritesTotal)
+	assertNotNil(t, "WriteDuration", m.WriteDuration)
+	assertNotNil(t, "MemTableSize", m.MemTableSize)
+	assertNotNil(t, "SegmentCount", m.SegmentCount)
+	assertNotNil(t, "L0SegmentCount", m.L0SegmentCount)
+	assertNotNil(t, "WALSizeBytes", m.WALSizeBytes)
+	assertNotNil(t, "ActiveConns", m.ActiveConns)
+	assertNotNil(t, "FlushTotal", m.FlushTotal)
+	assertNotNil(t, "CompactTotal", m.CompactTotal)
+	assertNotNil(t, "WALCleanTotal", m.WALCleanTotal)
+	assertNotNil(t, "HTTPRequestsTotal", m.HTTPRequestsTotal)
+	assertNotNil(t, "HTTPDuration", m.HTTPDuration)
+}
+
+// assertNotNil 简化 NewMetrics 字段非 nil 断言。
+func assertNotNil(t *testing.T, name string, v any) {
+	t.Helper()
+	if v == nil {
+		t.Errorf("%s 不应为 nil", name)
 	}
 }
 
@@ -191,5 +178,87 @@ func TestMetricsGaugeSet(t *testing.T) {
 
 	if len(expectedGauges) > 0 {
 		t.Errorf("未找到预期的 Gauge 指标: %v", expectedGauges)
+	}
+}
+
+// TestMetricsHTTPCounterInc 验证 HTTPRequestsTotal 计数器可递增并出现在 registry 中。
+func TestMetricsHTTPCounterInc(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	m.HTTPRequestsTotal.WithLabelValues("/query", "POST", "2xx").Inc()
+	m.HTTPRequestsTotal.WithLabelValues("/write", "POST", "4xx").Inc()
+	m.HTTPRequestsTotal.WithLabelValues("/write", "POST", "4xx").Inc()
+
+	assertHTTPCounter(t, registry, "/query", "POST", "2xx", 1)
+	assertHTTPCounter(t, registry, "/write", "POST", "4xx", 2)
+}
+
+// assertHTTPCounter 在 Gather 结果中查找指定 (endpoint, method, status) 标签的计数器值。
+func assertHTTPCounter(t *testing.T, reg *prometheus.Registry, ep, method, status string, want float64) {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather 失败: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "widb_http_requests_total" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, lp := range metric.Label {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["endpoint"] != ep || labels["method"] != method || labels["status"] != status {
+				continue
+			}
+			if c := metric.GetCounter(); c != nil && c.GetValue() == want {
+				return
+			}
+		}
+	}
+	t.Errorf("未找到 widb_http_requests_total{endpoint=%q,method=%q,status=%q} = %v", ep, method, status, want)
+}
+
+// TestMetricsHTTPDurationObserve 验证 HTTPDuration 耗时直方图接受 Observe 调用。
+func TestMetricsHTTPDurationObserve(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	m := NewMetrics(registry)
+
+	m.HTTPDuration.WithLabelValues("/query", "POST").Observe(0.123)
+
+	mfs, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("Gather 失败: %v", err)
+	}
+	found := false
+	for _, mf := range mfs {
+		if mf.GetName() != "widb_http_request_duration_seconds" {
+			continue
+		}
+		for _, metric := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, lp := range metric.Label {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			if labels["endpoint"] != "/query" || labels["method"] != "POST" {
+				continue
+			}
+			h := metric.GetHistogram()
+			if h == nil {
+				continue
+			}
+			found = true
+			if h.GetSampleCount() < 1 {
+				t.Errorf("样本数 = %d, 期望 >= 1", h.GetSampleCount())
+			}
+			if h.GetSampleSum() < 0.123 {
+				t.Errorf("样本 sum = %v, 期望 >= 0.123", h.GetSampleSum())
+			}
+		}
+	}
+	if !found {
+		t.Error("应包含 widb_http_request_duration_seconds 指标 (endpoint=/query, method=POST)")
 	}
 }

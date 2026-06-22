@@ -314,6 +314,8 @@ WiDB 暴露以下 Prometheus 指标（命名空间 `widb_`）：
 | `widb_cache_misses_total` | Counter | 缓存未命中次数 |
 | `widb_cache_size_bytes` | Gauge | 缓存占用字节数 |
 | `widb_cache_entries` | Gauge | 缓存条目数 |
+| `widb_http_requests_total` | Counter | HTTP 请求总数（按端点/方法/状态类别 2xx/3xx/4xx/5xx） |
+| `widb_http_request_duration_seconds` | Histogram | HTTP 请求耗时分布（按端点/方法） |
 
 ## 依赖
 

@@ -324,6 +324,8 @@ widb_wal_size_bytes > 256 * 1024 * 1024
 | `widb_cache_misses_total` | Counter | `cache=block\|index` | 未命中数 |
 | `widb_cache_size_bytes` | Gauge | `cache=block\|index` | 当前占用 |
 | `widb_cache_entries` | Gauge | `cache=block\|index` | 条目数 |
+| `widb_http_requests_total` | Counter | `endpoint` / `method` / `status` | HTTP 请求总数（status 归一为 2xx/3xx/4xx/5xx） |
+| `widb_http_request_duration_seconds` | Histogram | `endpoint` / `method` | HTTP 请求耗时分布 |
 
 **关键观察**（不是告警，是调优信号）：
 
