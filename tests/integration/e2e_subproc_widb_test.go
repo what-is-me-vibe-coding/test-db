@@ -60,27 +60,6 @@ func buildWidbBinary() (string, error) {
 	return widbBinaryPath, widbBinaryErr
 }
 
-// widbSubprocLog 收集 widb 子进程的 stdout/stderr 行，失败时统一打印。
-type widbSubprocLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (l *widbSubprocLog) append(s string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.buf.WriteString(s)
-	if !strings.HasSuffix(s, "\n") {
-		l.buf.WriteString("\n")
-	}
-}
-
-func (l *widbSubprocLog) String() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.buf.String()
-}
-
 // widbOneShotOpts 描述 -e 模式子进程调用参数。
 type widbOneShotOpts struct {
 	SQL      string        // -e 后的 SQL；为空时仅启动 REPL
