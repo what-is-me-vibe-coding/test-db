@@ -251,6 +251,8 @@ journalctl -u widb -n 50 | grep -E "wal|catalog|segment"
 
 WiDB 通过 HTTP `/metrics` 端点暴露 Prometheus 指标（命名空间 `widb_`）。
 
+> **完整参考**：本文档给出与运维相关的概要；指标字段、PromQL 模板、Grafana 仪表板与告警规则请见 [observability.md](observability.md)。当代码中 `pkg/server/metrics.go` 新增/修改指标时，应同步更新两份文档。
+
 ### 4.1 核心指标分类
 
 #### 4.1.1 查询（QPS / 延迟）

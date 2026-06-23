@@ -287,6 +287,7 @@ test-db/
 │   ├── cookbook.md     # 常见 SQL 套路与最佳实践
 │   ├── troubleshooting.md # 故障排查指南
 │   ├── operations.md   # 运维手册（部署/监控/备份/恢复/容量规划/升级）
+│   ├── observability.md # 可观测性指南（指标参考 + PromQL + Grafana + 告警规则）
 │   ├── development.md  # 开发与贡献指南
 │   └── architecture-deep-dive.md # 架构深度解析（时序图/调用链/格式/内存模型）
 └── .agent_plan/        # 开发设计文档
@@ -316,6 +317,8 @@ WiDB 暴露以下 Prometheus 指标（命名空间 `widb_`）：
 | `widb_cache_entries` | Gauge | 缓存条目数 |
 | `widb_http_requests_total` | Counter | HTTP 请求总数（按端点/方法/状态类别 2xx/3xx/4xx/5xx） |
 | `widb_http_request_duration_seconds` | Histogram | HTTP 请求耗时分布（按端点/方法） |
+
+完整的指标参考、PromQL 模板、Grafana 仪表板蓝图与告警规则见 [doc/observability.md](doc/observability.md)。
 
 ## 依赖
 
