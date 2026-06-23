@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // TestNewMetrics 验证 NewMetrics 初始化后所有字段非 nil。
@@ -228,37 +229,54 @@ func TestMetricsHTTPDurationObserve(t *testing.T) {
 
 	m.HTTPDuration.WithLabelValues("/query", "POST").Observe(0.123)
 
+	hist, ok := findHTTPHistogram(t, registry, "/query", "POST")
+	if !ok {
+		t.Error("应包含 widb_http_request_duration_seconds 指标 (endpoint=/query, method=POST)")
+		return
+	}
+	if hist.GetSampleCount() < 1 {
+		t.Errorf("样本数 = %d, 期望 >= 1", hist.GetSampleCount())
+	}
+	if hist.GetSampleSum() < 0.123 {
+		t.Errorf("样本 sum = %v, 期望 >= 0.123", hist.GetSampleSum())
+	}
+}
+
+// findHTTPHistogram 在 registry 中查找匹配 endpoint/method 的 HTTP 耗时直方图。
+// 未找到时通过 t.Fatal 失败并返回 false。
+func findHTTPHistogram(t *testing.T, registry *prometheus.Registry, endpoint, method string) (dto.Histogram, bool) {
+	t.Helper()
 	mfs, err := registry.Gather()
 	if err != nil {
 		t.Fatalf("Gather 失败: %v", err)
 	}
-	found := false
 	for _, mf := range mfs {
 		if mf.GetName() != "widb_http_request_duration_seconds" {
 			continue
 		}
 		for _, metric := range mf.GetMetric() {
-			labels := map[string]string{}
-			for _, lp := range metric.Label {
-				labels[lp.GetName()] = lp.GetValue()
+			if !histogramHasLabel(metric, "endpoint", endpoint) {
+				continue
 			}
-			if labels["endpoint"] != "/query" || labels["method"] != "POST" {
+			if !histogramHasLabel(metric, "method", method) {
 				continue
 			}
 			h := metric.GetHistogram()
 			if h == nil {
 				continue
 			}
-			found = true
-			if h.GetSampleCount() < 1 {
-				t.Errorf("样本数 = %d, 期望 >= 1", h.GetSampleCount())
-			}
-			if h.GetSampleSum() < 0.123 {
-				t.Errorf("样本 sum = %v, 期望 >= 0.123", h.GetSampleSum())
-			}
+			return *h, true
 		}
 	}
-	if !found {
-		t.Error("应包含 widb_http_request_duration_seconds 指标 (endpoint=/query, method=POST)")
+	return dto.Histogram{}, false
+}
+
+// histogramHasLabel 判断指标是否包含指定 name=value 标签。
+func histogramHasLabel(metric *dto.Metric, name, want string) bool {
+	for _, lp := range metric.Label {
+		if lp.GetName() == name && lp.GetValue() == want {
+			return true
+		}
 	}
+	return false
 }
