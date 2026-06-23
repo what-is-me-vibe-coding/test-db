@@ -398,7 +398,7 @@ func hkConcurrentWorkload(t *testing.T, srv *hkTestServer) int64 {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			if err := hkWorkerLoop(srv, workerID, &writeTotal, errs); err != nil {
+			if err := hkWorkerLoop(srv, workerID, &writeTotal); err != nil {
 				errs <- err
 			}
 		}(w)
@@ -416,8 +416,8 @@ func hkConcurrentWorkload(t *testing.T, srv *hkTestServer) int64 {
 }
 
 // hkWorkerLoop 单个并发 worker 在自己的 ID 区间内执行 3 轮 × 5 行写 + 每轮末 1 次读。
-// 错误通过 errs 通道上报，writeTotal 通过原子累加。
-func hkWorkerLoop(srv *hkTestServer, workerID int, writeTotal *int64, errs chan<- error) error {
+// 错误通过返回值上报，writeTotal 通过原子累加。
+func hkWorkerLoop(srv *hkTestServer, workerID int, writeTotal *int64) error {
 	for round := 0; round < hkConcurrentRounds; round++ {
 		for j := 0; j < 5; j++ {
 			id := int64(hkIDBase + hkTotalRequests + workerID*100 + round*10 + j)
@@ -444,9 +444,10 @@ func hkWorkerLoop(srv *hkTestServer, workerID int, writeTotal *int64, errs chan<
 	return nil
 }
 
-// hkErrorInjection 发送若干「表不存在」类 SQL 验证连接不被破坏。
-// 接受 200/400 两种状态码：当前 server 对业务错误统一返回 400（设计如此），
-// 关键在于「错误响应后连接仍能复用」。
+// hkErrorInjection 发送若干「业务错误」类 SQL 验证 keep-alive 连接不被破坏。
+// 每次使用独立表名（nonexistent_table_<i>）以确保 server 返回业务错误；
+// server 对业务错误统一返回 400，但允许出现 200 兼容未来扩展。
+// 关键在于「错误响应后连接仍能复用」，因此紧接一次成功 SELECT 做连通性回归。
 func hkErrorInjection(t *testing.T, srv *hkTestServer) {
 	t.Helper()
 	for i := 0; i < 5; i++ {
@@ -500,9 +501,6 @@ func hkQueryCount(t *testing.T, client *http.Client, addr, table string) int64 {
 		return int64(n)
 	case int64:
 		return n
-	case json.Number:
-		i, _ := n.Int64()
-		return i
 	default:
 		t.Fatalf("最终 COUNT c 字段类型异常: %T %v", v, v)
 		return 0
