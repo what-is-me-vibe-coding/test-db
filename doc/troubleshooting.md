@@ -368,6 +368,8 @@ widb-cli - WiDB 命令行客户端
 
 ## 9. 监控与诊断
 
+> 完整的指标参考、PromQL 模板与告警规则请见 [observability.md](observability.md)；本节只给出排障时最常用的「第一反应」查询与脚本。
+
 ### 9.1 关键指标
 
 ```bash
@@ -380,14 +382,16 @@ grep '^widb_' /tmp/metrics.txt | grep -E '(total|bytes|duration|errors)'
 
 | 指标 | 含义 |
 |------|------|
-| `widb_query_total{type=...}` | SELECT/INSERT/UPDATE/DELETE 调用次数 |
-| `widb_write_bytes_total` | 累计写入字节数 |
-| `widb_memtable_bytes` | 当前 MemTable 内存占用 |
-| `widb_segment_count` | 当前活跃 Segment 数 |
-| `widb_cache_hit_ratio` | Block Cache 命中率 |
-| `widb_sparse_index_skip_ratio` | 稀疏索引裁剪率 |
-| `widb_compact_duration_seconds` | Compaction 耗时直方图 |
-| `widb_wal_sync_duration_seconds` | WAL fsync 耗时直方图 |
+| `widb_queries_total{type=...}` | SELECT/INSERT/UPDATE/DELETE 调用次数（按 type 拆分：success / parse_error / analyze_error / execute_error） |
+| `widb_writes_total{result=...}` | 写入调用次数（按 result 拆分：success / table_not_found / convert_error / write_error） |
+| `widb_memtable_size_bytes` | 当前 MemTable 内存占用 |
+| `widb_segment_count{level=...}` | 当前活跃 Segment 数（按层级 l0/l1） |
+| `widb_l0_segment_count` | L0 段数（独立导出） |
+| `widb_wal_size_bytes` | 当前 WAL 文件字节数 |
+| `widb_cache_hits_total` / `widb_cache_misses_total` | Block/Index 缓存命中/未命中（用 §3.4 PromQL 计算命中率） |
+| `widb_http_requests_total` | HTTP 请求总数（按 endpoint/method/status） |
+
+> 注：上表为排障时「看一眼」的精简版，完整指标字段、PromQL 与告警规则见 [observability.md](observability.md)。
 
 ### 9.2 调试协议
 
