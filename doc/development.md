@@ -162,6 +162,8 @@ go test -bench=. -benchmem ./pkg/storage/...
 go test -bench=BenchmarkFilter -count=3 ./pkg/query/
 ```
 
+完整的基准列表、运行速查与结果解读请参考 [benchmarks.md](./benchmarks.md)。
+
 ## 5. CI 流水线
 
 CI 定义于 [.github/workflows/ci.yml](../.github/workflows/ci.yml)，在 `push` 到 `main` 与 `pull_request` 到 `main` 时触发，包含 5 个并行任务：

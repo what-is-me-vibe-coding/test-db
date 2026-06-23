@@ -288,6 +288,7 @@ test-db/
 │   ├── troubleshooting.md # 故障排查指南
 │   ├── operations.md   # 运维手册（部署/监控/备份/恢复/容量规划/升级）
 │   ├── observability.md # 可观测性指南（指标参考 + PromQL + Grafana + 告警规则）
+│   ├── benchmarks.md   # 基准测试指南（基准矩阵 + 运行速查 + 结果解读）
 │   ├── development.md  # 开发与贡献指南
 │   └── architecture-deep-dive.md # 架构深度解析（时序图/调用链/格式/内存模型）
 └── .agent_plan/        # 开发设计文档
