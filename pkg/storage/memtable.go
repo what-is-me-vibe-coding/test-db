@@ -46,7 +46,9 @@ type skipNode struct {
 	value   Row                 // 24B (Version + Columns + Tombstone + padding)
 	forward [maxLevel]*skipNode // 16*8 = 128B
 	// 合计：16 + 24 + 128 = 168B，按 8B 对齐后 168B
-	// 加上 sync.Pool/GC 内部 padding 通常为 176B 或 192B
+	// 在 slab 中节点与 [maxLevel]*skipNode 数组同对象布局，自然按 64B cache line
+	// 对齐补齐到 192B（与原方案「64B 节点 + 128B 独立 forward 切片」总占用持平），
+	// 但分配次数从 2 次降为 1 次（slab 路径下 0 次）。
 }
 
 // Row 表示 MemTable 中的一行数据，包含版本号与列值映射。
