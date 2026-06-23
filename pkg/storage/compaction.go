@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/what-is-me-vibe-coding/test-db/pkg/common"
 )
@@ -14,6 +15,32 @@ const (
 	defaultL0CompactionThreshold = 4
 	defaultLevelSizeMultiplier   = 2
 )
+
+// segmentIDGen 是 Segment ID 的集中式生成器，确保 Flusher 和 Compactor 共享同一个 ID 源，
+// 消除手动同步 nextID 的需要。
+type segmentIDGen struct {
+	nextID atomic.Uint64
+}
+
+// newSegmentIDGen 创建一个 Segment ID 生成器。
+func newSegmentIDGen() *segmentIDGen {
+	return &segmentIDGen{}
+}
+
+// Next 原子地分配并返回下一个 Segment ID。
+func (g *segmentIDGen) Next() uint64 {
+	return g.nextID.Add(1)
+}
+
+// Current 返回当前已分配的最大 ID（无锁读取）。
+func (g *segmentIDGen) Current() uint64 {
+	return g.nextID.Load()
+}
+
+// InitIfLarger 当 id 大于当前值时更新，用于从磁盘恢复时初始化。
+func (g *segmentIDGen) InitIfLarger(id uint64) {
+	setNextIDAtomic(&g.nextID, id)
+}
 
 // Compactor 负责将多个 Segment 合并为更少的 Segment。
 type Compactor struct {

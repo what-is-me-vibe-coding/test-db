@@ -214,3 +214,29 @@ func (s *Scheduler) recordError(err error) {
 	defer s.mu.Unlock()
 	s.stats.LastError = err.Error()
 }
+
+// SchedulerStats 返回后台调度器的运行统计信息。
+// 如果调度器未启动，ok 为 false。
+func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
+	e.mu.RLock()
+	sched := e.scheduler
+	e.mu.RUnlock()
+
+	if sched == nil {
+		return SchedulerStats{}, false
+	}
+	return sched.Stats(), true
+}
+
+// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
+// 如果调度器已在运行，则不做任何操作。使用 sync.Once 保证只启动一次。
+func (e *Engine) StartScheduler(cfg SchedulerConfig) {
+	e.schedulerOnce.Do(func() {
+		sched := NewScheduler(e, cfg)
+		sched.Start()
+
+		e.mu.Lock()
+		e.scheduler = sched
+		e.mu.Unlock()
+	})
+}

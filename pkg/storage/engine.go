@@ -19,32 +19,6 @@ const (
 	defaultIndexCacheEntries  = 1000              // 1000 条目
 )
 
-// segmentIDGen 是 Segment ID 的集中式生成器，确保 Flusher 和 Compactor 共享同一个 ID 源，
-// 消除手动同步 nextID 的需要。
-type segmentIDGen struct {
-	nextID atomic.Uint64
-}
-
-// newSegmentIDGen 创建一个 Segment ID 生成器。
-func newSegmentIDGen() *segmentIDGen {
-	return &segmentIDGen{}
-}
-
-// Next 原子地分配并返回下一个 Segment ID。
-func (g *segmentIDGen) Next() uint64 {
-	return g.nextID.Add(1)
-}
-
-// Current 返回当前已分配的最大 ID（无锁读取）。
-func (g *segmentIDGen) Current() uint64 {
-	return g.nextID.Load()
-}
-
-// InitIfLarger 当 id 大于当前值时更新，用于从磁盘恢复时初始化。
-func (g *segmentIDGen) InitIfLarger(id uint64) {
-	setNextIDAtomic(&g.nextID, id)
-}
-
 // Engine 是存储引擎的核心结构。
 type Engine struct {
 	mu                     sync.RWMutex
@@ -439,6 +413,56 @@ func (e *Engine) MemTableSize() int64 {
 	return e.activeMem.Size()
 }
 
+// EngineStats 汇总 LSM 引擎的运行时状态，用于 /admin/stats 等监控端点。
+//
+// 字段含义：
+//   - RowCount：表中所有存活行数（活跃 + 不可变 MemTable + 全部 Segment），可能略高于实际唯一行（删除墓碑未合并前会重复计数）。
+//   - SegmentCount：当前已刷盘 Segment 总数（含 L0 与 L1+）。
+//   - L0SegmentCount：L0 层 Segment 数量；高值通常意味着 Compaction 滞后。
+//   - ImmutableCount：不可变 MemTable 数量（已冻结但尚未刷盘）。
+//   - MemTableSize：活跃 MemTable 当前占用字节数。
+//   - ActiveRowCount / ImmutableRowCount：分别统计活跃 / 不可变 MemTable 中的行数。
+type EngineStats struct {
+	RowCount          int64
+	SegmentCount      int
+	L0SegmentCount    int
+	ImmutableCount    int
+	MemTableSize      int64
+	ActiveRowCount    int64
+	ImmutableRowCount int64
+}
+
+// Stats 返回 LSM 引擎的运行时状态快照。所有指标在持读锁期间一次性计算，
+// 保证调用方拿到的各字段在时间点上一致（无竞态）。
+func (e *Engine) Stats() EngineStats {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	stats := EngineStats{
+		SegmentCount:   len(e.segments),
+		L0SegmentCount: e.l0SegmentCount,
+		ImmutableCount: len(e.immutable),
+	}
+	if e.activeMem != nil {
+		stats.MemTableSize = e.activeMem.Size()
+		stats.ActiveRowCount = int64(e.activeMem.Len())
+	}
+	for _, m := range e.immutable {
+		if m == nil {
+			continue
+		}
+		stats.ImmutableRowCount += int64(m.Len())
+	}
+	for _, seg := range e.segments {
+		if seg == nil {
+			continue
+		}
+		stats.RowCount += int64(seg.RowCount)
+	}
+	stats.RowCount += stats.ActiveRowCount + stats.ImmutableRowCount
+	return stats
+}
+
 // PrimaryIndex 返回主键索引实例。
 func (e *Engine) PrimaryIndex() *index.PrimaryIndex {
 	return e.primaryIndex
@@ -470,30 +494,4 @@ func (e *Engine) SetColumnMeta(cols []ColumnMeta) {
 	defer e.mu.Unlock()
 	e.columnMeta = make([]ColumnMeta, len(cols))
 	copy(e.columnMeta, cols)
-}
-
-// SchedulerStats 返回后台调度器的运行统计信息。
-// 如果调度器未启动，ok 为 false。
-func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
-	e.mu.RLock()
-	sched := e.scheduler
-	e.mu.RUnlock()
-
-	if sched == nil {
-		return SchedulerStats{}, false
-	}
-	return sched.Stats(), true
-}
-
-// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
-// 如果调度器已在运行，则不做任何操作。使用 sync.Once 保证只启动一次。
-func (e *Engine) StartScheduler(cfg SchedulerConfig) {
-	e.schedulerOnce.Do(func() {
-		sched := NewScheduler(e, cfg)
-		sched.Start()
-
-		e.mu.Lock()
-		e.scheduler = sched
-		e.mu.Unlock()
-	})
 }
