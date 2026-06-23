@@ -19,32 +19,6 @@ const (
 	defaultIndexCacheEntries  = 1000              // 1000 条目
 )
 
-// segmentIDGen 是 Segment ID 的集中式生成器，确保 Flusher 和 Compactor 共享同一个 ID 源，
-// 消除手动同步 nextID 的需要。
-type segmentIDGen struct {
-	nextID atomic.Uint64
-}
-
-// newSegmentIDGen 创建一个 Segment ID 生成器。
-func newSegmentIDGen() *segmentIDGen {
-	return &segmentIDGen{}
-}
-
-// Next 原子地分配并返回下一个 Segment ID。
-func (g *segmentIDGen) Next() uint64 {
-	return g.nextID.Add(1)
-}
-
-// Current 返回当前已分配的最大 ID（无锁读取）。
-func (g *segmentIDGen) Current() uint64 {
-	return g.nextID.Load()
-}
-
-// InitIfLarger 当 id 大于当前值时更新，用于从磁盘恢复时初始化。
-func (g *segmentIDGen) InitIfLarger(id uint64) {
-	setNextIDAtomic(&g.nextID, id)
-}
-
 // Engine 是存储引擎的核心结构。
 type Engine struct {
 	mu                     sync.RWMutex
@@ -520,30 +494,4 @@ func (e *Engine) SetColumnMeta(cols []ColumnMeta) {
 	defer e.mu.Unlock()
 	e.columnMeta = make([]ColumnMeta, len(cols))
 	copy(e.columnMeta, cols)
-}
-
-// SchedulerStats 返回后台调度器的运行统计信息。
-// 如果调度器未启动，ok 为 false。
-func (e *Engine) SchedulerStats() (stats SchedulerStats, ok bool) {
-	e.mu.RLock()
-	sched := e.scheduler
-	e.mu.RUnlock()
-
-	if sched == nil {
-		return SchedulerStats{}, false
-	}
-	return sched.Stats(), true
-}
-
-// StartScheduler 启动后台任务调度器，定时执行刷盘、Compaction 和 WAL 清理。
-// 如果调度器已在运行，则不做任何操作。使用 sync.Once 保证只启动一次。
-func (e *Engine) StartScheduler(cfg SchedulerConfig) {
-	e.schedulerOnce.Do(func() {
-		sched := NewScheduler(e, cfg)
-		sched.Start()
-
-		e.mu.Lock()
-		e.scheduler = sched
-		e.mu.Unlock()
-	})
 }
