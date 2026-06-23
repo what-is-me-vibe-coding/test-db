@@ -91,91 +91,124 @@ type subprocLSStep struct {
 // 每客户端写入行的 ID 区间为 [baseID, baseID+stepsPerClient*rowsPerStep)，
 // 避免跨客户端 ID 冲突；辅助 SELECT 可读到其它客户端写入的行。
 func subprocLSBuildSteps(clientID int) []subprocLSStep {
-	baseID := int64(subprocLSBaseID) + int64(clientID)*int64(subprocLSRowsPerStep)*int64(subprocLSStepsPerClient)
-	lo := baseID
-	hi := baseID + int64(subprocLSRowsPerStep)*int64(subprocLSStepsPerClient)
-	stepID := func(step int) int64 { return baseID + int64(step)*int64(subprocLSRowsPerStep) }
-
-	steps := make([]subprocLSStep, 0, subprocLSStepsPerClient)
+	lo, hi, stepID, steps := subprocLSStepContext(clientID)
 
 	// 步骤 1-15: 3 轮 INSERT/SELECT/UPDATE。
+	subprocLSAppendRounds(&steps, lo, hi, stepID)
+
+	// 步骤 16: 故意错误 SQL。
+	steps = append(steps, subprocLSErrorNonexistentSelect())
+
+	// 步骤 17-20: 跨表 SELECT + 元命令 + 单行 DELETE。
+	subprocLSAppendCrossTable(&steps, lo)
+
+	// 步骤 21-25: 再次写入 5 行。
+	subprocLSAppendTailInserts(&steps, stepID)
+
+	// 步骤 26: 再一次故意错误 SQL。
+	steps = append(steps, subprocLSErrorColumnMismatch())
+
+	// 步骤 27-33: 收尾 EXPLAIN + COUNT + SELECT + 元命令 + 收尾 SELECT。
+	subprocLSAppendFinals(&steps, lo, hi)
+
+	if len(steps) != subprocLSStepsPerClient {
+		panic(fmt.Sprintf("步骤数错乱: got %d, want %d", len(steps), subprocLSStepsPerClient))
+	}
+	return steps
+}
+
+// subprocLSStepContext 计算每客户端的步进上下文：ID 区间、ID 步进函数、初始 slice。
+func subprocLSStepContext(clientID int) (lo, hi int64, stepID func(int) int64, steps []subprocLSStep) {
+	baseID := int64(subprocLSBaseID) + int64(clientID)*int64(subprocLSRowsPerStep)*int64(subprocLSStepsPerClient)
+	lo = baseID
+	hi = baseID + int64(subprocLSRowsPerStep)*int64(subprocLSStepsPerClient)
+	stepID = func(step int) int64 { return baseID + int64(step)*int64(subprocLSRowsPerStep) }
+	steps = make([]subprocLSStep, 0, subprocLSStepsPerClient)
+	return
+}
+
+// subprocLSAppendRounds 追加 3 轮 (3×INSERT + 1×SELECT + 1×UPDATE) = 15 步。
+//
+// 通过指针接受 slice，避免 append 扩容后调用方拿不到新增元素的经典坑。
+func subprocLSAppendRounds(steps *[]subprocLSStep, lo, hi int64, stepID func(int) int64) {
 	for i := 0; i < 3; i++ {
-		// INSERT 3 行
 		for j := 0; j < subprocLSRowsPerStep; j++ {
 			id := stepID(i*4 + j)
-			steps = append(steps, subprocLSStep{
+			*steps = append(*steps, subprocLSStep{
 				kind:   subprocLSOpInsert,
 				sql:    subprocLSInsertSQL(id, i, j),
 				wantOK: true,
 			})
 		}
-		// SELECT 校验本区间行数
-		steps = append(steps, subprocLSStep{
+		*steps = append(*steps, subprocLSStep{
 			kind:   subprocLSOpSelect,
 			sql:    subprocLSCountInRangeSQL(lo, hi),
 			wantOK: true,
 		})
-		// UPDATE 本区间所有行
-		steps = append(steps, subprocLSStep{
+		*steps = append(*steps, subprocLSStep{
 			kind:   subprocLSOpUpdate,
 			sql:    fmt.Sprintf("UPDATE %s SET score = score + 0.1 WHERE id >= %d AND id < %d", subprocLSSTable, lo, hi),
 			wantOK: true,
 		})
 	}
+}
 
-	// 步骤 13: 故意错误 SQL（测试错误恢复，不破坏后续）。
-	steps = append(steps, subprocLSStep{
+// subprocLSErrorNonexistentSelect 构造对不存在表的 SELECT 错误步骤。
+func subprocLSErrorNonexistentSelect() subprocLSStep {
+	return subprocLSStep{
 		kind:    subprocLSOpError,
 		sql:     "SELECT * FROM nonexistent_table_for_long_session",
 		wantOK:  false,
 		wantMsg: "未存在的表应当返回 code != 0",
-	})
+	}
+}
 
-	// 步骤 14-17: 跨表 SELECT + 元命令。
-	steps = append(steps,
+// subprocLSAppendCrossTable 追加 SHOW/DESCRIBE/aux-count/DELETE 4 步。
+func subprocLSAppendCrossTable(steps *[]subprocLSStep, lo int64) {
+	*steps = append(*steps,
 		subprocLSStep{kind: subprocLSOpSelect, sql: "SHOW TABLES", wantOK: true},
 		subprocLSStep{kind: subprocLSOpShow, sql: "DESCRIBE " + subprocLSSTable, wantOK: true},
 		subprocLSStep{kind: subprocLSOpSelect, sql: "SELECT COUNT(*) AS aux_count FROM " + subprocLSHelperTable, wantOK: true},
-		// 删除本区间第一行（id >= lo，1 行）
 		subprocLSStep{
 			kind:   subprocLSOpDelete,
 			sql:    fmt.Sprintf("DELETE FROM %s WHERE id = %d", subprocLSSTable, lo),
 			wantOK: true,
 		},
 	)
+}
 
-	// 步骤 18-22: 再次写入 + SELECT。
+// subprocLSAppendTailInserts 追加 5 步 INSERT（步骤 21-25）。
+func subprocLSAppendTailInserts(steps *[]subprocLSStep, stepID func(int) int64) {
 	for i := 0; i < 5; i++ {
-		steps = append(steps, subprocLSStep{
+		*steps = append(*steps, subprocLSStep{
 			kind:   subprocLSOpInsert,
 			sql:    subprocLSInsertSQL(stepID(15+i), 99, i),
 			wantOK: true,
 		})
 	}
+}
 
-	// 步骤 26: 再一次故意错误 SQL。
-	steps = append(steps, subprocLSStep{
+// subprocLSErrorColumnMismatch 构造列数不足的 INSERT 错误步骤。
+func subprocLSErrorColumnMismatch() subprocLSStep {
+	return subprocLSStep{
 		kind:    subprocLSOpError,
-		sql:     "INSERT INTO " + subprocLSSTable + " VALUES (1, 1.0)", // 列数不足
+		sql:     "INSERT INTO " + subprocLSSTable + " VALUES (1, 1.0)",
 		wantOK:  false,
 		wantMsg: "列数不足的 INSERT 应当返回 code != 0",
-	})
+	}
+}
 
-	// 步骤 27-33: 收尾 EXPLAIN + COUNT + SELECT + 元命令 + 收尾 SELECT。
-	steps = append(steps,
+// subprocLSAppendFinals 追加收尾 7 步（步骤 27-33）。
+func subprocLSAppendFinals(steps *[]subprocLSStep, lo, hi int64) {
+	*steps = append(*steps,
 		subprocLSStep{kind: subprocLSOpSelect, sql: "EXPLAIN SELECT * FROM " + subprocLSSTable + " LIMIT 5", wantOK: true},
 		subprocLSStep{kind: subprocLSOpSelect, sql: subprocLSCountInRangeSQL(lo, hi), wantOK: true},
 		subprocLSStep{kind: subprocLSOpSelect, sql: "SELECT id, label FROM " + subprocLSSTable + " WHERE id >= " + fmt.Sprint(lo) + " ORDER BY id LIMIT 5", wantOK: true},
 		subprocLSStep{kind: subprocLSOpShow, sql: "SHOW TABLES", wantOK: true},
-		subprocLSStep{kind: subprocLSOpSelect, sql: "DESCRIBE " + subprocLSHelperTable, wantOK: true},
+		subprocLSStep{kind: subprocLSOpShow, sql: "DESCRIBE " + subprocLSHelperTable, wantOK: true},
 		subprocLSStep{kind: subprocLSOpSelect, sql: "SELECT * FROM " + subprocLSSTable + " LIMIT 1", wantOK: true},
 		subprocLSStep{kind: subprocLSOpSelect, sql: "SELECT COUNT(*) AS c FROM " + subprocLSSTable, wantOK: true},
 	)
-
-	if len(steps) != subprocLSStepsPerClient {
-		panic(fmt.Sprintf("步骤数错乱: got %d, want %d", len(steps), subprocLSStepsPerClient))
-	}
-	return steps
 }
 
 // subprocLSCreateMainSQL 生成主表 CREATE TABLE SQL。
@@ -375,6 +408,21 @@ func subprocLSAdminPing(t *testing.T, srv *subprocServer) {
 func TestSubprocServerLongSessionMixedOps(t *testing.T) {
 	t.Parallel()
 
+	srv := subprocLSBootServer(t)
+	clients := subprocLSBuildClients(t, srv)
+
+	// 并发执行：每个客户端在自己的 goroutine 中跑 33 步，
+	// 错误通过 errCh 汇总到主 goroutine。
+	collectClientErrors(t, clients)
+
+	// 收尾：admin 端点探活 + 跨客户端聚合 SELECT 校验。
+	subprocLSAdminPing(t, srv)
+	subprocLSAssertAggregateCount(t, srv)
+}
+
+// subprocLSBootServer 拉起子进程 server 并完成 DDL 准备，失败时 t.Fatal。
+func subprocLSBootServer(t *testing.T) *subprocServer {
+	t.Helper()
 	dataDir := t.TempDir()
 	tcpPort := allocateEphemeralPort(t)
 	httpPort := allocateEphemeralPort(t)
@@ -400,8 +448,12 @@ func TestSubprocServerLongSessionMixedOps(t *testing.T) {
 	if auxSeed.Code != 0 {
 		t.Fatalf("辅助表预灌入失败: code=%d, msg=%q", auxSeed.Code, auxSeed.Message)
 	}
+	return srv
+}
 
-	// 构造客户端：clientID 偶数走 TCP，奇数走 HTTP。
+// subprocLSBuildClients 构造 subprocLSClientCount 个客户端：偶数走 TCP，奇数走 HTTP。
+func subprocLSBuildClients(t *testing.T, srv *subprocServer) []*subprocLSClient {
+	t.Helper()
 	clients := make([]*subprocLSClient, subprocLSClientCount)
 	for i := 0; i < subprocLSClientCount; i++ {
 		via := "tcp"
@@ -410,9 +462,12 @@ func TestSubprocServerLongSessionMixedOps(t *testing.T) {
 		}
 		clients[i] = subprocLSMakeClient(t, srv, i, via)
 	}
+	return clients
+}
 
-	// 并发执行：每个客户端在自己的 goroutine 中跑 33 步，
-	// 错误通过 errCh 汇总到主 goroutine。
+// collectClientErrors 并发执行所有客户端，按发生顺序逐一 t.Fatal 报告首个失败。
+func collectClientErrors(t *testing.T, clients []*subprocLSClient) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	errCh := make(chan error, subprocLSClientCount)
@@ -428,16 +483,14 @@ func TestSubprocServerLongSessionMixedOps(t *testing.T) {
 	}
 	wg.Wait()
 	close(errCh)
-
-	// 收集错误：按发生顺序逐一 t.Fatal 报告，便于定位首个失败客户端。
 	for err := range errCh {
 		t.Fatal(err)
 	}
+}
 
-	// 收尾：admin 端点探活 + 跨客户端聚合 SELECT 校验。
-	subprocLSAdminPing(t, srv)
-
-	// 跨客户端聚合：4 客户端 × 各自 ID 区间的总行数应 >= 客户端数 × 灌入行数。
+// subprocLSAssertAggregateCount 跨客户端聚合 SELECT 校验总行数。
+func subprocLSAssertAggregateCount(t *testing.T, srv *subprocServer) {
+	t.Helper()
 	totalResp := httpPostQuery(t, srv.httpAddr, "SELECT COUNT(*) AS c FROM "+subprocLSSTable)
 	if totalResp.Code != 0 {
 		t.Fatalf("聚合 SELECT 失败: code=%d, msg=%q", totalResp.Code, totalResp.Message)
