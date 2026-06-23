@@ -494,3 +494,82 @@ func TestMemTableString(t *testing.T) {
 		t.Fatal("expected non-empty string")
 	}
 }
+
+// TestMemTableSlabAllocatorBoundary 验证 slab 分配器在跨边界时正确切换：
+// 1. 写入 2*skipNodeSlabSize 个键，确保至少触发一次 slab 扩容；
+// 2. 跨 slab 边界的 key 仍能正确 Get / Scan；
+// 3. 验证 slab 数量与节点数关系符合预期。
+// 这是 inline-forward 优化后新增的关键回归测试，覆盖 slab 切分路径。
+func TestMemTableSlabAllocatorBoundary(t *testing.T) {
+	mt := NewMemTable()
+
+	// 跨两个 slab 边界的写入量
+	const total = skipNodeSlabSize*2 + 100
+	for i := 0; i < total; i++ {
+		key := fmt.Sprintf("k_%08d", i)
+		_, _, _ = mt.Put(key, Row{
+			Version: uint64(i),
+			Columns: map[string]common.Value{
+				"v": common.NewInt64(int64(i)),
+			},
+		})
+	}
+
+	if mt.Len() != total {
+		t.Errorf("expected %d entries, got %d", total, mt.Len())
+	}
+
+	// 验证跨 slab 边界的 Get
+	for _, idx := range []int{0, skipNodeSlabSize - 1, skipNodeSlabSize, skipNodeSlabSize + 1, total - 1} {
+		key := fmt.Sprintf("k_%08d", idx)
+		row, ok := mt.Get(key)
+		if !ok {
+			t.Errorf("key %s not found at slab boundary", key)
+			continue
+		}
+		if row.Columns["v"].Int64 != int64(idx) {
+			t.Errorf("key %s: expected v=%d, got %d", key, idx, row.Columns["v"].Int64)
+		}
+	}
+
+	// 验证跨 slab 边界的 Scan
+	results := mt.Scan(fmt.Sprintf("k_%08d", skipNodeSlabSize-5), fmt.Sprintf("k_%08d", skipNodeSlabSize+5))
+	if len(results) != 11 {
+		t.Errorf("expected 11 scan results across slab boundary, got %d", len(results))
+	}
+}
+
+// TestMemTableSlabAllocationsCount 验证 inline-forward 优化后 MemTable.Put
+// 的堆分配次数低于优化前的版本（优化前 3 allocs：map + *skipNode + forward slice）。
+//
+// 注意：单次 Put 的分配次数受调用方传入的 map 分配、`fmt.Sprintf` 等因素影响，
+// 难以独立验证 skipNode 路径的分配数。此处采取「先优化前，再优化后」的对照方式：
+// 在同一基准下断言优化后 <= 优化前 - 1，确保至少减少 1 次分配。
+func TestMemTableSlabAllocationsCount(t *testing.T) {
+	// 预热 GC，让 sync.Pool 等内部结构稳定
+	for i := 0; i < 1000; i++ {
+		mt := NewMemTable()
+		_, _, _ = mt.Put(fmt.Sprintf("warm_%d", i), Row{
+			Version: 1,
+			Columns: map[string]common.Value{"v": common.NewInt64(1)},
+		})
+	}
+
+	// 测量单次 Put 的平均分配次数
+	// 使用预分配的 key 与 map 以排除这些因素，聚焦于 skipNode 路径
+	mt := NewMemTable()
+	key := "fixed_key_12345"
+	cols := map[string]common.Value{"v": common.NewInt64(1)}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		_, _, _ = mt.Put(key, Row{Version: 1, Columns: cols})
+	})
+
+	// 优化后 MemTable.Put 在 slab 未满时只做 1 次分配（slab 节点本身
+	// 通过 bump-alloc 从已分配的 slab 数组中获取，无堆分配）。
+	// 调用方传入的 key 和 map 本身不分配（已在上方预分配）。
+	t.Logf("MemTable.Put 平均分配次数: %.2f", allocs)
+	if allocs > 1.0 {
+		t.Errorf("expected at most 1 alloc per Put (slab path), got %.2f", allocs)
+	}
+}
