@@ -38,12 +38,9 @@
 package integration
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"sort"
 	"sync"
 	"syscall"
@@ -53,22 +50,23 @@ import (
 
 // 子进程双引擎混合多客户端测试常量。
 const (
-	mxLsmTable     = "mx_lsm_kv" // LSM 引擎共享表名
+	mxLSMTable     = "mx_lsm_kv" // LSM 引擎共享表名
 	mxMemTable     = "mx_mem_kv" // memory 引擎共享表名
 	mxClients      = 4           // 并发客户端数（2 TCP + 2 HTTP）
 	mxPerClient    = 10          // 每客户端写入两表的行数
 	mxBaseID       = 700000      // 客户端 ID 起始偏移，避免与其它测试冲突
 	mxRounds       = 2           // 每客户端工作负载轮数
 	mxRestartTagID = 999000      // 重启后用于验证 LSM 持久化的探针 ID
+	mxErrChCap     = 1024        // worker error channel 容量，避免失败时阻塞导致死锁
 )
 
 // mxTables 是两表名切片，用于跨表循环。所有双表场景（INSERT/COUNT/UPDATE/
-// 错误路径）都通过遍历该切片实现，避免在多处硬编码 [mxLsmTable, mxMemTable]。
-var mxTables = []string{mxLsmTable, mxMemTable}
+// 错误路径）都通过遍历该切片实现，避免在多处硬编码 [mxLSMTable, mxMemTable]。
+var mxTables = []string{mxLSMTable, mxMemTable}
 
 // mxLSMCreateSQL 建表语句：LSM 引擎，4 列含 3 种类型 + NULLABLE。
 func mxLSMCreateSQL() string {
-	return "CREATE TABLE " + mxLsmTable + " (" +
+	return "CREATE TABLE " + mxLSMTable + " (" +
 		"id INT64 NOT NULL, " +
 		"name STRING NULL, " +
 		"score FLOAT64 NULL, " +
@@ -125,50 +123,6 @@ func mxRangeCountSQL(table string, lo, hi int64) string {
 		table, lo, hi)
 }
 
-// httpPostQueryNoTMX 通过 HTTP POST /query 执行单条 SQL，返回 (code, message, rows, data, err)。
-// 与 httpPostQueryNoT 等价，命名加 MX 后缀避免外部测试在重构时误改两套 helper。
-func httpPostQueryNoTMX(ctx context.Context, addr, sql string) (int, string, int, json.RawMessage, error) {
-	body, _ := json.Marshal(map[string]string{"sql": sql})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		"http://"+addr+"/query", bytes.NewReader(body))
-	if err != nil {
-		return -1, "", 0, nil, fmt.Errorf("构造请求失败: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return -1, "", 0, nil, fmt.Errorf("POST /query 失败: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return -1, "", 0, nil, fmt.Errorf("读取 /query 响应失败: %w", err)
-	}
-	var out serverQueryResp
-	if err := json.Unmarshal(data, &out); err != nil {
-		return -1, "", 0, nil, fmt.Errorf("解析 /query 响应失败: %w (raw: %s)", err, data)
-	}
-	return out.Code, out.Message, out.Rows, out.Data, nil
-}
-
-// mxExtractCountJSON 从 json.RawMessage 提取 COUNT 值（HTTP 路径）。
-func mxExtractCountJSON(data json.RawMessage) int64 {
-	if len(data) == 0 || string(data) == "null" {
-		return -1
-	}
-	var rows []map[string]any
-	if err := json.Unmarshal(data, &rows); err != nil || len(rows) == 0 {
-		return -1
-	}
-	for _, v := range rows[0] {
-		if n, ok := toInt64(v); ok {
-			return n
-		}
-	}
-	return -1
-}
-
 // mxExtractSumJSON 从 json.RawMessage 提取 SUM 值。
 // SUM 在空集时返回 NULL，json 解码为 nil → 视作 0 便于断言。
 func mxExtractSumJSON(data json.RawMessage) float64 {
@@ -190,31 +144,6 @@ func mxExtractSumJSON(data json.RawMessage) float64 {
 		}
 	}
 	return 0
-}
-
-// mxParseIDColumn 从响应 Data 解析 id 列。
-func mxParseIDColumn(t *testing.T, data json.RawMessage) []int64 {
-	t.Helper()
-	if len(data) == 0 || string(data) == "null" {
-		return nil
-	}
-	var rows []map[string]any
-	if err := json.Unmarshal(data, &rows); err != nil {
-		t.Fatalf("解析响应 data 失败: %v (raw: %s)", err, data)
-	}
-	out := make([]int64, 0, len(rows))
-	for _, r := range rows {
-		v, ok := r["id"]
-		if !ok {
-			t.Fatalf("响应行缺少 id 字段: %v", r)
-		}
-		id, ok := toInt64(v)
-		if !ok {
-			t.Fatalf("id 字段不是整数: %v", v)
-		}
-		out = append(out, id)
-	}
-	return out
 }
 
 // mxHTTPInsertRound 在第 round 轮对两表执行本 worker 的全部 INSERT。
@@ -243,7 +172,7 @@ func mxHTTPCountRound(
 	ctx context.Context, addr string, clientID, round int, lo, hi int64, errCh chan<- error,
 ) error {
 	for _, table := range mxTables {
-		code, msg, _, countData, err := httpPostQueryNoTMX(ctx, addr, mxRangeCountSQL(table, lo, hi))
+		code, msg, _, countData, err := httpPostQueryNoT(ctx, addr, mxRangeCountSQL(table, lo, hi))
 		if err != nil {
 			wrapped := fmt.Errorf("http 客户端 %d 第 %d 轮 COUNT %s 失败: %w", clientID, round, table, err)
 			errCh <- wrapped
@@ -254,7 +183,7 @@ func mxHTTPCountRound(
 			errCh <- wrapped
 			return wrapped
 		}
-		if got := mxExtractCountJSON(countData); got != mxPerClient {
+		if got := subprocGenExtractCountJSON(countData); got != mxPerClient {
 			wrapped := fmt.Errorf("http 客户端 %d 第 %d 轮 %s COUNT = %d, 期望 %d",
 				clientID, round, table, got, mxPerClient)
 			errCh <- wrapped
@@ -285,7 +214,7 @@ func mxHTTPUpdateRound(
 func mxHTTPExecNoT(
 	ctx context.Context, addr, sql, label string, expectedRows int, errCh chan<- error,
 ) error {
-	code, msg, rows, _, err := httpPostQueryNoTMX(ctx, addr, sql)
+	code, msg, rows, _, err := httpPostQueryNoT(ctx, addr, sql)
 	if err != nil {
 		errCh <- fmt.Errorf("%s 失败: %w", label, err)
 		return fmt.Errorf("%s 失败: %w", label, err)
@@ -323,10 +252,10 @@ func mxHTTPWorker(
 }
 
 // mxTCPInsertRound 在第 round 轮对两表执行本 worker 的全部 INSERT。
+// 不接收 *testing.T：worker goroutine 内禁用 testing.T 方法（见文件头注释）。
 func mxTCPInsertRound(
-	t *testing.T, tc *tcpClient, clientID, round int, errCh chan<- error,
+	tc *tcpClient, clientID, round int, errCh chan<- error,
 ) error {
-	t.Helper()
 	if round != 0 {
 		return nil
 	}
@@ -335,12 +264,14 @@ func mxTCPInsertRound(
 			sql := mxInsertSQL(table, clientID, seq)
 			resp, err := tc.query(sql)
 			if err != nil {
-				errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 INSERT %s 失败: %w", clientID, round, table, err)
-				return err
+				wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 INSERT %s 失败: %w", clientID, round, table, err)
+				errCh <- wrapped
+				return wrapped
 			}
 			if resp.Code != 0 {
-				errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 INSERT %s 业务失败: %s", clientID, round, table, resp.Message)
-				return fmt.Errorf("%s", resp.Message)
+				wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 INSERT %s 业务失败: %s", clientID, round, table, resp.Message)
+				errCh <- wrapped
+				return wrapped
 			}
 		}
 	}
@@ -348,55 +279,62 @@ func mxTCPInsertRound(
 }
 
 // mxTCPCountRound 对两表执行 COUNT 校验，结果必须等于 mxPerClient。
+// 不接收 *testing.T：worker goroutine 内禁用 testing.T 方法（见文件头注释）。
 func mxTCPCountRound(
-	t *testing.T, tc *tcpClient, clientID, round int, lo, hi int64, errCh chan<- error,
+	tc *tcpClient, clientID, round int, lo, hi int64, errCh chan<- error,
 ) error {
-	t.Helper()
 	for _, table := range mxTables {
 		resp, err := tc.query(mxRangeCountSQL(table, lo, hi))
 		if err != nil {
-			errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 COUNT %s 失败: %w", clientID, round, table, err)
-			return err
+			wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 COUNT %s 失败: %w", clientID, round, table, err)
+			errCh <- wrapped
+			return wrapped
 		}
 		if resp.Code != 0 {
-			errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 COUNT %s 业务失败: %s", clientID, round, table, resp.Message)
-			return fmt.Errorf("%s", resp.Message)
+			wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 COUNT %s 业务失败: %s", clientID, round, table, resp.Message)
+			errCh <- wrapped
+			return wrapped
 		}
 		tcpData, err := json.Marshal(resp.Data)
 		if err != nil {
-			errCh <- fmt.Errorf("tcp 客户端 %d marshal %s 响应失败: %w", clientID, table, err)
-			return err
+			wrapped := fmt.Errorf("tcp 客户端 %d marshal %s 响应失败: %w", clientID, table, err)
+			errCh <- wrapped
+			return wrapped
 		}
-		if got := mxExtractCountJSON(tcpData); got != mxPerClient {
-			errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 %s COUNT = %d, 期望 %d",
+		if got := subprocGenExtractCountJSON(tcpData); got != mxPerClient {
+			wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 %s COUNT = %d, 期望 %d",
 				clientID, round, table, got, mxPerClient)
-			return fmt.Errorf("count mismatch")
+			errCh <- wrapped
+			return wrapped
 		}
 	}
 	return nil
 }
 
 // mxTCPUpdateRound 对两表执行本 worker 的全部 UPDATE。
+// 不接收 *testing.T：worker goroutine 内禁用 testing.T 方法（见文件头注释）。
 func mxTCPUpdateRound(
-	t *testing.T, tc *tcpClient, clientID, round int, errCh chan<- error,
+	tc *tcpClient, clientID, round int, errCh chan<- error,
 ) error {
-	t.Helper()
 	for _, table := range mxTables {
 		for seq := 0; seq < mxPerClient; seq++ {
 			sql := mxUpdateSQL(table, clientID, seq, round)
 			resp, err := tc.query(sql)
 			if err != nil {
-				errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 UPDATE %s 失败: %w", clientID, round, table, err)
-				return err
+				wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 UPDATE %s 失败: %w", clientID, round, table, err)
+				errCh <- wrapped
+				return wrapped
 			}
 			if resp.Code != 0 {
-				errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 UPDATE %s 业务失败: %s", clientID, round, table, resp.Message)
-				return fmt.Errorf("%s", resp.Message)
+				wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 UPDATE %s 业务失败: %s", clientID, round, table, resp.Message)
+				errCh <- wrapped
+				return wrapped
 			}
 			if resp.Rows != 1 {
-				errCh <- fmt.Errorf("tcp 客户端 %d 第 %d 轮 UPDATE %s 影响行数 = %d, 期望 1",
+				wrapped := fmt.Errorf("tcp 客户端 %d 第 %d 轮 UPDATE %s 影响行数 = %d, 期望 1",
 					clientID, round, table, resp.Rows)
-				return fmt.Errorf("rows mismatch")
+				errCh <- wrapped
+				return wrapped
 			}
 		}
 	}
@@ -404,19 +342,19 @@ func mxTCPUpdateRound(
 }
 
 // mxTCPWorker 通过 TCP 长连接完成本客户端在两表上的工作负载。
+// 不接收 *testing.T：worker goroutine 内禁用 testing.T 方法（见文件头注释）。
 func mxTCPWorker(
-	t *testing.T, tc *tcpClient, clientID, rounds int, errCh chan<- error,
+	tc *tcpClient, clientID, rounds int, errCh chan<- error,
 ) {
-	t.Helper()
 	lo, hi := mxClientIDRange(clientID)
 	for round := 0; round < rounds; round++ {
-		if err := mxTCPInsertRound(t, tc, clientID, round, errCh); err != nil {
+		if err := mxTCPInsertRound(tc, clientID, round, errCh); err != nil {
 			return
 		}
-		if err := mxTCPCountRound(t, tc, clientID, round, lo, hi, errCh); err != nil {
+		if err := mxTCPCountRound(tc, clientID, round, lo, hi, errCh); err != nil {
 			return
 		}
-		if err := mxTCPUpdateRound(t, tc, clientID, round, errCh); err != nil {
+		if err := mxTCPUpdateRound(tc, clientID, round, errCh); err != nil {
 			return
 		}
 	}
@@ -441,13 +379,13 @@ func mxCheckTableCrossProtocol(
 ) {
 	t.Helper()
 	httpCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	_, _, _, httpData, err := httpPostQueryNoTMX(httpCtx, s.httpAddr,
+	_, _, _, httpData, err := httpPostQueryNoT(httpCtx, s.httpAddr,
 		fmt.Sprintf("SELECT id FROM %s ORDER BY id", table))
 	cancel()
 	if err != nil {
 		t.Fatalf("HTTP SELECT id FROM %s 失败: %v", table, err)
 	}
-	gotHTTP := mxParseIDColumn(t, httpData)
+	gotHTTP := subprocGenParseIDColumn(t, httpData)
 	if !int64SliceEqual(gotHTTP, expected) {
 		t.Errorf("HTTP 返回的 %s id 集合与期望不一致\n期望: %v\n实际: %v",
 			table, expected, gotHTTP)
@@ -470,7 +408,7 @@ func mxCheckTableCrossProtocol(
 	if err != nil {
 		t.Fatalf("marshal TCP %s Data 失败: %v", table, err)
 	}
-	gotTCP := mxParseIDColumn(t, json.RawMessage(tcpData))
+	gotTCP := subprocGenParseIDColumn(t, json.RawMessage(tcpData))
 	if !int64SliceEqual(gotTCP, expected) {
 		t.Errorf("TCP 返回的 %s id 集合与期望不一致\n期望: %v\n实际: %v",
 			table, expected, gotTCP)
@@ -500,7 +438,7 @@ func mxCheckTableErrorPaths(t *testing.T, s *subprocServer, table string) {
 	dupID := int64(mxBaseID)
 	dupSQL := fmt.Sprintf("INSERT INTO %s (id, name, score, active) VALUES (%d, 'dup', 0.0, 1)",
 		table, dupID)
-	code, msg, _, _, err := httpPostQueryNoTMX(ctx, s.httpAddr, dupSQL)
+	code, msg, _, _, err := httpPostQueryNoT(ctx, s.httpAddr, dupSQL)
 	if err != nil {
 		t.Fatalf("%s 重复主键 INSERT 请求失败: %v", table, err)
 	}
@@ -509,7 +447,7 @@ func mxCheckTableErrorPaths(t *testing.T, s *subprocServer, table string) {
 	}
 
 	badColSQL := fmt.Sprintf("SELECT non_existing_col FROM %s LIMIT 1", table)
-	code, msg, _, _, err = httpPostQueryNoTMX(ctx, s.httpAddr, badColSQL)
+	code, msg, _, _, err = httpPostQueryNoT(ctx, s.httpAddr, badColSQL)
 	if err != nil {
 		t.Fatalf("%s 未知列 SELECT 请求失败: %v", table, err)
 	}
@@ -527,7 +465,7 @@ func mxCheckErrorPaths(t *testing.T, s *subprocServer) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	code, _, _, _, err := httpPostQueryNoTMX(ctx, s.httpAddr, "THIS IS NOT SQL")
+	code, _, _, _, err := httpPostQueryNoT(ctx, s.httpAddr, "THIS IS NOT SQL")
 	if err != nil {
 		t.Fatalf("错误语法请求失败: %v", err)
 	}
@@ -556,7 +494,10 @@ func mxRunMixedWorkerPool(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
-	errCh := make(chan error, mxClients*mxRounds*mxPerClient*4)
+	// errCh 容量取一个偏保守的上界（mxErrChCap = 1024），
+	// 避免极少数失败情况下 worker 在 `errCh <-` 处阻塞、主 goroutine 卡在 wg.Wait()。
+	// 上一版 mxClients*mxRounds*mxPerClient*4 = 320 在大量失败时会死锁。
+	errCh := make(chan error, mxErrChCap)
 
 	// 预先建立 2 个 TCP 长连接，避免在 goroutine 内串行 dial。
 	tcpClients := make([]*tcpClient, 0, mxClients/2)
@@ -580,7 +521,7 @@ func mxRunMixedWorkerPool(
 		go func() {
 			defer wg.Done()
 			if isTCP {
-				mxTCPWorker(t, tcpClients[i/2], i, mxRounds, errCh)
+				mxTCPWorker(tcpClients[i/2], i, mxRounds, errCh)
 			} else {
 				mxHTTPWorker(ctx, s.httpAddr, i, mxRounds, errCh)
 			}
@@ -614,19 +555,19 @@ func mxInsertProbeRow(t *testing.T, addr, table string) {
 // 期望行数 = mxClients*mxPerClient（worker 写入）+ 1（探针）。
 func mxCheckLSMPersistedAfterRestart(t *testing.T, s *subprocServer) {
 	t.Helper()
-	probeReadSQL := fmt.Sprintf("SELECT id, name FROM %s WHERE id = %d", mxLsmTable, mxRestartTagID)
+	probeReadSQL := fmt.Sprintf("SELECT id, name FROM %s WHERE id = %d", mxLSMTable, mxRestartTagID)
 	if r := httpPostQuery(t, s.httpAddr, probeReadSQL); r.Code != 0 {
 		t.Fatalf("重启后读取 LSM 探针失败: %s", r.Message)
 	} else if r.Rows != 1 {
 		t.Fatalf("重启后 LSM 探针行数 = %d, 期望 1", r.Rows)
 	}
-	totalSQL := fmt.Sprintf("SELECT COUNT(*) AS c FROM %s", mxLsmTable)
+	totalSQL := fmt.Sprintf("SELECT COUNT(*) AS c FROM %s", mxLSMTable)
 	r := httpPostQuery(t, s.httpAddr, totalSQL)
 	if r.Code != 0 {
 		t.Fatalf("重启后 LSM COUNT 失败: %s", r.Message)
 	}
 	want := int64(mxClients*mxPerClient + 1)
-	if got := mxExtractCountJSON(r.Data); got != want {
+	if got := subprocGenExtractCountJSON(r.Data); got != want {
 		t.Errorf("重启后 LSM COUNT = %d, 期望 %d", got, want)
 	}
 }
@@ -639,18 +580,30 @@ func mxCheckMemLostAfterRestart(t *testing.T, s *subprocServer) {
 	if r.Code != 0 {
 		t.Fatalf("重启后 memory COUNT 失败: %s", r.Message)
 	}
-	if got := mxExtractCountJSON(r.Data); got != 0 {
+	if got := subprocGenExtractCountJSON(r.Data); got != 0 {
 		t.Errorf("重启后 memory COUNT = %d, 期望 0（memory 表重启即丢）", got)
 	}
 }
 
 // mxGracefulStop 向子进程发送 SIGTERM 并等待优雅退出。
-func mxGracefulStop(t *testing.T, s *subprocServer) {
+//
+// 退出码判断必须分两步：
+//  1. err != nil：waitForSubprocessExit 自身失败（超时、进程状态查询错误等）。
+//  2. err == nil && code != 0：进程退出但非零码（业务错误、panic 后非零退出等）。
+//
+// 合并条件 `err != nil && code != 0` 会同时漏判上面两类异常。
+func mxGracefulStop(t *testing.T, s **subprocServer) {
 	t.Helper()
-	sendSignalToSubprocess(t, s, syscall.SIGTERM)
-	if code, err := waitForSubprocessExit(t, s, subprocStopTimeout); err != nil && code != 0 {
-		t.Fatalf("子进程退出码 = %d, 期望 0; err = %v", code, err)
+	sendSignalToSubprocess(t, *s, syscall.SIGTERM)
+	code, err := waitForSubprocessExit(t, *s, subprocStopTimeout)
+	if err != nil {
+		t.Fatalf("等待子进程退出失败: %v (code=%d)", err, code)
 	}
+	if code != 0 {
+		t.Fatalf("子进程退出码 = %d, 期望 0", code)
+	}
+	// 标记指针为 nil，避免 t.Cleanup 重复 stop 子进程。
+	*s = nil
 }
 
 // TestSubprocMixedEngineMultiClient 端到端：子进程 server + 多客户端 + 双引擎（LSM + memory）混合一般 SQL。
@@ -681,9 +634,9 @@ func TestSubprocMixedEngineMultiClient(t *testing.T) {
 	mxCheckCrossProtocolConsistency(t, s, mxExpectedIDs())
 	mxCheckErrorPaths(t, s)
 
-	mxInsertProbeRow(t, s.httpAddr, mxLsmTable)
+	mxInsertProbeRow(t, s.httpAddr, mxLSMTable)
 	mxInsertProbeRow(t, s.httpAddr, mxMemTable)
-	mxGracefulStop(t, s)
+	mxGracefulStop(t, &s)
 
 	s2, log2 := startSubprocessServer(t,
 		allocateEphemeralPort(t), allocateEphemeralPort(t), dir)
@@ -698,7 +651,7 @@ func TestSubprocMixedEngineMultiClient(t *testing.T) {
 
 	mxCheckLSMPersistedAfterRestart(t, s2)
 	mxCheckMemLostAfterRestart(t, s2)
-	mxGracefulStop(t, s2)
+	mxGracefulStop(t, &s2)
 }
 
 // mxSUMWorker 单个 HTTP worker 完成 INSERT + UPDATE。
@@ -772,7 +725,10 @@ func TestSubprocMixedEngineSUMConsistency(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var wg sync.WaitGroup
-	errCh := make(chan error, mxClients*mxPerClient*2)
+	// errCh 容量取一个偏保守的上界（mxErrChCap = 1024），
+	// 避免极少数失败情况下 worker 在 `errCh <-` 处阻塞、主 goroutine 卡在 wg.Wait()。
+	// 上一版 mxClients*mxPerClient*2 = 80 在大量失败时会死锁。
+	errCh := make(chan error, mxErrChCap)
 	for i := 0; i < mxClients; i++ {
 		i := i
 		wg.Add(1)
@@ -795,5 +751,5 @@ func TestSubprocMixedEngineSUMConsistency(t *testing.T) {
 		mxCheckTableSUM(t, s.httpAddr, table, expectedSum)
 	}
 
-	mxGracefulStop(t, s)
+	mxGracefulStop(t, &s)
 }
