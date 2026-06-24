@@ -30,6 +30,9 @@
 //   - RYW 校验：INSERT 后立即 sleep 0（无延迟）读取 + sleep 50ms 读取，
 //     两次都应看到新行
 //   - 数值字段按 float64 容差 1e-9 比较；字符串按精确比较
+//
+// 函数拆分说明：CI 限制单函数 ≤ 80 行 + 圈复杂度 ≤ 15，因此每个测试
+// 函数只做编排，具体读写逻辑下沉到 *step* / *perProtocol* 辅助函数。
 package integration
 
 import (
@@ -48,6 +51,10 @@ const (
 	rywBatchPerIns  = 2 // 每次 INSERT 的行数（tag=0 / tag=1 各一行，用于 50/50 拆分）
 	rywBaseID       = int64(50000)
 )
+
+// rywProtocols 三协议集合（与 protocolParityProtocols 顺序无关，本地
+// 用一个独立常量便于在不依赖外部变量的情况下做单测）。
+var rywProtocols = []string{"tcp", "http", "pg"}
 
 // rywClient 单一协议的客户端封装。
 //
@@ -89,41 +96,49 @@ func (c *rywClient) rywInsert(id int64, name string, amount float64, tag int64) 
 		"INSERT INTO %s (id, name, amount, tag) VALUES (%d, '%s', %.4f, %d)",
 		rywTable, id, name, amount, tag,
 	)
-	switch c.via {
+	return rywExecSimple(c.srv, c.tcp, c.via, sql, "INSERT")
+}
+
+// rywExecSimple 在指定协议上执行单条 DML，返回协议级错误。
+//
+// 共享 INSERT/UPDATE/DELETE 的执行路径：构造 SQL 后按协议发送，统一处理
+// code != 0 / PG 错误消息等。
+func rywExecSimple(s *sqlServer, tc *tcpClient, via, sql, op string) error {
+	switch via {
 	case "tcp":
-		resp, err := c.tcp.query(sql)
+		resp, err := tc.query(sql)
 		if err != nil {
-			return fmt.Errorf("tcp INSERT: %w", err)
+			return fmt.Errorf("tcp %s: %w", op, err)
 		}
 		if resp.Code != 0 {
-			return fmt.Errorf("tcp INSERT code=%d: %s", resp.Code, resp.Message)
+			return fmt.Errorf("tcp %s code=%d: %s", op, resp.Code, resp.Message)
 		}
 	case "http":
-		resp, err := httpQuery(c.srv.httpAddr, sql)
+		resp, err := httpQuery(s.httpAddr, sql)
 		if err != nil {
-			return fmt.Errorf("http INSERT: %w", err)
+			return fmt.Errorf("http %s: %w", op, err)
 		}
 		if resp.Code != 0 {
-			return fmt.Errorf("http INSERT code=%d: %s", resp.Code, resp.Message)
+			return fmt.Errorf("http %s code=%d: %s", op, resp.Code, resp.Message)
 		}
 	case "pg":
-		pg, err := dialPGWireErr(c.srv.srv.PGAddr())
+		pg, err := dialPGWireErr(s.srv.PGAddr())
 		if err != nil {
-			return fmt.Errorf("pg 拨号: %w", err)
+			return fmt.Errorf("pg %s 拨号: %w", op, err)
 		}
 		defer pg.close()
 		if err := pg.handshakeErr(); err != nil {
-			return fmt.Errorf("pg 握手: %w", err)
+			return fmt.Errorf("pg %s 握手: %w", op, err)
 		}
 		res, err := pg.sendQueryRead(sql)
 		if err != nil {
-			return fmt.Errorf("pg INSERT: %w", err)
+			return fmt.Errorf("pg %s: %w", op, err)
 		}
 		if res.errMsg != "" {
-			return fmt.Errorf("pg INSERT 错误: %s", res.errMsg)
+			return fmt.Errorf("pg %s 错误: %s", op, res.errMsg)
 		}
 	default:
-		return fmt.Errorf("未知协议: %s", c.via)
+		return fmt.Errorf("未知协议: %s", via)
 	}
 	return nil
 }
@@ -137,59 +152,74 @@ func rywSelectByID(t *testing.T, s *sqlServer, via string, id int64) (map[string
 	sql := fmt.Sprintf("SELECT id, name, amount FROM %s WHERE id = %d", rywTable, id)
 	switch via {
 	case "tcp":
-		tc, err := dialTCP(s.tcpAddr)
-		if err != nil {
-			return nil, fmt.Errorf("tcp 拨号: %w", err)
-		}
-		defer tc.close()
-		resp, err := tc.query(sql)
-		if err != nil {
-			return nil, fmt.Errorf("tcp SELECT: %w", err)
-		}
-		if resp.Code != 0 {
-			return nil, fmt.Errorf("tcp SELECT code=%d: %s", resp.Code, resp.Message)
-		}
-		rows := respRows(resp)
-		if len(rows) == 0 {
-			return nil, nil
-		}
-		return rows[0], nil
+		return rywSelectByIDTCP(s, sql)
 	case "http":
-		resp, err := httpQuery(s.httpAddr, sql)
-		if err != nil {
-			return nil, fmt.Errorf("http SELECT: %w", err)
-		}
-		if resp.Code != 0 {
-			return nil, fmt.Errorf("http SELECT code=%d: %s", resp.Code, resp.Message)
-		}
-		rows := respRows(resp)
-		if len(rows) == 0 {
-			return nil, nil
-		}
-		return rows[0], nil
+		return rywSelectByIDHTTP(s, sql)
 	case "pg":
-		pg, err := dialPGWireErr(s.srv.PGAddr())
-		if err != nil {
-			return nil, fmt.Errorf("pg 拨号: %w", err)
-		}
-		defer pg.close()
-		if err := pg.handshakeErr(); err != nil {
-			return nil, fmt.Errorf("pg 握手: %w", err)
-		}
-		res, err := pg.sendQueryRead(sql)
-		if err != nil {
-			return nil, fmt.Errorf("pg SELECT: %w", err)
-		}
-		if res.errMsg != "" {
-			return nil, fmt.Errorf("pg SELECT 错误: %s", res.errMsg)
-		}
-		if len(res.rows) == 0 {
-			return nil, nil
-		}
-		return pgRowToMap(res.columns, res.rows[0]), nil
+		return rywSelectByIDPG(s, sql)
 	default:
 		return nil, fmt.Errorf("未知协议: %s", via)
 	}
+}
+
+// rywSelectByIDTCP TCP 协议 SELECT 单行。
+func rywSelectByIDTCP(s *sqlServer, sql string) (map[string]any, error) {
+	tc, err := dialTCP(s.tcpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("tcp 拨号: %w", err)
+	}
+	defer tc.close()
+	resp, err := tc.query(sql)
+	if err != nil {
+		return nil, fmt.Errorf("tcp SELECT: %w", err)
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("tcp SELECT code=%d: %s", resp.Code, resp.Message)
+	}
+	rows := respRows(resp)
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return rows[0], nil
+}
+
+// rywSelectByIDHTTP HTTP 协议 SELECT 单行。
+func rywSelectByIDHTTP(s *sqlServer, sql string) (map[string]any, error) {
+	resp, err := httpQuery(s.httpAddr, sql)
+	if err != nil {
+		return nil, fmt.Errorf("http SELECT: %w", err)
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("http SELECT code=%d: %s", resp.Code, resp.Message)
+	}
+	rows := respRows(resp)
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return rows[0], nil
+}
+
+// rywSelectByIDPG PG wire 协议 SELECT 单行。
+func rywSelectByIDPG(s *sqlServer, sql string) (map[string]any, error) {
+	pg, err := dialPGWireErr(s.srv.PGAddr())
+	if err != nil {
+		return nil, fmt.Errorf("pg 拨号: %w", err)
+	}
+	defer pg.close()
+	if err := pg.handshakeErr(); err != nil {
+		return nil, fmt.Errorf("pg 握手: %w", err)
+	}
+	res, err := pg.sendQueryRead(sql)
+	if err != nil {
+		return nil, fmt.Errorf("pg SELECT: %w", err)
+	}
+	if res.errMsg != "" {
+		return nil, fmt.Errorf("pg SELECT 错误: %s", res.errMsg)
+	}
+	if len(res.rows) == 0 {
+		return nil, nil
+	}
+	return pgRowToMap(res.columns, res.rows[0]), nil
 }
 
 // rywAssertSameRow 三协议读到同一行时，关键字段必须一致。
@@ -213,7 +243,6 @@ func rywAssertSameRow(t *testing.T, id int64, viaToRow map[string]map[string]any
 		if row["name"] != baseName {
 			t.Errorf("[id=%d] name 不一致: tcp=%q %s=%q", id, baseName, via, row["name"])
 		}
-		// PG wire 文本协议：amount 为字符串，解析后再比
 		var amt float64
 		switch n := row["amount"].(type) {
 		case float64:
@@ -233,6 +262,27 @@ func rywAssertSameRow(t *testing.T, id int64, viaToRow map[string]map[string]any
 			t.Errorf("[id=%d] amount 不一致: tcp=%v %s=%v", id, baseAmt, via, amt)
 		}
 	}
+}
+
+// rywReadAllProtocols 一次 SELECT 全部三个协议，返回 via -> row。
+//
+// 任何协议出错 / 缺行通过 t.Errorf 报告（不致命，便于聚合报告）。
+func rywReadAllProtocols(t *testing.T, s *sqlServer, id int64, label string) map[string]map[string]any {
+	t.Helper()
+	out := make(map[string]map[string]any, len(rywProtocols))
+	for _, via := range rywProtocols {
+		row, err := rywSelectByID(t, s, via, id)
+		if err != nil {
+			t.Errorf("[%s, via=%s] SELECT 失败: %v", label, via, err)
+			continue
+		}
+		if row == nil {
+			t.Errorf("[%s, via=%s] 期望读到行，got nil", label, via)
+			continue
+		}
+		out[via] = row
+	}
+	return out
 }
 
 // TestThreeProtocolReadYourWrites 验证 INSERT/UPDATE/DELETE 之后三协议
@@ -258,73 +308,51 @@ func TestThreeProtocolReadYourWrites(t *testing.T) {
 	}
 
 	// Step 2: 多时刻 RYW SELECT，应全可见且一致
+	rywAssertReadYourWrites(t, s, targetID)
+
+	// Step 3: HTTP UPDATE
+	rywUpdateAndAssertVisible(t, s, targetID)
+
+	// Step 4: PG wire DELETE
+	rywDeleteAndAssertGone(t, s, targetID)
+}
+
+// rywAssertReadYourWrites 多次间隔（0/10/50/100ms）下三协议读到同一行。
+func rywAssertReadYourWrites(t *testing.T, s *sqlServer, id int64) {
+	t.Helper()
 	delays := []time.Duration{0, 10 * time.Millisecond, 50 * time.Millisecond, 100 * time.Millisecond}
 	for i, d := range delays {
 		time.Sleep(d)
-		got := make(map[string]map[string]any, 3)
-		for _, via := range []string{"tcp", "http", "pg"} {
-			row, err := rywSelectByID(t, s, via, targetID)
-			if err != nil {
-				t.Errorf("[iter=%d, delay=%v, via=%s] SELECT 失败: %v", i, d, via, err)
-				continue
-			}
-			if row == nil {
-				t.Errorf("[iter=%d, delay=%v, via=%s] 期望读到行，got nil", i, d, via)
-				continue
-			}
-			got[via] = row
-		}
-		rywAssertSameRow(t, targetID, got)
+		got := rywReadAllProtocols(t, s, id, fmt.Sprintf("RYW iter=%d delay=%v", i, d))
+		rywAssertSameRow(t, id, got)
 	}
+}
 
-	// Step 3: HTTP 客户端 UPDATE，三协议应看到新 amount
-	httpC := rywNewClient(s, "http")
-	// HTTP 客户端无连接，无需 Close
+// rywUpdateAndAssertVisible 经 HTTP UPDATE 目标行后三协议 SELECT 应可见新值。
+func rywUpdateAndAssertVisible(t *testing.T, s *sqlServer, id int64) {
+	t.Helper()
 	updateSQL := fmt.Sprintf("UPDATE %s SET amount = 999.99, name = 'http-updated' WHERE id = %d",
-		rywTable, targetID)
+		rywTable, id)
 	resp, err := httpQuery(s.httpAddr, updateSQL)
 	if err != nil || resp.Code != 0 {
 		t.Fatalf("HTTP UPDATE 失败: err=%v code=%d msg=%s", err, resp.Code, resp.Message)
 	}
-	got := make(map[string]map[string]any, 3)
-	for _, via := range []string{"tcp", "http", "pg"} {
-		row, err := rywSelectByID(t, s, via, targetID)
-		if err != nil {
-			t.Errorf("[UPDATE, via=%s] SELECT 失败: %v", via, err)
-			continue
-		}
-		if row == nil {
-			t.Errorf("[UPDATE, via=%s] 期望读到行，got nil", via)
-			continue
-		}
-		got[via] = row
-	}
-	rywAssertSameRow(t, targetID, got)
+	got := rywReadAllProtocols(t, s, id, "UPDATE 后")
+	rywAssertSameRow(t, id, got)
 	if name, _ := got["tcp"]["name"].(string); name != "http-updated" {
 		t.Errorf("UPDATE 后 name 应为 'http-updated'，得到 %q", name)
 	}
-	_ = httpC
+}
 
-	// Step 4: PG wire 客户端 DELETE，三协议应返回 nil
-	pgC := rywNewClient(s, "pg")
-	_ = pgC
-	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE id = %d", rywTable, targetID)
-	pg, err := dialPGWireErr(s.srv.PGAddr())
-	if err != nil {
-		t.Fatalf("pg 拨号: %v", err)
+// rywDeleteAndAssertGone 经 PG wire DELETE 后三协议 SELECT 应返回 nil。
+func rywDeleteAndAssertGone(t *testing.T, s *sqlServer, id int64) {
+	t.Helper()
+	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE id = %d", rywTable, id)
+	if err := rywExecSimple(s, nil, "pg", deleteSQL, "DELETE"); err != nil {
+		t.Fatalf("pg DELETE 失败: %v", err)
 	}
-	if err := pg.handshakeErr(); err != nil {
-		pg.close()
-		t.Fatalf("pg 握手: %v", err)
-	}
-	if res, err := pg.sendQueryRead(deleteSQL); err != nil || res.errMsg != "" {
-		pg.close()
-		t.Fatalf("pg DELETE 失败: err=%v msg=%s", err, res.errMsg)
-	}
-	pg.close()
-
-	for _, via := range []string{"tcp", "http", "pg"} {
-		row, err := rywSelectByID(t, s, via, targetID)
+	for _, via := range rywProtocols {
+		row, err := rywSelectByID(t, s, via, id)
 		if err != nil {
 			t.Errorf("[DELETE, via=%s] SELECT 失败: %v", via, err)
 			continue
@@ -373,67 +401,86 @@ func TestThreeProtocolConcurrentCRUD(t *testing.T) {
 	s := startPGWireServer(t)
 	rywCreateTable(t, s)
 
-	totalRows := rywClientsPer * len(protocolParityProtocols) * rywOpsPerClient * rywBatchPerIns
+	totalRows := rywClientsPer * len(rywProtocols) * rywOpsPerClient * rywBatchPerIns
 
 	// Step 1: 6 客户端并发 INSERT
+	rywConcurrentInsert(t, s)
+	if t.Failed() {
+		return // 后续断言无意义，直接返回；defer 由 t.Cleanup 处理
+	}
+
+	// Step 2: 三协议 SELECT * 验证总行数
+	rywAssertCount(t, s, "INSERT 后", totalRows)
+
+	// Step 3: HTTP 单协议发起 UPDATE（tag=0 的 amount 增加 1000）。
+	rywUpdateHalfAndAssert(t, s)
+
+	// Step 4: PG wire 单协议发起 DELETE（tag=1 的行）。
+	if err := rywDeleteTagOneViaPG(s); err != nil {
+		t.Fatalf("pg DELETE 失败: %v", err)
+	}
+
+	// Step 5: 三协议 COUNT 验证
+	rywAssertCount(t, s, "DELETE 后", totalRows/2)
+}
+
+// rywConcurrentInsert 启动 6 个客户端并发执行 INSERT。
+//
+// 任一客户端失败通过 t.Errorf 报告，函数返回时如 t.Failed() 表明本阶段
+// 失败。
+func rywConcurrentInsert(t *testing.T, s *sqlServer) {
+	t.Helper()
 	var wg sync.WaitGroup
-	var failMu sync.Mutex
-	var firstErr error
 	for c := 0; c < rywClientsPer; c++ {
-		for _, via := range []string{"tcp", "http", "pg"} {
+		for _, via := range rywProtocols {
 			wg.Add(1)
-			go func(via string, clientID int) {
-				defer wg.Done()
-				cl := rywNewClient(s, via)
-				defer cl.rywClose()
-				for op := 0; op < rywOpsPerClient; op++ {
-					for j := 0; j < rywBatchPerIns; j++ {
-						id := rywComputeID(via, clientID, op, j)
-						name := fmt.Sprintf("%s-c%d-o%d-r%d", via, clientID, op, j)
-						amount := float64(id) * 0.5
-						// 用 j 决定 tag：j=0 -> tag=0（UPDATE 目标），
-						// j=1 -> tag=1（DELETE 目标）；与 rywBatchPerIns=2 配合
-						// 形成 50/50 拆分。
-						tag := int64(j)
-						if err := cl.rywInsert(id, name, amount, tag); err != nil {
-							failMu.Lock()
-							if firstErr == nil {
-								firstErr = err
-							}
-							failMu.Unlock()
-							// 通过 panic 跳出 goroutine；测试设计上不预期此分支
-							// 进入，t.Errorf 由主 goroutine 统一处理
-							t.Errorf("[%s c%d o%d r%d] INSERT 失败: %v", via, clientID, op, j, err)
-							return
-						}
-					}
-				}
-			}(via, c)
+			go rywRunOneInserts(t, &wg, s, via, c)
 		}
 	}
 	wg.Wait()
-	if t.Failed() {
-		t.Fatalf("并发 INSERT 阶段失败，firstErr=%v", firstErr)
-	}
+}
 
-	// Step 2: 三协议 SELECT * 验证总行数与一致性
-	wantRows := totalRows
-	for _, via := range protocolParityProtocols {
+// rywRunOneInserts 单个客户端的 INSERT 循环。
+func rywRunOneInserts(t *testing.T, wg *sync.WaitGroup, s *sqlServer, via string, clientID int) {
+	defer wg.Done()
+	cl := rywNewClient(s, via)
+	defer cl.rywClose()
+	for op := 0; op < rywOpsPerClient; op++ {
+		for j := 0; j < rywBatchPerIns; j++ {
+			id := rywComputeID(via, clientID, op, j)
+			name := fmt.Sprintf("%s-c%d-o%d-r%d", via, clientID, op, j)
+			amount := float64(id) * 0.5
+			// j 决定 tag：j=0 -> tag=0（UPDATE 目标），j=1 -> tag=1（DELETE 目标）。
+			tag := int64(j)
+			if err := cl.rywInsert(id, name, amount, tag); err != nil {
+				t.Errorf("[%s c%d o%d r%d] INSERT 失败: %v", via, clientID, op, j, err)
+				return
+			}
+		}
+	}
+}
+
+// rywAssertCount 在三协议上断言行数等于 want。
+func rywAssertCount(t *testing.T, s *sqlServer, label string, want int) {
+	t.Helper()
+	for _, via := range rywProtocols {
 		got, err := rywCountViaProtocol(s, via)
 		if err != nil {
-			t.Errorf("[%s] COUNT 失败: %v", via, err)
+			t.Errorf("[%s, %s] COUNT 失败: %v", label, via, err)
 			continue
 		}
-		if got != wantRows {
-			t.Errorf("[%s] COUNT 期望 %d，得到 %d", via, wantRows, got)
+		if got != want {
+			t.Errorf("[%s, %s] COUNT 期望 %d，得到 %d", label, via, want, got)
 		}
 	}
+}
 
-	// Step 3: HTTP 单协议发起 UPDATE（tag=0 的 amount 增加 1000）。
-	//
-	// 注：当前 SQL 解析器不支持字符串连接符 ||，所以 name 字段不参与
-	// UPDATE；用 amount 单字段断言变更即可。三个协议在 UPDATE 后应读
-	// 到同一新值。
+// rywUpdateHalfAndAssert HTTP 单协议 UPDATE tag=0 的 amount +1000，并三协议校验。
+//
+// 注：当前 SQL 解析器不支持字符串连接符 ||，所以 name 字段不参与 UPDATE；
+// 用 amount 单字段断言变更即可。
+func rywUpdateHalfAndAssert(t *testing.T, s *sqlServer) {
+	t.Helper()
 	updateSQL := fmt.Sprintf("UPDATE %s SET amount = amount + 1000 WHERE tag = 0", rywTable)
 	resp, err := httpQuery(s.httpAddr, updateSQL)
 	if err != nil {
@@ -442,29 +489,17 @@ func TestThreeProtocolConcurrentCRUD(t *testing.T) {
 	if resp.Code != 0 {
 		t.Fatalf("HTTP UPDATE code=%d: %s", resp.Code, resp.Message)
 	}
-	// 验证 tag=0（j=0）的 amount 增加，tag=1（j=1）的不变
-	for _, via := range protocolParityProtocols {
-		row, err := rywSelectByID(t, s, via, rywComputeID("tcp", 0, 0, 0))
+	targetID := rywComputeID("tcp", 0, 0, 0)
+	baseAmount := float64(targetID) * 0.5
+	for _, via := range rywProtocols {
+		row, err := rywSelectByID(t, s, via, targetID)
 		if err != nil || row == nil {
 			t.Errorf("[UPDATE, via=%s] 抽样 id=%d 失败: err=%v row=%v",
-				via, rywComputeID("tcp", 0, 0, 0), err, row)
+				via, targetID, err, row)
 			continue
 		}
-		baseAmount := float64(rywComputeID("tcp", 0, 0, 0)) * 0.5
-		// PG wire 走文本协议：amount 可能是字符串；用 pgFloat 兜底
-		var gotAmt float64
-		switch n := row["amount"].(type) {
-		case float64:
-			gotAmt = n
-		case string:
-			f, perr := strconv.ParseFloat(n, 64)
-			if perr != nil {
-				t.Errorf("[UPDATE, via=%s] amount 解析失败: %v (raw=%q)", via, perr, n)
-				continue
-			}
-			gotAmt = f
-		default:
-			t.Errorf("[UPDATE, via=%s] amount 类型异常: %T (raw=%v)", via, row["amount"], row["amount"])
+		gotAmt, ok := rywParseAmount(t, via, row["amount"])
+		if !ok {
 			continue
 		}
 		if diff := gotAmt - (baseAmount + 1000); diff < -1e-9 || diff > 1e-9 {
@@ -472,44 +507,37 @@ func TestThreeProtocolConcurrentCRUD(t *testing.T) {
 				via, baseAmount+1000, gotAmt)
 		}
 	}
+}
 
-	// Step 4: PG wire 单协议发起 DELETE（tag=1 的行）。
-	pg, err := dialPGWireErr(s.srv.PGAddr())
-	if err != nil {
-		t.Fatalf("pg 拨号: %v", err)
-	}
-	if err := pg.handshakeErr(); err != nil {
-		pg.close()
-		t.Fatalf("pg 握手: %v", err)
-	}
-	deleteSQL := fmt.Sprintf("DELETE FROM %s WHERE tag = 1", rywTable)
-	if res, err := pg.sendQueryRead(deleteSQL); err != nil {
-		pg.close()
-		t.Fatalf("pg DELETE 失败: %v", err)
-	} else if res.errMsg != "" {
-		pg.close()
-		t.Fatalf("pg DELETE 错误: %s", res.errMsg)
-	}
-	pg.close()
-
-	// Step 5: 三协议 COUNT 验证
-	wantAfterDelete := wantRows / 2
-	for _, via := range protocolParityProtocols {
-		got, err := rywCountViaProtocol(s, via)
+// rywParseAmount 统一解析 amount 字段：float64 直读，string 走 ParseFloat。
+func rywParseAmount(t *testing.T, via string, raw any) (float64, bool) {
+	t.Helper()
+	switch n := raw.(type) {
+	case float64:
+		return n, true
+	case string:
+		f, err := strconv.ParseFloat(n, 64)
 		if err != nil {
-			t.Errorf("[DELETE, %s] COUNT 失败: %v", via, err)
-			continue
+			t.Errorf("[%s] amount 解析失败: %v (raw=%q)", via, err, n)
+			return 0, false
 		}
-		if got != wantAfterDelete {
-			t.Errorf("[DELETE, %s] COUNT 期望 %d，得到 %d", via, wantAfterDelete, got)
-		}
+		return f, true
+	default:
+		t.Errorf("[%s] amount 类型异常: %T (raw=%v)", via, raw, raw)
+		return 0, false
 	}
+}
+
+// rywDeleteTagOneViaPG 经 PG wire 发起 DELETE WHERE tag=1。
+func rywDeleteTagOneViaPG(s *sqlServer) error {
+	sql := fmt.Sprintf("DELETE FROM %s WHERE tag = 1", rywTable)
+	return rywExecSimple(s, nil, "pg", sql, "DELETE")
 }
 
 // rywComputeID 计算各客户端写入的唯一 id。
 //
 // 编码规则：id = rywBaseID + viaOffset*100000 + clientID*1000 + op*100 + j。
-// viaOffset 通过 protocolParityProtocols 顺序取得（tcp=0, http=1, pg=2）。
+// viaOffset 通过 protocolParityProtocols 顺序取得（http=0, tcp=1, pg=2）。
 // 各协议段 100000 容量足够 rywOpsPerClient*rywBatchPerIns 行；每客户端 1000
 // 容量足够 rywOpsPerClient*rywBatchPerIns 行。
 func rywComputeID(via string, clientID, op, j int) int64 {
@@ -529,7 +557,7 @@ func rywComputeID(via string, clientID, op, j int) int64 {
 // rywCountViaProtocol 按协议执行 COUNT(*) 返回行数。
 func rywCountViaProtocol(s *sqlServer, via string) (int, error) {
 	sql := fmt.Sprintf("SELECT COUNT(*) AS c FROM %s", rywTable)
-	row, err := rywSingleValueByProtocol(s, via, sql, "c")
+	row, err := rywSingleValueByProtocol(s, via, sql)
 	if err != nil {
 		return 0, err
 	}
@@ -548,72 +576,87 @@ func rywCountViaProtocol(s *sqlServer, via string) (int, error) {
 	return 0, fmt.Errorf("[%s] COUNT 返回值类型异常: %T", via, row)
 }
 
-// rywSingleValueByProtocol 按协议执行 SQL 并取第一行第一列。
-func rywSingleValueByProtocol(s *sqlServer, via, sql, _ string) (any, error) {
+// rywSingleValueByProtocol 按协议执行 SQL 并取第一行第一列（dispatcher）。
+func rywSingleValueByProtocol(s *sqlServer, via, sql string) (any, error) {
 	switch via {
 	case "tcp":
-		tc, err := dialTCP(s.tcpAddr)
-		if err != nil {
-			return nil, err
-		}
-		defer tc.close()
-		resp, err := tc.query(sql)
-		if err != nil {
-			return nil, err
-		}
-		if resp.Code != 0 {
-			return nil, fmt.Errorf("code=%d: %s", resp.Code, resp.Message)
-		}
-		rows := respRows(resp)
-		if len(rows) == 0 {
-			return nil, fmt.Errorf("无返回行")
-		}
-		for _, v := range rows[0] {
-			return v, nil
-		}
-		return nil, nil
+		return rywSingleValueByProtocolTCP(s, sql)
 	case "http":
-		resp, err := httpQuery(s.httpAddr, sql)
-		if err != nil {
-			return nil, err
-		}
-		if resp.Code != 0 {
-			return nil, fmt.Errorf("code=%d: %s", resp.Code, resp.Message)
-		}
-		rows := respRows(resp)
-		if len(rows) == 0 {
-			return nil, fmt.Errorf("无返回行")
-		}
-		for _, v := range rows[0] {
-			return v, nil
-		}
-		return nil, nil
+		return rywSingleValueByProtocolHTTP(s, sql)
 	case "pg":
-		pg, err := dialPGWireErr(s.srv.PGAddr())
-		if err != nil {
-			return nil, err
-		}
-		defer pg.close()
-		if err := pg.handshakeErr(); err != nil {
-			return nil, err
-		}
-		res, err := pg.sendQueryRead(sql)
-		if err != nil {
-			return nil, err
-		}
-		if res.errMsg != "" {
-			return nil, fmt.Errorf("pg 错误: %s", res.errMsg)
-		}
-		if len(res.rows) == 0 {
-			return nil, fmt.Errorf("无返回行")
-		}
-		// PG wire 返回的是 []any，找首个非 nil 值
-		for _, v := range res.rows[0] {
-			if v != nil {
-				return v, nil
-			}
-		}
-		return nil, nil
+		return rywSingleValueByProtocolPG(s, sql)
 	}
 	return nil, fmt.Errorf("未知协议: %s", via)
+}
+
+// rywSingleValueByProtocolTCP TCP 协议取单值。
+func rywSingleValueByProtocolTCP(s *sqlServer, sql string) (any, error) {
+	tc, err := dialTCP(s.tcpAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer tc.close()
+	resp, err := tc.query(sql)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("code=%d: %s", resp.Code, resp.Message)
+	}
+	rows := respRows(resp)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("无返回行")
+	}
+	for _, v := range rows[0] {
+		return v, nil
+	}
+	return nil, nil
+}
+
+// rywSingleValueByProtocolHTTP HTTP 协议取单值。
+func rywSingleValueByProtocolHTTP(s *sqlServer, sql string) (any, error) {
+	resp, err := httpQuery(s.httpAddr, sql)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("code=%d: %s", resp.Code, resp.Message)
+	}
+	rows := respRows(resp)
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("无返回行")
+	}
+	for _, v := range rows[0] {
+		return v, nil
+	}
+	return nil, nil
+}
+
+// rywSingleValueByProtocolPG PG wire 协议取单值。
+func rywSingleValueByProtocolPG(s *sqlServer, sql string) (any, error) {
+	pg, err := dialPGWireErr(s.srv.PGAddr())
+	if err != nil {
+		return nil, err
+	}
+	defer pg.close()
+	if err := pg.handshakeErr(); err != nil {
+		return nil, err
+	}
+	res, err := pg.sendQueryRead(sql)
+	if err != nil {
+		return nil, err
+	}
+	if res.errMsg != "" {
+		return nil, fmt.Errorf("pg 错误: %s", res.errMsg)
+	}
+	if len(res.rows) == 0 {
+		return nil, fmt.Errorf("无返回行")
+	}
+	// PG wire 返回的是 []any，找首个非 nil 值
+	for _, v := range res.rows[0] {
+		if v != nil {
+			return v, nil
+		}
+	}
+	return nil, nil
 }
