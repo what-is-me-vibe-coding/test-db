@@ -171,15 +171,15 @@ func (l *SlowQueryLog) Reset() {
 	l.mu.Unlock()
 }
 
-// truncateSQL 把过长 SQL 截断到 max 字节并追加 "... (truncated)" 标记。
-// max <= 0 时返回原字符串，避免误用造成空结果。
-func truncateSQL(sql string, max int) string {
-	if max <= 0 || len(sql) <= max {
+// truncateSQL 把过长 SQL 截断到 maxBytes 字节并追加 "... (truncated)" 标记。
+// maxBytes <= 0 时返回原字符串，避免误用造成空结果。
+func truncateSQL(sql string, maxBytes int) string {
+	if maxBytes <= 0 || len(sql) <= maxBytes {
 		return sql
 	}
 	const suffix = "... (truncated)"
-	// 预留 suffix 长度，确保最终字符串总长度不超过 max。
-	keep := max - len(suffix)
+	// 预留 suffix 长度，确保最终字符串总长度不超过 maxBytes。
+	keep := maxBytes - len(suffix)
 	if keep < 0 {
 		keep = 0
 	}

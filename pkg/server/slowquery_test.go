@@ -134,12 +134,12 @@ func TestSlowQueryLogConcurrentRecord(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for g := 0; g < goroutines; g++ {
-		go func(id int) {
+		go func() {
 			defer wg.Done()
 			for i := 0; i < perG; i++ {
 				l.Record(time.Millisecond, SlowQuerySourceHTTP, "Q", "")
 			}
-		}(g)
+		}()
 	}
 	wg.Wait()
 	got := l.Snapshot()
