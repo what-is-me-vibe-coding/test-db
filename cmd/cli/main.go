@@ -231,8 +231,8 @@ func (c *cli) readMultiLineSQL(scanner *bufio.Scanner, writer io.Writer, firstLi
 // runInteractiveTTY 是 TTY 增强版 REPL：使用 peterh/liner 提供历史/补全，
 // 使用 fatih/color 高亮错误/成功/提示符。仅在 stdin/stdout 同时是 TTY 时调用。
 //
-// 行为与 runInteractive 保持一致：反斜杠命令（\q/\h/\status/\use/\format）分发，
-// 多行 SQL 以分号结束，执行结果通过 render.Response 格式化输出。
+// 行读取、续行拼接、历史管理统一委托给 pkg/cli.RunWithLiner，本函数只负责
+// 反斜杠命令分发与 SQL 执行/格式化输出。
 func (c *cli) runInteractiveTTY(writer io.Writer) error {
 	clishared.EnableColorGlobally()
 	defer clishared.DisableColorGlobally()
@@ -250,49 +250,24 @@ func (c *cli) runInteractiveTTY(writer io.Writer) error {
 	formatState := clishared.NewFormatState()
 	formatState.Set(c.format)
 
-	for {
-		trimmed, err := readTTYLine(session, writer, clishared.ColorizePrompt("widb> "))
-		if err != nil {
-			return err
-		}
-		if trimmed == "" {
-			continue
-		}
-		session.AppendHistory(trimmed)
-
-		if strings.HasPrefix(trimmed, "\\") {
-			done, shouldExit := c.handleCommandTTY(writer, trimmed, formatState)
-			if done && shouldExit {
-				_, _ = fmt.Fprintln(writer, clishared.ColorizeSuccess("再见!"))
-				return nil
+	return clishared.RunWithLiner(clishared.TTYOptions{
+		Session:    session,
+		Writer:     writer,
+		Prompt:     clishared.ColorizePrompt("widb> "),
+		ContPrompt: "  ...> ",
+		OnLine: func(line string) bool {
+			if strings.HasPrefix(line, "\\") {
+				done, shouldExit := c.handleCommandTTY(writer, line, formatState)
+				if done && shouldExit {
+					_, _ = fmt.Fprintln(writer, clishared.ColorizeSuccess("再见!"))
+					return true
+				}
+				return false
 			}
-			if done {
-				continue
-			}
-		}
-
-		sql, _ := clishared.ReadMultiLineSQLWithLiner(session, "  ...> ", trimmed)
-		if sql == "" {
-			continue
-		}
-		c.executeTTY(writer, sql)
-	}
-}
-
-// readTTYLine 从 liner 读取一行并 TrimSpace。EOF 转换为 io.EOF 返回。
-//
-// prompt 允许包含 ANSI 颜色转义码，调用 PromptWithWriter 把它写到 writer
-// 后再用空 prompt 调 liner.Prompt——这是 peterh/liner 在 prompt 含
-// 控制字符时返回 "invalid prompt" 的标准规避方式。
-func readTTYLine(session *clishared.LinerSession, writer io.Writer, prompt string) (string, error) {
-	line, err := session.PromptWithWriter(writer, prompt)
-	if err != nil {
-		if err == io.EOF {
-			return "", io.EOF
-		}
-		return "", err
-	}
-	return strings.TrimSpace(line), nil
+			c.executeTTY(writer, line)
+			return false
+		},
+	})
 }
 
 // executeTTY 在 TTY 模式下执行 SQL 并打印结果，错误信息用红色高亮。
