@@ -193,7 +193,8 @@ func dmlLifeRunHTTPishClient(s *sqlServer, via string, idLo, idHi int64) error {
 // dmlLifeRunPGClient 经 PG wire 执行 DML 生命周期。
 //
 // 与 HTTPish 版本语义一致；差异仅在响应解码：PG wire 数值经文本协议返回，
-// 故用 pgInt 解析。
+// 故用 pgInt 解析。本函数作为 orchestrator 串联 5 个阶段函数；每个阶段函数
+// 自身只承担一个 DML 步骤的 SQL 拼装 + 结果校验，便于单步失败定位。
 func dmlLifeRunPGClient(s *sqlServer, idLo, idHi int64) error {
 	c, err := dialPGWireErr(s.srv.PGAddr())
 	if err != nil {
@@ -203,22 +204,40 @@ func dmlLifeRunPGClient(s *sqlServer, idLo, idHi int64) error {
 	if err := c.handshakeErr(); err != nil {
 		return fmt.Errorf("PG 握手失败: %w", err)
 	}
+	if err := dmlLifePGInsertRange(c, idLo, idHi); err != nil {
+		return err
+	}
+	if err := dmlLifePGVerifyInsert(c, idLo, idHi); err != nil {
+		return err
+	}
+	if err := dmlLifePGIdempotentUpdate(c, idLo, idHi); err != nil {
+		return err
+	}
+	if err := dmlLifePGWeightedUpdate(c, idLo, idHi); err != nil {
+		return err
+	}
+	return dmlLifePGDeleteHalf(c, idLo, idHi)
+}
 
-	// 1) INSERT dmlLifeRowsInit 行
-	insertSQL := fmt.Sprintf("INSERT INTO %s (id, name, qty, active) VALUES ", dmlLifeTable)
+// dmlLifePGInsertRange 经 PG wire 批量 INSERT [idLo, idHi) 区间行。
+func dmlLifePGInsertRange(c *pgWireClient, idLo, idHi int64) error {
+	sql := fmt.Sprintf("INSERT INTO %s (id, name, qty, active) VALUES ", dmlLifeTable)
 	first := true
 	for id := idLo; id < idHi; id++ {
 		if !first {
-			insertSQL += ", "
+			sql += ", "
 		}
 		first = false
-		insertSQL += fmt.Sprintf("(%d, 'c%d', 10, true)", id, id)
+		sql += fmt.Sprintf("(%d, 'c%d', 10, true)", id, id)
 	}
-	if err := dmlLifePGExec(c, insertSQL); err != nil {
+	if err := dmlLifePGExec(c, sql); err != nil {
 		return fmt.Errorf("INSERT 失败: %w", err)
 	}
+	return nil
+}
 
-	// 2) SELECT 校验 INSERT
+// dmlLifePGVerifyInsert 经 PG wire 校验 INSERT 后区间行数 == idHi-idLo。
+func dmlLifePGVerifyInsert(c *pgWireClient, idLo, idHi int64) error {
 	got, err := dmlLifeCountRangePG(c, idLo, idHi)
 	if err != nil {
 		return fmt.Errorf("INSERT 后行数查询失败: %w", err)
@@ -226,37 +245,50 @@ func dmlLifeRunPGClient(s *sqlServer, idLo, idHi int64) error {
 	if got != idHi-idLo {
 		return fmt.Errorf("INSERT 后区间行数: 期望 %d，得到 %d", idHi-idLo, got)
 	}
+	return nil
+}
 
-	// 3) UPDATE 全部行（幂等）
-	updSQL := fmt.Sprintf("UPDATE %s SET qty = qty WHERE id >= %d AND id < %d",
+// dmlLifePGIdempotentUpdate 经 PG wire 执行幂等 UPDATE（qty = qty），
+// 并校验 SUM(qty) 未变。
+func dmlLifePGIdempotentUpdate(c *pgWireClient, idLo, idHi int64) error {
+	sql := fmt.Sprintf("UPDATE %s SET qty = qty WHERE id >= %d AND id < %d",
 		dmlLifeTable, idLo, idHi)
-	if err := dmlLifePGExec(c, updSQL); err != nil {
+	if err := dmlLifePGExec(c, sql); err != nil {
 		return fmt.Errorf("幂等 UPDATE 失败: %w", err)
 	}
-	got, err = dmlLifeSumQtyPG(c, idLo, idHi)
+	got, err := dmlLifeSumQtyPG(c, idLo, idHi)
 	if err != nil {
 		return fmt.Errorf("幂等 UPDATE 后 qty 查询失败: %w", err)
 	}
-	if got != int64(10)*(idHi-idLo) {
-		return fmt.Errorf("幂等 UPDATE 后 qty 总和: 期望 %d，得到 %d", int64(10)*(idHi-idLo), got)
+	want := int64(10) * (idHi - idLo)
+	if got != want {
+		return fmt.Errorf("幂等 UPDATE 后 qty 总和: 期望 %d，得到 %d", want, got)
 	}
+	return nil
+}
 
-	// 4) UPDATE 加权
-	addSQL := fmt.Sprintf("UPDATE %s SET qty = qty + %d WHERE id >= %d AND id < %d",
+// dmlLifePGWeightedUpdate 经 PG wire 执行加权 UPDATE（qty += dmlLifeQtyAdd），
+// 并校验 SUM(qty) 增加正确数值。
+func dmlLifePGWeightedUpdate(c *pgWireClient, idLo, idHi int64) error {
+	sql := fmt.Sprintf("UPDATE %s SET qty = qty + %d WHERE id >= %d AND id < %d",
 		dmlLifeTable, dmlLifeQtyAdd, idLo, idHi)
-	if err := dmlLifePGExec(c, addSQL); err != nil {
+	if err := dmlLifePGExec(c, sql); err != nil {
 		return fmt.Errorf("加权 UPDATE 失败: %w", err)
 	}
-	wantSum := (int64(10) + dmlLifeQtyAdd) * (idHi - idLo)
-	got, err = dmlLifeSumQtyPG(c, idLo, idHi)
+	want := (int64(10) + dmlLifeQtyAdd) * (idHi - idLo)
+	got, err := dmlLifeSumQtyPG(c, idLo, idHi)
 	if err != nil {
 		return fmt.Errorf("加权 UPDATE 后 qty 查询失败: %w", err)
 	}
-	if got != wantSum {
-		return fmt.Errorf("加权 UPDATE 后 qty 总和: 期望 %d，得到 %d", wantSum, got)
+	if got != want {
+		return fmt.Errorf("加权 UPDATE 后 qty 总和: 期望 %d，得到 %d", want, got)
 	}
+	return nil
+}
 
-	// 5) DELETE 半行
+// dmlLifePGDeleteHalf 经 PG wire 删后半段：先 UPDATE active=false，再 DELETE。
+// 最后校验区间行数 == dmlLifeRowsKeep。
+func dmlLifePGDeleteHalf(c *pgWireClient, idLo, idHi int64) error {
 	halfID := idLo + (idHi-idLo)/2
 	deactSQL := fmt.Sprintf("UPDATE %s SET active = false WHERE id >= %d AND id < %d",
 		dmlLifeTable, halfID, idHi)
@@ -268,15 +300,13 @@ func dmlLifeRunPGClient(s *sqlServer, idLo, idHi int64) error {
 	if err := dmlLifePGExec(c, delSQL); err != nil {
 		return fmt.Errorf("DELETE 失败: %w", err)
 	}
-
-	// 6) 最终行数校验
-	wantKeep := int64(dmlLifeRowsKeep)
-	got, err = dmlLifeCountRangePG(c, idLo, idHi)
+	got, err := dmlLifeCountRangePG(c, idLo, idHi)
 	if err != nil {
 		return fmt.Errorf("DELETE 后行数查询失败: %w", err)
 	}
-	if got != wantKeep {
-		return fmt.Errorf("DELETE 后区间行数: 期望 %d，得到 %d", wantKeep, got)
+	want := int64(dmlLifeRowsKeep)
+	if got != want {
+		return fmt.Errorf("DELETE 后区间行数: 期望 %d，得到 %d", want, got)
 	}
 	return nil
 }
