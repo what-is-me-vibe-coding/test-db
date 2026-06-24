@@ -227,6 +227,11 @@ func readMultiLineSQL(scanner *bufio.Scanner, writer io.Writer, firstLine string
 //
 // 行为与 runREPL 保持一致：反斜杠命令（\q/\h/\status/\addrs/\format）分发，
 // 多行 SQL 以分号结束，执行结果通过 render.Response 格式化输出。
+//
+// 行读取、续行拼接、历史管理统一委托给 pkg/cli.RunWithLiner，本函数只负责
+// 命令分发与 SQL 执行/格式化输出。注意：原实现使用 session.PromptWith(prompt)
+// 直接传入带 ANSI 转义码的 prompt，会被 peterh/liner 拒绝为 "invalid prompt"；
+// 新实现通过 RunWithLiner 走 PromptWithWriter 路径规避该问题。
 func runREPLTTY(srv *server.Server, format string, writer io.Writer) int {
 	cli.EnableColorGlobally()
 	defer cli.DisableColorGlobally()
@@ -243,40 +248,32 @@ func runREPLTTY(srv *server.Server, format string, writer io.Writer) int {
 
 	formatState := cli.NewFormatState()
 	formatState.Set(format)
-	prompt := cli.ColorizePrompt("widb> ")
-	contPrompt := "  ...> "
 
-	for {
-		line, err := session.PromptWith(prompt)
-		if err != nil {
-			if err == io.EOF {
-				return 0
-			}
-			_, _ = fmt.Fprintf(writer, "%s: %v\n", cli.ColorizeError("读取输入失败"), err)
-			return 1
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		session.AppendHistory(trimmed)
-
-		if strings.HasPrefix(trimmed, "\\") {
-			if exit, handled := handleCommandTTY(srv, formatState, writer, trimmed); handled {
-				if exit {
-					_, _ = fmt.Fprintln(writer, cli.ColorizeSuccess("再见!"))
-					return 0
+	exitCode := 0
+	err = cli.RunWithLiner(cli.TTYOptions{
+		Session:    session,
+		Writer:     writer,
+		Prompt:     cli.ColorizePrompt("widb> "),
+		ContPrompt: "  ...> ",
+		OnLine: func(line string) bool {
+			if strings.HasPrefix(line, "\\") {
+				if exit, handled := handleCommandTTY(srv, formatState, writer, line); handled {
+					if exit {
+						_, _ = fmt.Fprintln(writer, cli.ColorizeSuccess("再见!"))
+						return true
+					}
+					return false
 				}
-				continue
 			}
-		}
-
-		sql, _ := cli.ReadMultiLineSQLWithLiner(session, contPrompt, trimmed)
-		if sql == "" {
-			continue
-		}
-		executeAndPrintTTY(srv, formatState, writer, sql)
+			executeAndPrintTTY(srv, formatState, writer, line)
+			return false
+		},
+	})
+	if err != nil && err != io.EOF {
+		_, _ = fmt.Fprintf(writer, "%s: %v\n", cli.ColorizeError("REPL 异常"), err)
+		exitCode = 1
 	}
+	return exitCode
 }
 
 // handleCommandTTY 在 TTY 模式下处理反斜杠命令。

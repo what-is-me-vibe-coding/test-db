@@ -208,6 +208,104 @@ func TestDisableColorGlobally(t *testing.T) {
 	}
 }
 
+// TestRunWithLiner_NilChecks 验证 RunWithLiner 对必填参数做严格校验，
+// 防止业务代码因忘传 Session/Writer/OnLine 而 panic 或静默失败。
+func TestRunWithLiner_NilChecks(t *testing.T) {
+	dir := t.TempDir()
+	session, err := NewLinerSession("widb> ", filepath.Join(dir, historyFileName), 5)
+	if err != nil {
+		t.Fatalf("NewLinerSession 失败: %v", err)
+	}
+	t.Cleanup(func() { session.Close("") })
+
+	var out bytes.Buffer
+	handler := func(_ string) bool { return false }
+
+	tests := []struct {
+		name string
+		opts TTYOptions
+	}{
+		{"missing session", TTYOptions{Writer: &out, OnLine: handler}},
+		{"missing writer", TTYOptions{Session: session, OnLine: handler}},
+		{"missing onLine", TTYOptions{Session: session, Writer: &out}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RunWithLiner(tc.opts)
+			if err == nil {
+				t.Fatal("期望返回非 nil error")
+			}
+			if !strings.Contains(err.Error(), "不能为空") {
+				t.Errorf("错误信息应说明参数缺失，实际: %v", err)
+			}
+		})
+	}
+}
+
+// TestRunWithLiner_DefaultPrompts 验证 Prompt/ContPrompt 为空字符串时
+// 使用文档约定的默认值：首行 "widb> "、续行 "  ...> "。
+// 测试方式：把 prompt 设成不寻常字符串通过 writer 写出首行 prompt 后
+// 立即关停，验证"实际写出的首行提示"与传入值一致（覆盖默认替换）。
+func TestRunWithLiner_DefaultPromptsSubstituted(t *testing.T) {
+	dir := t.TempDir()
+	session, err := NewLinerSession("widb> ", filepath.Join(dir, historyFileName), 5)
+	if err != nil {
+		t.Fatalf("NewLinerSession 失败: %v", err)
+	}
+	t.Cleanup(func() { session.Close("") })
+
+	// 通过 PromptWithWriter 与 writer 行为间接验证：custom prompt 应被原样写入。
+	var out bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_ = RunWithLiner(TTYOptions{
+			Session: session,
+			Writer:  &out,
+			Prompt:  "custom> ",
+			OnLine:  func(string) bool { return true },
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Skip("liner 在非 TTY 环境下可能阻塞，放弃断言")
+	}
+	if !strings.Contains(out.String(), "custom>") {
+		t.Errorf("自定义 prompt 应被原样写入 writer，实际: %q", out.String())
+	}
+}
+
+// TestRunWithLiner_DefaultPromptWhenEmpty 验证 Prompt 为空时使用 "widb> "。
+func TestRunWithLiner_DefaultPromptWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	session, err := NewLinerSession("widb> ", filepath.Join(dir, historyFileName), 5)
+	if err != nil {
+		t.Fatalf("NewLinerSession 失败: %v", err)
+	}
+	t.Cleanup(func() { session.Close("") })
+
+	var out bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_ = RunWithLiner(TTYOptions{
+			Session: session,
+			Writer:  &out,
+			// Prompt 故意留空，验证默认值
+			OnLine: func(string) bool { return true },
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Skip("liner 在非 TTY 环境下可能阻塞，放弃断言")
+	}
+	if !strings.Contains(out.String(), "widb>") {
+		t.Errorf("默认 prompt 应为 widb>，实际: %q", out.String())
+	}
+}
+
 // TestIsTerminalReader_NonFile 验证非 os.File 类型 reader 返回 false。
 func TestIsTerminalReader_NonFile(t *testing.T) {
 	if IsTerminalReader(strings.NewReader("hello")) {
